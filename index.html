@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>SpendTracker</title>
+
+<!-- PWA metadata -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#030712" />
+
+<!-- iOS-specific: makes "Add to Home Screen" launch fullscreen with no Safari chrome -->
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="SpendTracker" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+
+<style>
+  * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: #030712;
+    /* Prevents the elastic overscroll bounce revealing white/black gaps above/below content on iOS */
+    overscroll-behavior-y: none;
+    /* Respects the iPhone notch/home-indicator safe areas so content isn't obscured */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #root { min-height: 100vh; }
+  /* Prevents iOS Safari's default blue tap-highlight and double-tap-to-zoom on buttons */
+  button { touch-action: manipulation; }
+</style>
+
+<!-- React + ReactDOM (production builds, no dev warnings/overhead). Fetched from the CDN
+     the first time you open this in Safari — after that, the service worker below caches
+     them so the app keeps working offline. Requires normal internet access on first load.
+     No Babel here: app.jsx is pre-compiled to plain app.js (see README), so the phone loads
+     ready-to-run code instead of compiling ~1000 lines of JSX on every cold launch.
+     Pinned to 18.3.1: React 19 removed these UMD browser builds entirely (the @19 URLs
+     404), and 18.3.1 is the newest version that ships them. Don't bump past 18 here. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- app.js defines the tracker UI; crypto.js defines the encryption + lock screen
+     that gates it. app.js must load first so crypto.js's Root can reference App
+     and defaultState. -->
+<script src="app.js"></script>
+<script src="crypto.js"></script>
+<script>
+  const root = ReactDOM.createRoot(document.getElementById("root"));
+  // Mount the encryption gate (Root), not App directly. Root shows onboarding /
+  // migration / the lock screen, and only renders the real App once unlocked.
+  root.render(React.createElement(window.SpendTrackerRoot));
+</script>
+
+<!-- Registers the service worker (offline caching) if the browser supports it -->
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {
+        // Silently ignore — app still works fully online without the service worker,
+        // it just won't have offline caching.
+      });
+    });
+  }
+</script>
+</body>
+</html>

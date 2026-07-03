@@ -1,0 +1,969 @@
+"use strict";
+const { useState, useEffect, useReducer, useRef } = React;
+// ─── Constants ────────────────────────────────────────────────────────────────
+const METHODS = ["Amex", "Lloyds", "HSBC", "Cash"];
+const METHOD_COLOR = { Amex: "#60a5fa", Lloyds: "#34d399", HSBC: "#f87171", Cash: "#fbbf24" };
+const STORAGE_KEY = "spendtracker_v6";
+// Persistence goes through the encrypted session in crypto.js (window.SpendVault),
+// which holds the decrypted state in memory and writes only ciphertext to disk.
+// App is never rendered until crypto.js's Root has unlocked, so getState() is set.
+function load() { return (window.SpendVault && window.SpendVault.getState) ? window.SpendVault.getState() : null; }
+function save(s) { if (window.SpendVault && window.SpendVault.save) window.SpendVault.save(s); }
+const fmt = (n) => "£" + Number(Math.abs(n)).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dayName = (d) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+const monthName = (d) => MONTH_NAMES[d.getMonth()];
+const dateStr = (d) => `${dayName(d)} ${d.getDate()} ${monthName(d)}`;
+const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
+function londonNow() {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Europe/London",
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+        hour12: false,
+    }).formatToParts(new Date());
+    const p = {};
+    parts.forEach(({ type, value }) => { p[type] = value; });
+    const hour = p.hour === "24" ? "00" : p.hour;
+    return new Date(`${p.year}-${p.month}-${p.day}T${hour}:${p.minute}:${p.second}`);
+}
+function lastWorkingDay(year, month) {
+    let d = new Date(year, month + 1, 0);
+    while (isWeekend(d))
+        d = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+    return d;
+}
+function addDays(d, n) {
+    const r = new Date(d);
+    r.setDate(r.getDate() + n);
+    return r;
+}
+// Given a date, find which period it falls into under the new model: a period labelled X
+// starts on (X-1)'s payday and ends the day before X's own payday. Walks forward from the
+// date's calendar month until it finds the first month whose payday hasn't happened yet —
+// that month is the correct label. Needed because "today's calendar month" is not generally
+// the same as "the period label today belongs to" (e.g. payday itself already belongs to
+// next month's label, not the current one).
+function periodLabelFor(date) {
+    let y = date.getFullYear(), m = date.getMonth();
+    for (let i = 0; i < 3; i++) {
+        const payday = lastWorkingDay(y, m);
+        if (date < payday)
+            return { year: y, month: m };
+        m++;
+        if (m > 11) {
+            m = 0;
+            y++;
+        }
+    }
+    return { year: y, month: m };
+}
+function buildWeeks(payStart, payEnd, amexCutoff, lloydsCutoff) {
+    // Weeks start from payStart (payday itself — the new period begins the day you're paid), run sun-sun
+    const days = [];
+    let cur = new Date(payStart);
+    while (cur <= payEnd) {
+        days.push(new Date(cur));
+        cur = addDays(cur, 1);
+    }
+    const weeks = [];
+    let weekDays = [];
+    for (const d of days) {
+        weekDays.push(d);
+        if (d.getDay() === 0 || d.getTime() === payEnd.getTime()) {
+            weeks.push([...weekDays]);
+            weekDays = [];
+        }
+    }
+    if (weekDays.length > 0)
+        weeks.push(weekDays);
+    return weeks.map((days, i) => ({
+        index: i + 1,
+        start: days[0],
+        end: days[days.length - 1],
+        days,
+    }));
+}
+function todayWeekIndex(weeks) {
+    var _a, _b;
+    const norm = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+    const today = norm(new Date());
+    for (const w of weeks) {
+        if (today >= norm(w.start) && today <= norm(w.end))
+            return w.index;
+    }
+    if (today < norm((_a = weeks[0]) === null || _a === void 0 ? void 0 : _a.start))
+        return 1;
+    return ((_b = weeks[weeks.length - 1]) === null || _b === void 0 ? void 0 : _b.index) || 1;
+}
+// ─── Default State ────────────────────────────────────────────────────────────
+function defaultState() {
+    const now = londonNow();
+    now.setHours(0, 0, 0, 0);
+    const { year: y, month: m } = periodLabelFor(now);
+    return {
+        monthLabel: `${MONTH_NAMES[m]} ${y}`,
+        payYear: y,
+        payMonth: m,
+        monthlyBudget: 1069.65,
+        weeklyBudget: 260,
+        amexCutoff: 28,
+        lloydsCutoff: 3,
+        entries: [],
+        pins: [],
+        credits: [],
+        monthHistory: [],
+    };
+}
+// ─── Reducer ──────────────────────────────────────────────────────────────────
+function reducer(s, a) {
+    switch (a.type) {
+        case "ADD_ENTRY": return { ...s, entries: [a.entry, ...s.entries] };
+        case "DEL_ENTRY": return { ...s, entries: s.entries.filter(e => e.id !== a.id) };
+        case "ADD_PIN": return { ...s, pins: [...s.pins, a.pin] };
+        case "DEL_PIN": return { ...s, pins: s.pins.filter(p => p.id !== a.id) };
+        case "UPD_PIN": return { ...s, pins: s.pins.map(p => p.id === a.pin.id ? a.pin : p) };
+        case "ADD_CREDIT": return { ...s, credits: [a.credit, ...(s.credits || [])] };
+        case "DEL_CREDIT": return { ...s, credits: (s.credits || []).filter(c => c.id !== a.id) };
+        case "SETTINGS": return { ...s, ...a.patch };
+        case "MONTH_ROLLOVER": {
+            // Snapshot budget figures as they stood this period, so looking back later
+            // recalculates against what was actually true then, not today's settings.
+            const archive = {
+                monthLabel: s.monthLabel,
+                payYear: s.payYear,
+                payMonth: s.payMonth,
+                entries: s.entries,
+                pins: s.pins,
+                credits: s.credits || [],
+                monthlyBudget: s.monthlyBudget,
+                weeklyBudget: s.weeklyBudget,
+                amexCutoff: s.amexCutoff,
+                lloydsCutoff: s.lloydsCutoff,
+            };
+            const newHistory = [...(s.monthHistory || []), archive].slice(-12);
+            return { payYear: a.newYear, payMonth: a.newMonth, monthLabel: a.newLabel,
+                monthlyBudget: s.monthlyBudget, weeklyBudget: s.weeklyBudget,
+                amexCutoff: s.amexCutoff, lloydsCutoff: s.lloydsCutoff, pins: s.pins, monthHistory: newHistory,
+                entries: [], credits: [] };
+        }
+        case "EDIT_PAST_ENTRY": {
+            // Writes an entry change back into the archived period being viewed, not live state
+            const newHistory = (s.monthHistory || []).map((arc, i) => {
+                if (i !== a.archiveIndex)
+                    return arc;
+                if (a.op === "add")
+                    return { ...arc, entries: [a.entry, ...arc.entries] };
+                if (a.op === "del")
+                    return { ...arc, entries: arc.entries.filter(e => e.id !== a.id) };
+                return arc;
+            });
+            return { ...s, monthHistory: newHistory };
+        }
+        case "EDIT_PAST_CREDIT": {
+            const newHistory = (s.monthHistory || []).map((arc, i) => {
+                if (i !== a.archiveIndex)
+                    return arc;
+                if (a.op === "add")
+                    return { ...arc, credits: [a.credit, ...(arc.credits || [])] };
+                if (a.op === "del")
+                    return { ...arc, credits: (arc.credits || []).filter(c => c.id !== a.id) };
+                return arc;
+            });
+            return { ...s, monthHistory: newHistory };
+        }
+        case "RESET": return { ...defaultState(), ...a.keep };
+        default: return s;
+    }
+}
+// ─── App ──────────────────────────────────────────────────────────────────────
+function App() {
+    var _a;
+    const [state, dispatch] = useReducer(reducer, null, () => load() || defaultState());
+    const [tab, setTab] = useState("week");
+    const [activeWeek, setActiveWeek] = useState(1);
+    const [showEntryFor, setShowEntryFor] = useState(null);
+    const [showAddPin, setShowAddPin] = useState(false);
+    const [editPin, setEditPin] = useState(null);
+    const [showExport, setShowExport] = useState(false);
+    const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
+    const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
+    // If history trims (caps at 12 months) while a past period is being viewed, the index
+    // it pointed at could now be stale — fall back to live rather than show the wrong period.
+    useEffect(() => {
+        if (viewingPastIndex !== null && (!state.monthHistory || viewingPastIndex >= state.monthHistory.length)) {
+            setViewingPastIndex(null);
+        }
+    }, [state.monthHistory]);
+    // When viewing a past period, every figure in the app should reflect that period's
+    // own data and budget settings — not today's live state. effectiveData stands in for
+    // state everywhere below, so none of the existing derivation logic needs to know
+    // whether it's looking at the live month or an archived one.
+    const viewingPast = viewingPastIndex !== null && state.monthHistory && state.monthHistory[viewingPastIndex];
+    const effectiveData = viewingPast || state;
+    // Auto-switch month — a period labelled X starts on (X-1)'s payday and runs up to (not
+    // including) X's own payday, since X's payday is what pays you for the work X represents
+    // and is the moment you clear last period's card debt. So the switch to X+1 fires the
+    // instant today reaches X's payday — payday itself is day one of the next period, not
+    // the last day of the current one.
+    useEffect(() => {
+        const checkMonth = () => {
+            const now = londonNow();
+            now.setHours(0, 0, 0, 0);
+            const thisLabelPayday = lastWorkingDay(state.payYear, state.payMonth);
+            if (now >= thisLabelPayday) {
+                const nextMonth = state.payMonth + 1 > 11 ? 0 : state.payMonth + 1;
+                const nextYear = state.payMonth + 1 > 11 ? state.payYear + 1 : state.payYear;
+                const label = MONTH_NAMES[nextMonth] + " " + nextYear;
+                dispatch({ type: "MONTH_ROLLOVER", newYear: nextYear, newMonth: nextMonth, newLabel: label });
+            }
+        };
+        checkMonth();
+        const interval = setInterval(checkMonth, 60000);
+        return () => clearInterval(interval);
+    }, [state.payYear, state.payMonth]);
+    useEffect(() => { save(state); }, [state]);
+    // Build calendar from payday — uses effectiveData so a past period's own pay dates and
+    // cutoffs are used when viewing it, not today's live settings.
+    //
+    // Period labelling: a period is named for the month its payday is paying you for. Since
+    // you get paid on the last working day of a month for that month's work, and that payday
+    // is when last month's card debt gets cleared and a fresh accounting period begins, the
+    // period labelled "July" starts on JUNE's payday and runs up to (not including) JULY's
+    // payday. payYear/payMonth store the label (X); periodStart/periodEnd are derived from it.
+    const { payYear: y, payMonth: m } = effectiveData;
+    const prevMonth = m - 1 < 0 ? 11 : m - 1;
+    const prevMonthYear = m - 1 < 0 ? y - 1 : y;
+    const periodStart = lastWorkingDay(prevMonthYear, prevMonth);
+    const nextPayday = lastWorkingDay(y, m);
+    const periodEnd = addDays(nextPayday, -1);
+    // Fractional weeks in this pay period, so Settings can convert monthly <-> weekly
+    // the same way first-run setup does (crypto.js uses the identical days/7 basis).
+    const periodDays = Math.round((periodEnd - periodStart) / 86400000) + 1;
+    const weeksInPeriod = periodDays / 7;
+    const weeks = buildWeeks(periodStart, periodEnd, effectiveData.amexCutoff, effectiveData.lloydsCutoff);
+    useEffect(() => {
+        const idx = todayWeekIndex(weeks);
+        setActiveWeek(idx);
+    }, [state.payMonth, state.payYear, viewingPastIndex]);
+    // Weekly budget rebalancing
+    function getRebalancedBudgets(weeks, entries, weeklyBudget) {
+        const budgets = {};
+        let carryOver = 0;
+        weeks.forEach((w, i) => {
+            const isLast = i === weeks.length - 1;
+            const rawBudget = weeklyBudget - carryOver;
+            const budget = isLast ? Math.max(rawBudget, 0.01) : Math.floor(rawBudget / 10) * 10;
+            budgets[w.index] = Math.max(budget, 0);
+            const wSpend = entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s, e) => s + e.amount, 0);
+            carryOver = Math.max(wSpend - budget, 0);
+        });
+        return budgets;
+    }
+    // Derived figures — all from effectiveData, so these reflect whichever period is being viewed
+    const personalEntries = effectiveData.entries.filter(e => e.type === "personal");
+    const businessEntries = effectiveData.entries.filter(e => e.type === "business");
+    const totalPinned = effectiveData.pins.filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
+    const totalEntries = personalEntries.reduce((s, e) => s + e.amount, 0);
+    const totalSpent = totalPinned + totalEntries;
+    const totalCredits = (effectiveData.credits || []).reduce((s, c) => s + c.amount, 0);
+    const remaining = effectiveData.monthlyBudget - totalSpent + totalCredits;
+    const byMethod = (entries, pins) => {
+        const res = {};
+        METHODS.forEach(m => {
+            res[m] = entries.filter(e => e.method === m).reduce((s, e) => s + e.amount, 0) +
+                pins.filter(p => p.method === m).reduce((s, p) => s + (p.amount || 0), 0);
+        });
+        return res;
+    };
+    const methodTotals = byMethod(personalEntries, effectiveData.pins.filter(p => p.type !== "business" && p.type !== "excluded"));
+    const rebalancedBudgets = getRebalancedBudgets(weeks, effectiveData.entries, effectiveData.weeklyBudget);
+    // Daily budgets — only meaningful for the live period; a past period has no "days left".
+    // currentWeekObj is explicitly null while viewing the past so every figure below that
+    // depends on it (already all guarded by `currentWeekObj ? ... : ...`) automatically and
+    // correctly goes inert, rather than comparing today's real date against an archived
+    // period's date range (which would rarely match and would be meaningless if it did).
+    const todayDate = (() => { const d = londonNow(); d.setHours(0, 0, 0, 0); return d; })();
+    const normDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+    const currentWeekObj = viewingPast ? null : (weeks.find(w => todayDate >= normDay(w.start) && todayDate <= normDay(w.end)) || weeks[0]);
+    const daysLeftInWeek = currentWeekObj ? currentWeekObj.days.filter(d => normDay(d) >= todayDate).length : 1;
+    const daysLeftInMonth = viewingPast ? 0 : (() => { let c = new Date(todayDate), count = 0; while (normDay(c) <= normDay(periodEnd)) {
+        count++;
+        c = addDays(c, 1);
+    } return Math.max(count, 1); })();
+    const currentWeekBudget = currentWeekObj ? ((_a = rebalancedBudgets[currentWeekObj.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget) : effectiveData.weeklyBudget;
+    const currentWeekSpent = currentWeekObj ? effectiveData.entries.filter(e => e.weekIndex === currentWeekObj.index && e.type === "personal").reduce((s, e) => s + e.amount, 0) : 0;
+    const weekRemaining = Math.max(currentWeekBudget - currentWeekSpent, 0);
+    const dailyFromWeek = daysLeftInWeek > 0 ? weekRemaining / daysLeftInWeek : 0;
+    const dailyFromMonth = daysLeftInMonth > 0 ? remaining / daysLeftInMonth : 0;
+    const remainColor = remaining < 0 ? "#ef4444" : remaining < effectiveData.monthlyBudget * 0.15 ? "#f97316" : "#22c55e";
+    // Index of the archive currently being viewed (last entry in history is the most recent past period)
+    const mostRecentArchiveIndex = (state.monthHistory && state.monthHistory.length > 0) ? state.monthHistory.length - 1 : null;
+    // Mutation routers: while viewing a past period, edits write back into that archive slot
+    // rather than live state. Everything else in the app calls these instead of dispatch directly,
+    // so WeekPanel, PinCard, etc. don't need to know which mode they're in.
+    function addEntry(entry) {
+        if (viewingPast)
+            dispatch({ type: "EDIT_PAST_ENTRY", op: "add", archiveIndex: viewingPastIndex, entry });
+        else
+            dispatch({ type: "ADD_ENTRY", entry });
+    }
+    function delEntry(id) {
+        if (viewingPast)
+            dispatch({ type: "EDIT_PAST_ENTRY", op: "del", archiveIndex: viewingPastIndex, id });
+        else
+            dispatch({ type: "DEL_ENTRY", id });
+    }
+    function addCredit(credit) {
+        if (viewingPast)
+            dispatch({ type: "EDIT_PAST_CREDIT", op: "add", archiveIndex: viewingPastIndex, credit });
+        else
+            dispatch({ type: "ADD_CREDIT", credit });
+    }
+    function delCredit(id) {
+        if (viewingPast)
+            dispatch({ type: "EDIT_PAST_CREDIT", op: "del", archiveIndex: viewingPastIndex, id });
+        else
+            dispatch({ type: "DEL_CREDIT", id });
+    }
+    // Pins are shared across periods (they're recurring fixed costs), so pin edits always
+    // apply live regardless of which period is being viewed.
+    return (React.createElement("div", { style: S.root },
+        React.createElement("div", { style: S.header },
+            React.createElement("div", null,
+                React.createElement("div", { style: S.appTitle }, "SpendTracker"),
+                React.createElement("div", { style: S.appSub },
+                    effectiveData.monthLabel,
+                    viewingPast ? " · past period" : "")),
+            React.createElement("div", { style: S.headerRight },
+                React.createElement("div", { style: { ...S.remaining, color: remainColor } }, fmt(remaining)),
+                React.createElement("div", { style: S.remainLabel }, "left"))),
+        viewingPast && (React.createElement("div", { style: S.pastBanner },
+            React.createElement("span", null,
+                "Viewing ",
+                effectiveData.monthLabel,
+                " \u2014 changes here apply to that period only"),
+            React.createElement("button", { style: S.pastBannerBtn, onClick: () => setViewingPastIndex(null) }, "Return to current"))),
+        React.createElement("div", { style: S.tabs }, [["week", "Week"], ["pins", "Pinned"], ["savings", "Savings"], ["summary", "Summary"], ["settings", "⚙"]].map(([k, l]) => (React.createElement("button", { key: k, style: { ...S.tab, ...(tab === k ? S.tabActive : {}) }, onClick: () => setTab(k) }, l)))),
+        tab === "week" && (React.createElement("div", { style: { padding: "12px 16px 80px" } },
+            React.createElement("div", { style: S.weekNav }, weeks.map(w => (React.createElement("button", { key: w.index, style: { ...S.weekPill, ...(activeWeek === w.index ? S.weekPillActive : {}) }, onClick: () => setActiveWeek(w.index) },
+                "W",
+                w.index)))),
+            !viewingPast && currentWeekObj && activeWeek === currentWeekObj.index && !isNaN(dailyFromWeek) && (React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 14 } },
+                React.createElement("div", { style: S.dailyCard },
+                    React.createElement("div", { style: S.dailyLabel }, "Per day \u00B7 week"),
+                    React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: dailyFromWeek < 20 ? "#ef4444" : "#22c55e" } }, fmt(dailyFromWeek)),
+                    React.createElement("div", { style: S.dailySub },
+                        daysLeftInWeek,
+                        "d left")),
+                React.createElement("div", { style: S.dailyCard },
+                    React.createElement("div", { style: S.dailyLabel }, "Per day \u00B7 month"),
+                    React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: dailyFromMonth < 20 ? "#ef4444" : "#94a3b8" } }, fmt(dailyFromMonth)),
+                    React.createElement("div", { style: S.dailySub },
+                        daysLeftInMonth,
+                        "d left")))),
+            weeks.filter(w => w.index === activeWeek).map(week => {
+                var _a;
+                return (React.createElement(WeekPanel, { key: week.index, week: week, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit }));
+            }))),
+        tab === "pins" && (React.createElement("div", { style: { padding: "12px 16px" } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
+                React.createElement("div", { style: S.sectionTitle }, "Fixed costs"),
+                React.createElement("button", { style: S.addBtn, onClick: () => setShowAddPin(true) }, "+ Pin")),
+            React.createElement("div", { style: S.pinGrid }, state.pins.length === 0 ? React.createElement("div", { style: S.empty }, "No pinned costs") : state.pins.map(p => React.createElement(PinCard, { key: p.id, pin: p, onEdit: () => setEditPin(p), onDelete: () => dispatch({ type: "DEL_PIN", id: p.id }) }))))),
+        tab === "savings" && (() => {
+            // Savings = accumulated leftover budget from COMPLETED months only (the
+            // months archived into monthHistory). The current live month isn't counted
+            // until it rolls over — a new user sees £0 through their whole first month.
+            // A month's leftover mirrors the header's "remaining": its own monthlyBudget
+            // − personal spend (entries + pins) + credits.
+            const monthSaved = (m) => {
+                const spentEntries = m.entries.filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0);
+                const spentPins = m.pins.filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
+                const credits = (m.credits || []).reduce((s, c) => s + c.amount, 0);
+                return m.monthlyBudget - (spentEntries + spentPins) + credits;
+            };
+            const rows = (state.monthHistory || [])
+                .map(m => { const saved = monthSaved(m); return { label: m.monthLabel, saved, budget: m.monthlyBudget, spent: m.monthlyBudget - saved }; })
+                .reverse();
+            const totalSaved = rows.reduce((s, r) => s + r.saved, 0);
+            const signed = (n) => (n < 0 ? "-" : "+") + fmt(n);
+            return (React.createElement("div", { style: { padding: "12px 16px" } },
+                React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "20px", marginBottom: 12 } },
+                    React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginBottom: 4, textTransform: "uppercase" } }, "Total saved"),
+                    React.createElement("div", { style: { fontSize: 36, fontWeight: 800, color: totalSaved >= 0 ? "#4ade80" : "#f87171", marginBottom: 8 } }, totalSaved < 0 ? "-" : "", fmt(totalSaved)),
+                    React.createElement("div", { style: { fontSize: 12, color: "#64748b", lineHeight: 1.5 } }, "Leftover budget carried over from completed months. ", state.monthLabel, "'s leftover is added to this once the month ends.")),
+                !viewingPast && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", fontWeight: 600 } }, state.monthLabel, " ", React.createElement("span", { style: { color: "#64748b", fontWeight: 400 } }, "· in progress")),
+                        React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 2 } }, "Adds to savings when ", state.monthLabel, " ends")),
+                    React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: remaining >= 0 ? "#94a3b8" : "#f87171" } }, signed(remaining)))),
+                React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px" } },
+                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Month by month"),
+                    rows.length === 0 ? (React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "4px 0", lineHeight: 1.5 } }, "No completed months yet. Your first month's leftover shows up here once ", state.monthLabel, " ends.")) : rows.map((r, i) => (React.createElement("div", { key: r.label, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: i < rows.length - 1 ? "1px solid #1e293b" : "none" } },
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: 13, color: "#e2e8f0", fontWeight: 600 } }, r.label),
+                            React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 1 } }, fmt(r.spent), " spent of ", fmt(r.budget))),
+                        React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#4ade80" : "#f87171" } }, signed(r.saved))))))));
+        })(),
+        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true) })),
+        tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
+            React.createElement("div", { style: S.settingsCard },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Budget"),
+                React.createElement("div", { style: { marginBottom: 10 } },
+                    React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, "Monthly budget (£)"),
+                    React.createElement("input", { key: `monthlyBudget-${state.monthlyBudget}`, style: S.input, type: "number", defaultValue: state.monthlyBudget, onBlur: e => { const v = parseFloat(e.target.value); if (!isNaN(v))
+                            dispatch({ type: "SETTINGS", patch: { monthlyBudget: v, weeklyBudget: Math.round((v / weeksInPeriod) * 100) / 100 } }); } })),
+                React.createElement("div", { style: { marginBottom: 10 } },
+                    React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, "Weekly budget (£)"),
+                    React.createElement("input", { key: `weeklyBudget-${state.weeklyBudget}`, style: S.input, type: "number", defaultValue: state.weeklyBudget, onBlur: e => { const v = parseFloat(e.target.value); if (!isNaN(v))
+                            dispatch({ type: "SETTINGS", patch: { weeklyBudget: v, monthlyBudget: Math.round((v * weeksInPeriod) * 100) / 100 } }); } })),
+                React.createElement("div", { style: { fontSize: 11, color: "#475569" } }, "Monthly and weekly are linked across this ", periodDays, "-day period — changing one recalculates the other.")),
+            React.createElement("div", { style: S.settingsCard },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Card cutoff dates"),
+                [["Amex statement date", "amexCutoff"], ["Lloyds statement date", "lloydsCutoff"]].map(([lbl, k]) => (React.createElement("div", { key: k, style: { marginBottom: 10 } },
+                    React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, lbl),
+                    React.createElement("input", { key: `${k}-${state[k]}`, style: S.input, type: "number", min: 1, max: 31, defaultValue: state[k], onBlur: e => { const v = parseInt(e.target.value); if (!isNaN(v) && v >= 1 && v <= 31)
+                            dispatch({ type: "SETTINGS", patch: { [k]: v } }); } }))))),
+            React.createElement("div", { style: S.settingsCard },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Pay period"),
+                React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", marginBottom: 10 } },
+                    "Currently tracking ",
+                    React.createElement("strong", { style: { color: "#f1f5f9" } }, state.monthLabel),
+                    ". A period starts on the previous month's payday and runs until this period's own payday \u2014 the tracker switches automatically the moment that payday arrives."),
+                mostRecentArchiveIndex !== null ? (viewingPast ? (React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", width: "100%" }, onClick: () => setViewingPastIndex(null) },
+                    "\u2190 Return to current period (",
+                    state.monthLabel,
+                    ")")) : (React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", width: "100%" }, onClick: () => setViewingPastIndex(mostRecentArchiveIndex) },
+                    "\u2190 Go back to ",
+                    state.monthHistory[mostRecentArchiveIndex].monthLabel))) : (React.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "No previous period to go back to yet."))),
+                React.createElement("div", { style: S.settingsCard },
+                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#f87171", marginBottom: 10, textTransform: "uppercase" } }, "Reset"),
+                    React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", marginBottom: 10, lineHeight: 1.5 } }, "Erase everything on this device — budget, transactions, history and your passphrase — and start over from setup. This can't be undone."),
+                    !confirmWipe ? (React.createElement("button", { style: { ...S.btn, background: "#7f1d1d", border: "1px solid #b91c1c", width: "100%" }, onClick: () => setConfirmWipe(true) }, "Reset app & erase all data")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
+                        React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", flex: 1 }, onClick: () => setConfirmWipe(false) }, "Cancel"),
+                        React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe) window.SpendVault.wipe(); } }, "Erase everything")))))),
+        showEntryFor !== null && React.createElement(EntryModal, { weekIndex: showEntryFor, onSave: addEntry, onSaveCredit: addCredit, onClose: () => setShowEntryFor(null) }),
+        (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, onSave: pin => { if (editPin)
+                dispatch({ type: "UPD_PIN", pin });
+            else
+                dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }, onClose: () => { setShowAddPin(false); setEditPin(null); } }),
+        showExport && React.createElement(ExportModal, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, remaining: remaining, totalCredits: totalCredits, methodTotals: methodTotals, onClose: () => setShowExport(false) })));
+}
+// ─── Week Panel ───────────────────────────────────────────────────────────────
+function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntry, onDelEntry, onDelCredit }) {
+    const personal = entries.filter(e => e.type === "personal");
+    const business = entries.filter(e => e.type === "business");
+    const spent = personal.reduce((s, e) => s + e.amount, 0);
+    const over = spent - weeklyBudget;
+    const pct = weeklyBudget > 0 ? Math.min((spent / weeklyBudget) * 100, 100) : 0;
+    // Group entries for display: split pairs render together as a block,
+    // everything else (ordinary personal/business) renders as single lines.
+    // Order: split groups first (most recent split first), then remaining personal, then remaining business.
+    const splitGroupIds = [...new Set(entries.filter(e => e.splitGroupId).map(e => e.splitGroupId))];
+    const splitGroups = splitGroupIds.map(gid => entries.filter(e => e.splitGroupId === gid));
+    const soloPersonal = personal.filter(e => !e.splitGroupId);
+    const soloBusiness = business.filter(e => !e.splitGroupId);
+    // Deleting one half of a split removes both halves, since a lone remainder is meaningless
+    function handleDelete(entry) {
+        if (entry.splitGroupId) {
+            entries.filter(e => e.splitGroupId === entry.splitGroupId).forEach(e => onDelEntry(e.id));
+        }
+        else {
+            onDelEntry(entry.id);
+        }
+    }
+    return (React.createElement("div", null,
+        React.createElement("div", { style: S.weekHeader },
+            React.createElement("span", { style: { fontWeight: 600, color: "#f1f5f9", fontSize: 14 } },
+                dateStr(week.start),
+                " \u2014 ",
+                dateStr(week.end))),
+        React.createElement("div", { style: S.budgetCard },
+            React.createElement("div", { style: S.bar },
+                React.createElement("div", { style: { ...S.barFill, width: pct + "%", background: over > 0 ? "#ef4444" : "#06b6d4" } })),
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 6, color: "#94a3b8" } },
+                React.createElement("span", null, fmt(spent)),
+                React.createElement("span", null,
+                    "of ",
+                    fmt(weeklyBudget),
+                    isLastWeek ? " (final)" : "")),
+            over > 0 && React.createElement("div", { style: { color: "#ef4444", fontSize: 11, marginTop: 4, fontWeight: 500 } },
+                "\u2193 ",
+                fmt(over),
+                " over")),
+        React.createElement("div", { style: { marginTop: 12 } },
+            splitGroups.map(group => (React.createElement("div", { key: group[0].splitGroupId, style: S.splitGroup }, group.map((e, i) => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e), grouped: true, last: i === group.length - 1 }))))),
+            soloPersonal.map(e => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e) })),
+            soloBusiness.map(e => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e) })),
+            credits.map(c => React.createElement(CreditLine, { key: c.id, credit: c, onDel: () => onDelCredit(c.id) })),
+            entries.length === 0 && credits.length === 0 && React.createElement("div", { style: { color: "#64748b", fontSize: 13, padding: "12px 0" } }, "Nothing logged")),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
+            React.createElement("button", { style: { ...S.actionBtn, flex: 1 }, onClick: onAddEntry }, "Log spend"))));
+}
+// ─── Confirm Delete Button ────────────────────────────────────────────────────
+// Tapping × turns it into a red "confirm?" for ~3s; a second tap deletes.
+// Tapping anywhere else, or letting it time out, resets back to ×.
+function ConfirmDeleteButton({ onConfirm, style }) {
+    const [confirming, setConfirming] = useState(false);
+    const timerRef = useRef(null);
+    useEffect(() => () => { if (timerRef.current)
+        clearTimeout(timerRef.current); }, []);
+    function handleClick(e) {
+        e.stopPropagation();
+        if (!confirming) {
+            setConfirming(true);
+            timerRef.current = setTimeout(() => setConfirming(false), 3000);
+        }
+        else {
+            if (timerRef.current)
+                clearTimeout(timerRef.current);
+            onConfirm();
+        }
+    }
+    return (React.createElement("button", { style: {
+            ...style,
+            ...(confirming ? { color: "#ef4444", fontSize: 11, fontWeight: 700, background: "#450a0a", borderRadius: 5, padding: "2px 7px", whiteSpace: "nowrap" } : {}),
+        }, onClick: handleClick, onBlur: () => setConfirming(false) }, confirming ? "confirm?" : "×"));
+}
+// ─── Entry Line ───────────────────────────────────────────────────────────────
+function EntryLine({ entry, onDel, grouped, last }) {
+    const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "#e2e8f0";
+    return (React.createElement("div", { style: { ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom: "none" } : {}) } },
+        React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[entry.method] || "#64748b" } }),
+        React.createElement("span", { style: { flex: 1, color: col, fontSize: 13 } },
+            entry.label || entry.method,
+            entry.type === "business" && React.createElement("span", { style: S.badge }, " work"),
+            entry.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " not yours"),
+            entry.splitGroupId && entry.type === "personal" && React.createElement("span", { style: { ...S.badge, background: "#1e293b", color: "#94a3b8" } }, " split")),
+        React.createElement("span", { style: { color: col, fontWeight: 600, fontSize: 13 } }, fmt(entry.amount)),
+        React.createElement(ConfirmDeleteButton, { onConfirm: onDel, style: S.delBtn })));
+}
+// ─── Credit Line ───────────────────────────────────────────────────────────────
+function CreditLine({ credit, onDel }) {
+    return (React.createElement("div", { style: S.entryRow },
+        React.createElement("span", { style: { ...S.dot, background: "#22c55e" } }),
+        React.createElement("span", { style: { flex: 1, color: "#22c55e", fontSize: 13 } },
+            credit.label || "Credit",
+            credit.from && React.createElement("span", { style: { color: "#64748b" } },
+                " from ",
+                credit.from)),
+        React.createElement("span", { style: { color: "#22c55e", fontWeight: 600, fontSize: 13 } },
+            "+",
+            fmt(credit.amount)),
+        React.createElement(ConfirmDeleteButton, { onConfirm: onDel, style: S.delBtn })));
+}
+// ─── Pin Card ─────────────────────────────────────────────────────────────────
+function PinCard({ pin, onEdit, onDelete }) {
+    const isB = pin.type === "business";
+    const isX = pin.type === "excluded";
+    const col = isB ? "#f59e0b" : isX ? "#a78bfa" : "#f1f5f9";
+    return (React.createElement("div", { style: S.pinCard },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
+            React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[pin.method] || "#64748b" } }),
+            React.createElement("span", { style: { flex: 1, fontWeight: 600, fontSize: 14, color: col } },
+                pin.label,
+                isB && React.createElement("span", { style: S.badge }, " work"),
+                isX && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " not me")),
+            React.createElement("button", { style: S.iconBtn, onClick: onEdit }, "\u270E"),
+            React.createElement(ConfirmDeleteButton, { onConfirm: onDelete, style: { ...S.iconBtn, color: "#ef4444" } })),
+        React.createElement("div", { style: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: isB ? "#f59e0b" : isX ? "#a78bfa" : METHOD_COLOR[pin.method] || "#e2e8f0", marginBottom: 4 } }, pin.amount ? fmt(pin.amount) : "—"),
+        pin.note && React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 4 } }, pin.note)));
+}
+// ─── Entry Modal ──────────────────────────────────────────────────────────────
+function EntryModal({ weekIndex, onSave, onSaveCredit, onClose }) {
+    const [display, setDisplay] = useState("0");
+    const [hasDecimal, setHasDecimal] = useState(false);
+    const [method, setMethod] = useState("Amex");
+    const [type, setType] = useState("personal");
+    const [note, setNote] = useState("");
+    const [showNote, setShowNote] = useState(false);
+    const [flash, setFlash] = useState(null);
+    // Split flow: null (not splitting) → "total" (entering the full amount) → "theirs" (entering the portion that isn't yours)
+    const [splitStage, setSplitStage] = useState(null);
+    const [splitTotal, setSplitTotal] = useState(0);
+    const amount = parseFloat(display) || 0;
+    const creditColors = { bg: "#14532d", border: "#22c55e", text: "#4ade80" };
+    const splitColors = { bg: "#3b0764", border: "#a855f7", text: "#d8b4fe" };
+    const methodColors = { Amex: { bg: "#1e3a5f", border: "#3b82f6", text: "#93c5fd" }, Lloyds: { bg: "#064e3b", border: "#10b981", text: "#34d399" }, HSBC: { bg: "#450a0a", border: "#dc2626", text: "#fca5a5" }, Cash: { bg: "#451a03", border: "#d97706", text: "#fbbf24" } };
+    const mc = type === "credit" ? creditColors : type === "split" ? splitColors : methodColors[method];
+    function pressDigit(d) {
+        setDisplay(prev => {
+            if (prev === "0" && d !== ".")
+                return String(d);
+            if (d === "." && hasDecimal)
+                return prev;
+            if (d === ".") {
+                setHasDecimal(true);
+                return prev + ".";
+            }
+            const parts = prev.split(".");
+            if (parts[1] && parts[1].length >= 2)
+                return prev;
+            return prev + String(d);
+        });
+    }
+    function pressDelete() {
+        setDisplay(prev => {
+            if (prev.length <= 1) {
+                setHasDecimal(false);
+                return "0";
+            }
+            const next = prev.slice(0, -1);
+            if (!next.includes("."))
+                setHasDecimal(false);
+            return next;
+        });
+    }
+    function resetAfterSave() {
+        setDisplay("0");
+        setHasDecimal(false);
+        setNote("");
+        setSplitStage(null);
+        setSplitTotal(0);
+    }
+    function selectType(v) {
+        setType(v);
+        // Changing type away from split mid-flow cancels the split
+        if (v !== "split") {
+            setSplitStage(null);
+            setSplitTotal(0);
+        }
+        else {
+            setSplitStage("total");
+            setDisplay("0");
+            setHasDecimal(false);
+        }
+    }
+    function pressEnter() {
+        if (amount <= 0)
+            return;
+        if (type === "split") {
+            if (splitStage === "total") {
+                // Move to step 2: capture the portion that isn't yours
+                setSplitTotal(amount);
+                setDisplay("0");
+                setHasDecimal(false);
+                setSplitStage("theirs");
+                return;
+            }
+            if (splitStage === "theirs") {
+                const theirPortion = Math.min(amount, splitTotal);
+                const yourPortion = +(splitTotal - theirPortion).toFixed(2);
+                const groupId = Math.random().toString(36).slice(2);
+                const baseDate = new Date().toISOString();
+                if (yourPortion > 0) {
+                    onSave({ id: Math.random().toString(36).slice(2), amount: yourPortion, label: note.trim(), note: note.trim(), method, type: "personal", weekIndex, date: baseDate, splitGroupId: groupId });
+                }
+                // The "not yours" portion is excluded from your spend total — same bucket as shared/not-me pins.
+                // This covers both work reimbursement and splitting a tab with friends; neither should
+                // touch your remaining budget, and neither should be conflated with actual work expenses.
+                onSave({ id: Math.random().toString(36).slice(2), amount: theirPortion, label: note.trim(), note: note.trim(), method, type: "excluded", weekIndex, date: baseDate, splitGroupId: groupId });
+                setFlash({ amount: splitTotal, split: true });
+                setTimeout(() => setFlash(null), 900);
+                resetAfterSave();
+                return;
+            }
+        }
+        if (type === "credit") {
+            onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), weekIndex, from: "", date: new Date().toISOString() });
+            setFlash({ amount, credit: true });
+        }
+        else {
+            onSave({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), note: note.trim(), method, type, weekIndex, date: new Date().toISOString() });
+            setFlash({ amount, method });
+        }
+        setTimeout(() => setFlash(null), 900);
+        resetAfterSave();
+    }
+    const digits = [[7, 8, 9], [4, 5, 6], [1, 2, 3], [".", 0, "⌫"]];
+    const subheading = { fontSize: 12, color: "#64748b", marginBottom: 6, fontWeight: 500 };
+    // What to show above the number display when mid-split, so it's unambiguous which figure is being entered
+    let displayCaption = null;
+    if (type === "split" && splitStage === "total")
+        displayCaption = "Total amount";
+    if (type === "split" && splitStage === "theirs")
+        displayCaption = `Not yours, of ${fmt(splitTotal)}`;
+    // Enter-key glyph changes on the first split step since it advances rather than saves
+    const enterGlyph = type === "split" && splitStage === "total" ? "→" : "↵";
+    return (React.createElement(Modal, { onClose: onClose, title: `Log · Week ${weekIndex}` },
+        React.createElement("div", { style: { background: "#1e293b", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "#334155"}` } },
+            displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
+            React.createElement("div", { style: { fontSize: display.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#4ade80" : "#f1f5f9" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${display === "0" ? "0" : display}`)),
+        React.createElement("div", { style: subheading }, "Payment type"),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 12, opacity: type === "credit" ? 0.4 : 1 } }, METHODS.map(m => React.createElement("button", { key: m, style: { background: method === m ? methodColors[m].bg : "#0f172a", border: `1px solid ${method === m ? methodColors[m].border : "#1e293b"}`, borderRadius: 8, color: method === m ? methodColors[m].text : "#475569", padding: "10px 2px", fontSize: 12, fontWeight: method === m ? 700 : 500, cursor: "pointer" }, onClick: () => setMethod(m) }, m))),
+        React.createElement("div", { style: subheading }, "Classification"),
+        React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["credit", "Credit"], ["split", "Split"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#4ade80" : v === "split" ? "#d8b4fe" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l))),
+        type === "split" && (React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", marginBottom: 10, lineHeight: 1.5 } }, splitStage === "total"
+            ? "Enter the full amount you paid, then continue."
+            : "Enter just the portion that isn't yours — work reimbursement, a friend's share of the bill, etc. The rest stays personal.")),
+        React.createElement("button", { style: { background: "none", border: "none", color: showNote ? "#60a5fa" : "#64748b", fontSize: 12, cursor: "pointer", padding: "0 0 8px", textAlign: "left", width: "100%" }, onClick: () => setShowNote(p => !p) }, showNote ? "▾ Hide note" : "▸ Add a note"),
+        showNote && React.createElement("input", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: "#f1f5f9", padding: "8px 12px", marginBottom: 10, fontSize: 13, width: "100%", boxSizing: "border-box", outline: "none" }, placeholder: "e.g. golf, birthday", value: note, onChange: e => setNote(e.target.value), autoFocus: true }),
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6 } }, digits.map((row, ri) => (React.createElement(React.Fragment, null,
+            row.map((d, i) => React.createElement("button", { key: `${ri}-${i}`, style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: d === "⌫" ? "#ef4444" : "#cbd5e1", fontSize: d === "⌫" ? 18 : 20, fontWeight: 600, padding: "14px 0", cursor: "pointer" }, onClick: () => d === "⌫" ? pressDelete() : pressDigit(d) }, d)),
+            ri === 0 && React.createElement("button", { style: { gridRow: "span 4", background: amount > 0 ? mc.bg : "#0f172a", border: `1px solid ${amount > 0 ? mc.border : "#1e293b"}`, borderRadius: 8, color: amount > 0 ? mc.text : "#475569", fontSize: 18, fontWeight: 800, cursor: amount > 0 ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: pressEnter }, enterGlyph)))))));
+}
+// ─── Pin Modal ────────────────────────────────────────────────────────────────
+function PinModal({ pin, onSave, onClose }) {
+    var _a;
+    const [label, setLabel] = useState((pin === null || pin === void 0 ? void 0 : pin.label) || "");
+    const [amount, setAmount] = useState(((_a = pin === null || pin === void 0 ? void 0 : pin.amount) === null || _a === void 0 ? void 0 : _a.toString()) || "");
+    const [method, setMethod] = useState((pin === null || pin === void 0 ? void 0 : pin.method) || "Amex");
+    const [type, setType] = useState((pin === null || pin === void 0 ? void 0 : pin.type) || "personal");
+    const [note, setNote] = useState((pin === null || pin === void 0 ? void 0 : pin.note) || "");
+    return (React.createElement(Modal, { onClose: onClose, title: pin ? "Edit" : "New pin" },
+        React.createElement("input", { style: S.input, placeholder: "Label e.g. Gym", value: label, onChange: e => setLabel(e.target.value) }),
+        React.createElement("input", { style: { ...S.input, marginBottom: 10 }, type: "number", inputMode: "decimal", placeholder: "Amount", value: amount, onChange: e => setAmount(e.target.value) }),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, METHODS.map(m => React.createElement("button", { key: m, style: { flex: 1, background: method === m ? "#1e293b" : "#0f172a", border: `1px solid ${method === m ? "#334155" : "#1e293b"}`, borderRadius: 8, color: method === m ? METHOD_COLOR[m] : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setMethod(m) }, m))),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["excluded", "Not me"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "excluded" ? "#a78bfa" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setType(v) }, l))),
+        React.createElement("textarea", { style: { ...S.input, height: 60, resize: "none" }, placeholder: "Note", value: note, onChange: e => setNote(e.target.value) }),
+        React.createElement("button", { style: { ...S.btn, background: "#0369a1", marginTop: 12 }, onClick: () => onSave({ id: (pin === null || pin === void 0 ? void 0 : pin.id) || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, note: note.trim() }) }, "Save")));
+}
+// ─── Summary View ─────────────────────────────────────────────────────────────
+function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport }) {
+    const [methodDetail, setMethodDetail] = useState(null); // method name or null
+    // Gross figure: personal spend + business spend, before business is excluded
+    const businessTotal = businessEntries.reduce((s, e) => s + e.amount, 0)
+        + state.pins.filter(p => p.type === "business").reduce((s, p) => s + (p.amount || 0), 0);
+    const grossSpend = totalSpent + businessTotal;
+    // Per-week, per-method breakdown
+    const weekRows = weeks.map(w => {
+        var _a;
+        const wEntries = state.entries.filter(e => e.weekIndex === w.index && e.type === "personal");
+        const wTotal = wEntries.reduce((s, e) => s + e.amount, 0);
+        const wByMethod = {};
+        METHODS.forEach(m => { wByMethod[m] = wEntries.filter(e => e.method === m).reduce((s, e) => s + e.amount, 0); });
+        const wBudget = (_a = rebalancedBudgets[w.index]) !== null && _a !== void 0 ? _a : state.weeklyBudget;
+        return { week: w, total: wTotal, byMethod: wByMethod, budget: wBudget };
+    });
+    // All transactions for a given method (entries + pins), for drill-down
+    function transactionsFor(method) {
+        const fromEntries = state.entries
+            .filter(e => e.method === method)
+            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || e.method, type: e.type }));
+        const fromPins = state.pins
+            .filter(p => p.method === method)
+            .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", type: p.type === "business" ? "business" : "personal" }));
+        return [...fromEntries, ...fromPins].sort((a, b) => {
+            if (!a.date)
+                return 1;
+            if (!b.date)
+                return -1;
+            return new Date(b.date) - new Date(a.date);
+        });
+    }
+    // Largest individual spends this month (entries + pins, personal + business — excludes credits and the "not yours" portion of splits)
+    const allSpendItems = [
+        ...state.entries.filter(e => e.type !== "credit" && e.type !== "excluded").map(e => ({ desc: e.label || e.method, amount: e.amount, method: e.method, type: e.type })),
+        ...state.pins.filter(p => p.type !== "excluded").map(p => ({ desc: p.label, amount: p.amount || 0, method: p.method, type: p.type })),
+    ].sort((a, b) => b.amount - a.amount).slice(0, 5);
+    // Source split: how much of personal spend came from pins vs quick-logged entries
+    const sourcePct = totalSpent > 0 ? Math.round((totalPinned / totalSpent) * 100) : 0;
+    return (React.createElement("div", { style: { padding: "12px 16px" } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 10 } },
+            React.createElement("button", { style: { background: "#1e293b", border: "1px solid #334155", borderRadius: 8, color: "#94a3b8", padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 500 }, onClick: onExport }, "\u2197 Export")),
+        React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "18px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginBottom: 6, textTransform: "uppercase" } }, "Month overview"),
+            React.createElement("div", { style: { fontSize: 32, fontWeight: 800, color: remaining < 0 ? "#ef4444" : remaining < state.monthlyBudget * 0.15 ? "#f97316" : "#22c55e", marginBottom: 12 } }, fmt(remaining)),
+            React.createElement("div", { style: { fontSize: 12, color: "#cbd5e1" } },
+                fmt(totalSpent),
+                " spent of ",
+                fmt(state.monthlyBudget))),
+        businessTotal > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Gross vs net"),
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
+                React.createElement("span", { style: { color: "#94a3b8" } }, "Personal spend (deducted)"),
+                React.createElement("span", { style: { color: "#e2e8f0", fontWeight: 600 } }, fmt(totalSpent))),
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
+                React.createElement("span", { style: { color: "#f59e0b" } }, "Business spend (reimbursable)"),
+                React.createElement("span", { style: { color: "#f59e0b", fontWeight: 600 } }, fmt(businessTotal))),
+            React.createElement("div", { style: { borderTop: "1px solid #1e293b", marginTop: 6, paddingTop: 6, display: "flex", justifyContent: "space-between" } },
+                React.createElement("span", { style: { color: "#cbd5e1", fontSize: 13, fontWeight: 600 } }, "Gross spend across all cards"),
+                React.createElement("span", { style: { color: "#f1f5f9", fontWeight: 800, fontSize: 14 } }, fmt(grossSpend))))),
+        React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Weekly breakdown"),
+            weekRows.map(({ week, total, byMethod, budget }) => (React.createElement("div", { key: week.index, style: { marginBottom: week.index < weeks.length ? 12 : 0, paddingBottom: week.index < weeks.length ? 12 : 0, borderBottom: week.index < weeks.length ? "1px solid #1e293b" : "none" } },
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 } },
+                    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "#f1f5f9" } },
+                        "Week ",
+                        week.index),
+                    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: total > budget ? "#ef4444" : "#cbd5e1" } },
+                        fmt(total),
+                        " ",
+                        React.createElement("span", { style: { color: "#64748b", fontWeight: 400 } },
+                            "/ ",
+                            fmt(budget)))),
+                React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 } },
+                    METHODS.filter(m => byMethod[m] > 0).map(m => (React.createElement("div", { key: m, style: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#94a3b8" } },
+                        React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[m] } }),
+                        m,
+                        " ",
+                        fmt(byMethod[m])))),
+                    METHODS.every(m => byMethod[m] === 0) && React.createElement("span", { style: { fontSize: 11, color: "#475569" } }, "Nothing logged")))))),
+        React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "By payment method"),
+            METHODS.filter(m => methodTotals[m] > 0).map(m => (React.createElement("button", { key: m, onClick: () => setMethodDetail(m), style: { width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 0", background: "none", border: "none", borderBottom: "1px solid #1e293b", cursor: "pointer", textAlign: "left" } },
+                React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[m] } }),
+                React.createElement("span", { style: { flex: 1, fontSize: 13, color: "#cbd5e1" } }, m),
+                React.createElement("span", { style: { fontWeight: 600, color: METHOD_COLOR[m], fontSize: 13 } }, fmt(methodTotals[m])),
+                React.createElement("span", { style: { color: "#475569", fontSize: 14 } }, "\u203A")))),
+            METHODS.every(m => methodTotals[m] === 0) && React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "4px 0" } }, "No spend logged yet")),
+        allSpendItems.length > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Largest spends"),
+            allSpendItems.map((item, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid #1e293b" : "none" } },
+                React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[item.method] || "#64748b" } }),
+                React.createElement("span", { style: { flex: 1, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "#cbd5e1" } },
+                    item.desc,
+                    item.type === "business" && React.createElement("span", { style: S.badge }, " work")),
+                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "#e2e8f0" } }, fmt(item.amount))))))),
+        totalSpent > 0 && totalPinned > 0 && totalEntries > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Spend source"),
+            React.createElement("div", { style: { height: 6, background: "#1e293b", borderRadius: 3, overflow: "hidden", marginBottom: 8, display: "flex" } },
+                React.createElement("div", { style: { height: "100%", width: sourcePct + "%", background: "#0369a1" } }),
+                React.createElement("div", { style: { height: "100%", width: (100 - sourcePct) + "%", background: "#06b6d4" } })),
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11 } },
+                React.createElement("span", { style: { color: "#0369a1" } },
+                    "\u25CF Pinned costs ",
+                    fmt(totalPinned)),
+                React.createElement("span", { style: { color: "#06b6d4" } },
+                    "Quick-logged ",
+                    fmt(totalEntries),
+                    " \u25CF")))),
+        totalCredits > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px" } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#22c55e", marginBottom: 8, textTransform: "uppercase" } }, "Credits"),
+            React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#4ade80" } },
+                "+",
+                fmt(totalCredits)))),
+        methodDetail && (React.createElement(MethodDetailModal, { method: methodDetail, transactions: transactionsFor(methodDetail), total: methodTotals[methodDetail], onClose: () => setMethodDetail(null) }))));
+}
+// ─── Method Detail Modal ──────────────────────────────────────────────────────
+function MethodDetailModal({ method, transactions, total, onClose }) {
+    const col = METHOD_COLOR[method];
+    return (React.createElement(Modal, { onClose: onClose, title: `${method} transactions` },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14, padding: "0 2px" } },
+            React.createElement("span", { style: { fontSize: 12, color: "#64748b" } },
+                transactions.length,
+                " transaction",
+                transactions.length === 1 ? "" : "s"),
+            React.createElement("span", { style: { fontSize: 18, fontWeight: 800, color: col } }, fmt(total))),
+        React.createElement("div", { style: { maxHeight: 360, overflowY: "auto" } },
+            transactions.length === 0 && React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "12px 0", textAlign: "center" } }, "No transactions yet"),
+            transactions.map((t, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid #1e293b" : "none" } },
+                React.createElement("div", { style: { flex: 1 } },
+                    React.createElement("div", { style: { fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : "#e2e8f0" } },
+                        t.desc,
+                        t.type === "business" && React.createElement("span", { style: S.badge }, " work"),
+                        t.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " not yours")),
+                    t.date && React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 1 } }, dateStr(new Date(t.date)))),
+                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : col } }, fmt(t.amount))))))));
+}
+// ─── Export Modal ─────────────────────────────────────────────────────────────
+function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, totalCredits, methodTotals, onClose }) {
+    const [copied, setCopied] = useState(false);
+    function buildText() {
+        const lines = [];
+        lines.push(`SpendTracker — ${state.monthLabel}`);
+        lines.push(`${fmt(totalSpent)} spent · ${fmt(remaining)} left of ${fmt(state.monthlyBudget)}`);
+        if (totalCredits > 0)
+            lines.push(`Credits: +${fmt(totalCredits)}`);
+        lines.push("");
+        weeks.forEach(w => {
+            var _a;
+            const wEntries = state.entries.filter(e => e.weekIndex === w.index);
+            const wPersonal = wEntries.filter(e => e.type === "personal");
+            const wBusiness = wEntries.filter(e => e.type === "business");
+            const wExcluded = wEntries.filter(e => e.type === "excluded");
+            const wCredits = (state.credits || []).filter(c => c.weekIndex === w.index);
+            const wSpend = wPersonal.reduce((s, e) => s + e.amount, 0);
+            const wBudget = (_a = rebalancedBudgets[w.index]) !== null && _a !== void 0 ? _a : state.weeklyBudget;
+            lines.push(`Week ${w.index} (${dateStr(w.start)} – ${dateStr(w.end)}) — ${fmt(wSpend)} of ${fmt(wBudget)}`);
+            if (wEntries.length === 0 && wCredits.length === 0) {
+                lines.push(`  (nothing logged)`);
+            }
+            else {
+                wPersonal.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}]${e.splitGroupId ? " (split)" : ""}`));
+                wBusiness.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, work]`));
+                wExcluded.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, not yours]`));
+                wCredits.forEach(c => lines.push(`  +£${c.amount.toFixed(2)}  ${c.label || "Credit"}${c.from ? " from " + c.from : ""}`));
+            }
+            lines.push("");
+        });
+        const personalPins = state.pins.filter(p => p.type !== "business" && p.type !== "excluded");
+        const businessPins = state.pins.filter(p => p.type === "business");
+        const excludedPins = state.pins.filter(p => p.type === "excluded");
+        if (state.pins.length > 0) {
+            lines.push("Pinned costs:");
+            personalPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${p.method}]`));
+            businessPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${p.method}, work]`));
+            excludedPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${p.method}, not me]`));
+            lines.push("");
+        }
+        const methodLines = METHODS.filter(m => methodTotals[m] > 0);
+        if (methodLines.length > 0) {
+            lines.push("By payment method:");
+            methodLines.forEach(m => lines.push(`  ${m}: ${fmt(methodTotals[m])}`));
+        }
+        return lines.join("\n");
+    }
+    const text = buildText();
+    function copy() {
+        navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+    }
+    return (React.createElement(Modal, { onClose: onClose, title: "Export" },
+        React.createElement("div", { style: { background: "#030712", border: "1px solid #1e293b", borderRadius: 8, padding: "12px", fontFamily: "monospace", fontSize: 11, color: "#94a3b8", whiteSpace: "pre-wrap", maxHeight: 360, overflowY: "auto", marginBottom: 12, lineHeight: 1.6 } }, text),
+        React.createElement("button", { style: { ...S.btn, background: copied ? "#16a34a" : "#0369a1", width: "100%" }, onClick: copy }, copied ? "✓ Copied" : "Copy to clipboard")));
+}
+// ─── Modal ────────────────────────────────────────────────────────────────────
+function Modal({ children, onClose, title }) {
+    return React.createElement("div", { style: S.modalOverlay, onClick: onClose },
+        React.createElement("div", { style: S.modalSheet, onClick: e => e.stopPropagation() },
+            React.createElement("div", { style: S.modalHeader },
+                React.createElement("span", { style: S.modalTitle }, title),
+                React.createElement("button", { style: S.delBtn, onClick: onClose }, "\u2715")),
+            children));
+}
+// ─── Styles ───────────────────────────────────────────────────────────────────
+const S = {
+    root: { fontFamily: "'Inter', system-ui, sans-serif", background: "#030712", minHeight: "100vh", color: "#e2e8f0", maxWidth: 480, margin: "0 auto", paddingBottom: 40 },
+    header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "20px 16px 12px", borderBottom: "1px solid #1e293b" },
+    appTitle: { fontSize: 24, fontWeight: 800, letterSpacing: "-1px", color: "#f1f5f9" },
+    appSub: { fontSize: 12, color: "#64748b", marginTop: 2 },
+    headerRight: { textAlign: "right" },
+    remaining: { fontSize: 28, fontWeight: 800, letterSpacing: "-1px", lineHeight: 1 },
+    remainLabel: { fontSize: 10, color: "#64748b", textTransform: "uppercase" },
+    pastBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#451a03", borderBottom: "1px solid #92400e", padding: "8px 16px", fontSize: 11, color: "#fcd34d" },
+    pastBannerBtn: { background: "#78350f", border: "1px solid #b45309", borderRadius: 6, color: "#fde68a", padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
+    tabs: { display: "flex", borderBottom: "1px solid #1e293b", padding: "0 16px" },
+    tab: { flex: 1, background: "none", border: "none", borderBottom: "2px solid transparent", color: "#64748b", padding: "10px 4px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
+    tabActive: { color: "#f1f5f9", borderBottomColor: "#0369a1" },
+    weekNav: { display: "flex", gap: 6, marginBottom: 12, overflowX: "auto" },
+    weekPill: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 20, color: "#64748b", padding: "6px 12px", fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 },
+    weekPillActive: { background: "#0369a1", borderColor: "#0369a1", color: "#f1f5f9" },
+    dailyCard: { flex: 1, background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: "10px 12px" },
+    dailyLabel: { fontSize: 10, color: "#64748b", textTransform: "uppercase", marginBottom: 3 },
+    dailySub: { fontSize: 10, color: "#64748b", marginTop: 2 },
+    weekHeader: { padding: "10px 0 8px", borderBottom: "1px solid #1e293b", marginBottom: 10 },
+    budgetCard: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: "12px" },
+    bar: { height: 6, background: "#1e293b", borderRadius: 3, overflow: "hidden" },
+    barFill: { height: "100%", borderRadius: 3 },
+    entryRow: { display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid #0f172a" },
+    splitGroup: { background: "#0c0a1a", border: "1px solid #2e1065", borderRadius: 8, padding: "2px 10px", marginBottom: 8 },
+    entryRowGrouped: { borderBottom: "1px solid #1e1338" },
+    dot: { width: 7, height: 7, borderRadius: "50%", flexShrink: 0 },
+    badge: { fontSize: 10, background: "#451a03", color: "#f59e0b", borderRadius: 3, padding: "1px 4px", marginLeft: 4 },
+    delBtn: { background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 16, padding: "0 2px" },
+    actionBtn: { background: "#0f172a", border: "1px dashed #334155", borderRadius: 8, color: "#94a3b8", padding: "10px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
+    sectionTitle: { fontSize: 13, fontWeight: 700, color: "#cbd5e1", textTransform: "uppercase", letterSpacing: "0.08em" },
+    addBtn: { background: "#0369a1", border: "none", borderRadius: 6, color: "#f1f5f9", padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" },
+    pinGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
+    pinCard: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: "12px" },
+    empty: { color: "#475569", fontSize: 13, padding: "12px 0" },
+    iconBtn: { background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 13, padding: "0 2px" },
+    input: { width: "100%", background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: "#f1f5f9", padding: "10px 12px", marginBottom: 10, fontSize: 14, outline: "none", boxSizing: "border-box" },
+    btn: { border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 600, cursor: "pointer", color: "#f1f5f9" },
+    settingsCard: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: "14px", marginBottom: 12 },
+    modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "flex-end", zIndex: 100 },
+    modalSheet: { background: "#0f172a", borderRadius: "16px 16px 0 0", padding: "20px 16px 32px", width: "100%", maxWidth: 480, margin: "0 auto", border: "1px solid #1e293b" },
+    modalHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+    modalTitle: { fontSize: 15, fontWeight: 700, color: "#f1f5f9" },
+};
