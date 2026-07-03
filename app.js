@@ -8,7 +8,8 @@ const STORAGE_KEY = "spendtracker_v6";
 // which holds the decrypted state in memory and writes only ciphertext to disk.
 // App is never rendered until crypto.js's Root has unlocked, so getState() is set.
 function load() { return (window.SpendVault && window.SpendVault.getState) ? window.SpendVault.getState() : null; }
-function save(s) { if (window.SpendVault && window.SpendVault.save) window.SpendVault.save(s); }
+function save(s) { if (window.SpendVault && window.SpendVault.save)
+    window.SpendVault.save(s); }
 const fmt = (n) => "£" + Number(Math.abs(n)).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const dayName = (d) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
@@ -109,6 +110,7 @@ function defaultState() {
         weeklyBudget: 260,
         amexCutoff: 28,
         lloydsCutoff: 3,
+        lastMethod: "Amex",
         entries: [],
         pins: [],
         credits: [],
@@ -118,13 +120,15 @@ function defaultState() {
 // ─── Reducer ──────────────────────────────────────────────────────────────────
 function reducer(s, a) {
     switch (a.type) {
-        case "ADD_ENTRY": return { ...s, entries: [a.entry, ...s.entries] };
+        case "ADD_ENTRY": return { ...s, entries: [a.entry, ...s.entries], lastMethod: (a.entry.type !== "credit" && a.entry.type !== "excluded" && a.entry.method) ? a.entry.method : s.lastMethod };
         case "DEL_ENTRY": return { ...s, entries: s.entries.filter(e => e.id !== a.id) };
+        case "UPD_ENTRY": return { ...s, entries: s.entries.map(e => e.id === a.entry.id ? a.entry : e) };
         case "ADD_PIN": return { ...s, pins: [...s.pins, a.pin] };
         case "DEL_PIN": return { ...s, pins: s.pins.filter(p => p.id !== a.id) };
         case "UPD_PIN": return { ...s, pins: s.pins.map(p => p.id === a.pin.id ? a.pin : p) };
         case "ADD_CREDIT": return { ...s, credits: [a.credit, ...(s.credits || [])] };
         case "DEL_CREDIT": return { ...s, credits: (s.credits || []).filter(c => c.id !== a.id) };
+        case "UPD_CREDIT": return { ...s, credits: (s.credits || []).map(c => c.id === a.credit.id ? a.credit : c) };
         case "SETTINGS": return { ...s, ...a.patch };
         case "MONTH_ROLLOVER": {
             // Snapshot budget figures as they stood this period, so looking back later
@@ -156,6 +160,8 @@ function reducer(s, a) {
                     return { ...arc, entries: [a.entry, ...arc.entries] };
                 if (a.op === "del")
                     return { ...arc, entries: arc.entries.filter(e => e.id !== a.id) };
+                if (a.op === "upd")
+                    return { ...arc, entries: arc.entries.map(e => e.id === a.entry.id ? a.entry : e) };
                 return arc;
             });
             return { ...s, monthHistory: newHistory };
@@ -168,6 +174,8 @@ function reducer(s, a) {
                     return { ...arc, credits: [a.credit, ...(arc.credits || [])] };
                 if (a.op === "del")
                     return { ...arc, credits: (arc.credits || []).filter(c => c.id !== a.id) };
+                if (a.op === "upd")
+                    return { ...arc, credits: (arc.credits || []).map(c => c.id === a.credit.id ? a.credit : c) };
                 return arc;
             });
             return { ...s, monthHistory: newHistory };
@@ -183,6 +191,7 @@ function App() {
     const [tab, setTab] = useState("week");
     const [activeWeek, setActiveWeek] = useState(1);
     const [showEntryFor, setShowEntryFor] = useState(null);
+    const [editTarget, setEditTarget] = useState(null); // { kind:"entry"|"credit", data, weekIndex } being edited, or null
     const [showAddPin, setShowAddPin] = useState(false);
     const [editPin, setEditPin] = useState(null);
     const [showExport, setShowExport] = useState(false);
@@ -326,6 +335,18 @@ function App() {
         else
             dispatch({ type: "DEL_CREDIT", id });
     }
+    function updEntry(entry) {
+        if (viewingPast)
+            dispatch({ type: "EDIT_PAST_ENTRY", op: "upd", archiveIndex: viewingPastIndex, entry });
+        else
+            dispatch({ type: "UPD_ENTRY", entry });
+    }
+    function updCredit(credit) {
+        if (viewingPast)
+            dispatch({ type: "EDIT_PAST_CREDIT", op: "upd", archiveIndex: viewingPastIndex, credit });
+        else
+            dispatch({ type: "UPD_CREDIT", credit });
+    }
     // Pins are shared across periods (they're recurring fixed costs), so pin edits always
     // apply live regardless of which period is being viewed.
     return (React.createElement("div", { style: S.root },
@@ -364,7 +385,7 @@ function App() {
                         "d left")))),
             weeks.filter(w => w.index === activeWeek).map(week => {
                 var _a;
-                return (React.createElement(WeekPanel, { key: week.index, week: week, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit }));
+                return (React.createElement(WeekPanel, { key: week.index, week: week, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit, onEditEntry: (entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex }), onEditCredit: (credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex }) }));
             }))),
         tab === "pins" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
@@ -372,11 +393,11 @@ function App() {
                 React.createElement("button", { style: S.addBtn, onClick: () => setShowAddPin(true) }, "+ Pin")),
             React.createElement("div", { style: S.pinGrid }, state.pins.length === 0 ? React.createElement("div", { style: S.empty }, "No pinned costs") : state.pins.map(p => React.createElement(PinCard, { key: p.id, pin: p, onEdit: () => setEditPin(p), onDelete: () => dispatch({ type: "DEL_PIN", id: p.id }) }))))),
         tab === "savings" && (() => {
-            // Savings = accumulated leftover budget from COMPLETED months only (the
-            // months archived into monthHistory). The current live month isn't counted
-            // until it rolls over — a new user sees £0 through their whole first month.
-            // A month's leftover mirrors the header's "remaining": its own monthlyBudget
-            // − personal spend (entries + pins) + credits.
+            // Savings = accumulated leftover budget from COMPLETED months only (i.e. the
+            // months archived into monthHistory). The current live month is not counted
+            // until it rolls over, which is why a brand-new user sees £0 all through their
+            // first month. A month's leftover is computed exactly like the header's
+            // "remaining": its own monthlyBudget − personal spend (entries + pins) + credits.
             const monthSaved = (m) => {
                 const spentEntries = m.entries.filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0);
                 const spentPins = m.pins.filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
@@ -385,25 +406,42 @@ function App() {
             };
             const rows = (state.monthHistory || [])
                 .map(m => { const saved = monthSaved(m); return { label: m.monthLabel, saved, budget: m.monthlyBudget, spent: m.monthlyBudget - saved }; })
-                .reverse();
+                .reverse(); // most recent completed month first
             const totalSaved = rows.reduce((s, r) => s + r.saved, 0);
             const signed = (n) => (n < 0 ? "-" : "+") + fmt(n);
             return (React.createElement("div", { style: { padding: "12px 16px" } },
                 React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "20px", marginBottom: 12 } },
                     React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginBottom: 4, textTransform: "uppercase" } }, "Total saved"),
-                    React.createElement("div", { style: { fontSize: 36, fontWeight: 800, color: totalSaved >= 0 ? "#4ade80" : "#f87171", marginBottom: 8 } }, totalSaved < 0 ? "-" : "", fmt(totalSaved)),
-                    React.createElement("div", { style: { fontSize: 12, color: "#64748b", lineHeight: 1.5 } }, "Leftover budget carried over from completed months. ", state.monthLabel, "'s leftover is added to this once the month ends.")),
+                    React.createElement("div", { style: { fontSize: 36, fontWeight: 800, color: totalSaved >= 0 ? "#4ade80" : "#f87171", marginBottom: 8 } },
+                        totalSaved < 0 ? "-" : "",
+                        fmt(totalSaved)),
+                    React.createElement("div", { style: { fontSize: 12, color: "#64748b", lineHeight: 1.5 } },
+                        "Leftover budget carried over from completed months. ",
+                        state.monthLabel,
+                        "'s leftover is added to this once the month ends.")),
                 !viewingPast && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" } },
                     React.createElement("div", null,
-                        React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", fontWeight: 600 } }, state.monthLabel, " ", React.createElement("span", { style: { color: "#64748b", fontWeight: 400 } }, "· in progress")),
-                        React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 2 } }, "Adds to savings when ", state.monthLabel, " ends")),
+                        React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", fontWeight: 600 } },
+                            state.monthLabel,
+                            " ",
+                            React.createElement("span", { style: { color: "#64748b", fontWeight: 400 } }, "\u00B7 in progress")),
+                        React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 2 } },
+                            "Adds to savings when ",
+                            state.monthLabel,
+                            " ends")),
                     React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: remaining >= 0 ? "#94a3b8" : "#f87171" } }, signed(remaining)))),
                 React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px" } },
                     React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Month by month"),
-                    rows.length === 0 ? (React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "4px 0", lineHeight: 1.5 } }, "No completed months yet. Your first month's leftover shows up here once ", state.monthLabel, " ends.")) : rows.map((r, i) => (React.createElement("div", { key: r.label, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: i < rows.length - 1 ? "1px solid #1e293b" : "none" } },
+                    rows.length === 0 ? (React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "4px 0", lineHeight: 1.5 } },
+                        "No completed months yet. Your first month's leftover shows up here once ",
+                        state.monthLabel,
+                        " ends.")) : rows.map((r, i) => (React.createElement("div", { key: r.label, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: i < rows.length - 1 ? "1px solid #1e293b" : "none" } },
                         React.createElement("div", null,
                             React.createElement("div", { style: { fontSize: 13, color: "#e2e8f0", fontWeight: 600 } }, r.label),
-                            React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 1 } }, fmt(r.spent), " spent of ", fmt(r.budget))),
+                            React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 1 } },
+                                fmt(r.spent),
+                                " spent of ",
+                                fmt(r.budget))),
                         React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#4ade80" : "#f87171" } }, signed(r.saved))))))));
         })(),
         tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true) })),
@@ -411,14 +449,17 @@ function App() {
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Budget"),
                 React.createElement("div", { style: { marginBottom: 10 } },
-                    React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, "Monthly budget (£)"),
+                    React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, "Monthly budget (\u00A3)"),
                     React.createElement("input", { key: `monthlyBudget-${state.monthlyBudget}`, style: S.input, type: "number", defaultValue: state.monthlyBudget, onBlur: e => { const v = parseFloat(e.target.value); if (!isNaN(v))
                             dispatch({ type: "SETTINGS", patch: { monthlyBudget: v, weeklyBudget: Math.round((v / weeksInPeriod) * 100) / 100 } }); } })),
                 React.createElement("div", { style: { marginBottom: 10 } },
-                    React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, "Weekly budget (£)"),
+                    React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, "Weekly budget (\u00A3)"),
                     React.createElement("input", { key: `weeklyBudget-${state.weeklyBudget}`, style: S.input, type: "number", defaultValue: state.weeklyBudget, onBlur: e => { const v = parseFloat(e.target.value); if (!isNaN(v))
                             dispatch({ type: "SETTINGS", patch: { weeklyBudget: v, monthlyBudget: Math.round((v * weeksInPeriod) * 100) / 100 } }); } })),
-                React.createElement("div", { style: { fontSize: 11, color: "#475569" } }, "Monthly and weekly are linked across this ", periodDays, "-day period — changing one recalculates the other.")),
+                React.createElement("div", { style: { fontSize: 11, color: "#475569" } },
+                    "Monthly and weekly are linked across this ",
+                    periodDays,
+                    "-day period \u2014 changing one recalculates the other.")),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Card cutoff dates"),
                 [["Amex statement date", "amexCutoff"], ["Lloyds statement date", "lloydsCutoff"]].map(([lbl, k]) => (React.createElement("div", { key: k, style: { marginBottom: 10 } },
@@ -437,13 +478,15 @@ function App() {
                     ")")) : (React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", width: "100%" }, onClick: () => setViewingPastIndex(mostRecentArchiveIndex) },
                     "\u2190 Go back to ",
                     state.monthHistory[mostRecentArchiveIndex].monthLabel))) : (React.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "No previous period to go back to yet."))),
-                React.createElement("div", { style: S.settingsCard },
-                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#f87171", marginBottom: 10, textTransform: "uppercase" } }, "Reset"),
-                    React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", marginBottom: 10, lineHeight: 1.5 } }, "Erase everything on this device — budget, transactions, history and your passphrase — and start over from setup. This can't be undone."),
-                    !confirmWipe ? (React.createElement("button", { style: { ...S.btn, background: "#7f1d1d", border: "1px solid #b91c1c", width: "100%" }, onClick: () => setConfirmWipe(true) }, "Reset app & erase all data")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
-                        React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", flex: 1 }, onClick: () => setConfirmWipe(false) }, "Cancel"),
-                        React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe) window.SpendVault.wipe(); } }, "Erase everything")))))),
-        showEntryFor !== null && React.createElement(EntryModal, { weekIndex: showEntryFor, onSave: addEntry, onSaveCredit: addCredit, onClose: () => setShowEntryFor(null) }),
+            React.createElement("div", { style: S.settingsCard },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#f87171", marginBottom: 10, textTransform: "uppercase" } }, "Reset"),
+                React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", marginBottom: 10, lineHeight: 1.5 } }, "Erase everything on this device \u2014 budget, transactions, history and your passphrase \u2014 and start over from setup. This can't be undone."),
+                !confirmWipe ? (React.createElement("button", { style: { ...S.btn, background: "#7f1d1d", border: "1px solid #b91c1c", width: "100%" }, onClick: () => setConfirmWipe(true) }, "Reset app & erase all data")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
+                    React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", flex: 1 }, onClick: () => setConfirmWipe(false) }, "Cancel"),
+                    React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe)
+                            window.SpendVault.wipe(); } }, "Erase everything")))))),
+        !viewingPast && (React.createElement("button", { "aria-label": "Quick add spend", onClick: () => setShowEntryFor(todayWeekIndex(weeks)), style: S.quickAdd }, "+")),
+        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, edit: editTarget, defaultMethod: state.lastMethod || "Amex", onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
         (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
@@ -451,7 +494,7 @@ function App() {
         showExport && React.createElement(ExportModal, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, remaining: remaining, totalCredits: totalCredits, methodTotals: methodTotals, onClose: () => setShowExport(false) })));
 }
 // ─── Week Panel ───────────────────────────────────────────────────────────────
-function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntry, onDelEntry, onDelCredit }) {
+function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit }) {
     const personal = entries.filter(e => e.type === "personal");
     const business = entries.filter(e => e.type === "business");
     const spent = personal.reduce((s, e) => s + e.amount, 0);
@@ -493,10 +536,10 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
                 fmt(over),
                 " over")),
         React.createElement("div", { style: { marginTop: 12 } },
-            splitGroups.map(group => (React.createElement("div", { key: group[0].splitGroupId, style: S.splitGroup }, group.map((e, i) => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e), grouped: true, last: i === group.length - 1 }))))),
-            soloPersonal.map(e => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e) })),
-            soloBusiness.map(e => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e) })),
-            credits.map(c => React.createElement(CreditLine, { key: c.id, credit: c, onDel: () => onDelCredit(c.id) })),
+            splitGroups.map(group => (React.createElement("div", { key: group[0].splitGroupId, style: S.splitGroup }, group.map((e, i) => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e), onEdit: () => onEditEntry(e), grouped: true, last: i === group.length - 1 }))))),
+            soloPersonal.map(e => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e), onEdit: () => onEditEntry(e) })),
+            soloBusiness.map(e => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e), onEdit: () => onEditEntry(e) })),
+            credits.map(c => React.createElement(CreditLine, { key: c.id, credit: c, onDel: () => onDelCredit(c.id), onEdit: () => onEditCredit(c) })),
             entries.length === 0 && credits.length === 0 && React.createElement("div", { style: { color: "#64748b", fontSize: 13, padding: "12px 0" } }, "Nothing logged")),
         React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
             React.createElement("button", { style: { ...S.actionBtn, flex: 1 }, onClick: onAddEntry }, "Log spend"))));
@@ -527,9 +570,9 @@ function ConfirmDeleteButton({ onConfirm, style }) {
         }, onClick: handleClick, onBlur: () => setConfirming(false) }, confirming ? "confirm?" : "×"));
 }
 // ─── Entry Line ───────────────────────────────────────────────────────────────
-function EntryLine({ entry, onDel, grouped, last }) {
+function EntryLine({ entry, onDel, onEdit, grouped, last }) {
     const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "#e2e8f0";
-    return (React.createElement("div", { style: { ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom: "none" } : {}) } },
+    return (React.createElement("div", { onClick: onEdit, style: { ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom: "none" } : {}), cursor: onEdit ? "pointer" : "default" } },
         React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[entry.method] || "#64748b" } }),
         React.createElement("span", { style: { flex: 1, color: col, fontSize: 13 } },
             entry.label || entry.method,
@@ -540,8 +583,8 @@ function EntryLine({ entry, onDel, grouped, last }) {
         React.createElement(ConfirmDeleteButton, { onConfirm: onDel, style: S.delBtn })));
 }
 // ─── Credit Line ───────────────────────────────────────────────────────────────
-function CreditLine({ credit, onDel }) {
-    return (React.createElement("div", { style: S.entryRow },
+function CreditLine({ credit, onDel, onEdit }) {
+    return (React.createElement("div", { onClick: onEdit, style: { ...S.entryRow, cursor: onEdit ? "pointer" : "default" } },
         React.createElement("span", { style: { ...S.dot, background: "#22c55e" } }),
         React.createElement("span", { style: { flex: 1, color: "#22c55e", fontSize: 13 } },
             credit.label || "Credit",
@@ -571,53 +614,46 @@ function PinCard({ pin, onEdit, onDelete }) {
         pin.note && React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 4 } }, pin.note)));
 }
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, onSave, onSaveCredit, onClose }) {
-    const [display, setDisplay] = useState("0");
-    const [hasDecimal, setHasDecimal] = useState(false);
-    const [method, setMethod] = useState("Amex");
-    const [type, setType] = useState("personal");
-    const [note, setNote] = useState("");
-    const [showNote, setShowNote] = useState(false);
+function EntryModal({ weekIndex, edit, defaultMethod, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
+    const editEntry = edit && edit.kind === "entry" ? edit.data : null;
+    const editCredit = edit && edit.kind === "credit" ? edit.data : null;
+    const editData = editEntry || editCredit;
+    const isEdit = !!editData;
+    // A split's two halves must keep summing to the original total, so editing one can't change
+    // its amount — the card/note stay editable, the amount is locked.
+    const isSplitEdit = !!(editEntry && editEntry.splitGroupId);
+    // The amount is an integer number of pence, filled in from the right (calculator style), so the
+    // decimal never has to be typed: tap 1-2-5-0 → £12.50. Starts at £0.00. Prefilled when editing.
+    const [cents, setCents] = useState(() => editData ? Math.round(editData.amount * 100) : 0);
+    const [method, setMethod] = useState(() => editEntry ? editEntry.method : (defaultMethod || "Amex"));
+    const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : "personal"));
+    const [note, setNote] = useState(() => editData ? (editData.label || "") : "");
+    const [showNote, setShowNote] = useState(() => !!(editData && editData.label));
     const [flash, setFlash] = useState(null);
     // Split flow: null (not splitting) → "total" (entering the full amount) → "theirs" (entering the portion that isn't yours)
     const [splitStage, setSplitStage] = useState(null);
     const [splitTotal, setSplitTotal] = useState(0);
-    const amount = parseFloat(display) || 0;
+    const amount = cents / 100;
+    const displayStr = amount.toFixed(2);
     const creditColors = { bg: "#14532d", border: "#22c55e", text: "#4ade80" };
     const splitColors = { bg: "#3b0764", border: "#a855f7", text: "#d8b4fe" };
     const methodColors = { Amex: { bg: "#1e3a5f", border: "#3b82f6", text: "#93c5fd" }, Lloyds: { bg: "#064e3b", border: "#10b981", text: "#34d399" }, HSBC: { bg: "#450a0a", border: "#dc2626", text: "#fca5a5" }, Cash: { bg: "#451a03", border: "#d97706", text: "#fbbf24" } };
     const mc = type === "credit" ? creditColors : type === "split" ? splitColors : methodColors[method];
     function pressDigit(d) {
-        setDisplay(prev => {
-            if (prev === "0" && d !== ".")
-                return String(d);
-            if (d === "." && hasDecimal)
-                return prev;
-            if (d === ".") {
-                setHasDecimal(true);
-                return prev + ".";
-            }
-            const parts = prev.split(".");
-            if (parts[1] && parts[1].length >= 2)
-                return prev;
-            return prev + String(d);
+        if (isSplitEdit)
+            return; // amount locked while editing a split half
+        setCents(prev => {
+            const next = d === "00" ? prev * 100 : prev * 10 + Number(d);
+            return next > 99999999 ? prev : next; // cap at £999,999.99
         });
     }
     function pressDelete() {
-        setDisplay(prev => {
-            if (prev.length <= 1) {
-                setHasDecimal(false);
-                return "0";
-            }
-            const next = prev.slice(0, -1);
-            if (!next.includes("."))
-                setHasDecimal(false);
-            return next;
-        });
+        if (isSplitEdit)
+            return;
+        setCents(prev => Math.floor(prev / 10));
     }
     function resetAfterSave() {
-        setDisplay("0");
-        setHasDecimal(false);
+        setCents(0);
         setNote("");
         setSplitStage(null);
         setSplitTotal(0);
@@ -631,19 +667,28 @@ function EntryModal({ weekIndex, onSave, onSaveCredit, onClose }) {
         }
         else {
             setSplitStage("total");
-            setDisplay("0");
-            setHasDecimal(false);
+            setCents(0);
         }
     }
     function pressEnter() {
         if (amount <= 0)
             return;
+        // Editing an existing item: write the change back in place, keeping id/date/week/split.
+        if (isEdit) {
+            if (editCredit) {
+                onUpdateCredit({ ...editCredit, amount, label: note.trim() });
+            }
+            else {
+                onUpdate({ ...editEntry, amount: isSplitEdit ? editEntry.amount : amount, label: note.trim(), note: note.trim(), method, type });
+            }
+            onClose();
+            return;
+        }
         if (type === "split") {
             if (splitStage === "total") {
                 // Move to step 2: capture the portion that isn't yours
                 setSplitTotal(amount);
-                setDisplay("0");
-                setHasDecimal(false);
+                setCents(0);
                 setSplitStage("theirs");
                 return;
             }
@@ -676,31 +721,41 @@ function EntryModal({ weekIndex, onSave, onSaveCredit, onClose }) {
         setTimeout(() => setFlash(null), 900);
         resetAfterSave();
     }
-    const digits = [[7, 8, 9], [4, 5, 6], [1, 2, 3], [".", 0, "⌫"]];
+    const digits = [[7, 8, 9], [4, 5, 6], [1, 2, 3], ["00", 0, "⌫"]];
     const subheading = { fontSize: 12, color: "#64748b", marginBottom: 6, fontWeight: 500 };
-    // What to show above the number display when mid-split, so it's unambiguous which figure is being entered
+    // In edit mode, only offer the classifications it makes sense to switch between: a normal entry
+    // can flip personal↔work; a split half or a credit keeps its kind (so its bucket stays coherent).
+    const classOptions = isEdit
+        ? (editCredit || isSplitEdit ? [] : [["personal", "Personal"], ["business", "Work"]])
+        : [["personal", "Personal"], ["business", "Work"], ["credit", "Credit"], ["split", "Split"]];
+    // What to show above the number display: the split steps, or a locked hint when editing a split.
     let displayCaption = null;
     if (type === "split" && splitStage === "total")
         displayCaption = "Total amount";
     if (type === "split" && splitStage === "theirs")
         displayCaption = `Not yours, of ${fmt(splitTotal)}`;
+    if (isSplitEdit)
+        displayCaption = "Split amount — locked";
     // Enter-key glyph changes on the first split step since it advances rather than saves
     const enterGlyph = type === "split" && splitStage === "total" ? "→" : "↵";
-    return (React.createElement(Modal, { onClose: onClose, title: `Log · Week ${weekIndex}` },
-        React.createElement("div", { style: { background: "#1e293b", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "#334155"}` } },
+    const title = isEdit ? (editCredit ? "Edit credit" : "Edit spend") : `Log · Week ${weekIndex}`;
+    return (React.createElement(Modal, { onClose: onClose, title: title },
+        React.createElement("div", { style: { background: "#1e293b", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "#334155"}`, opacity: isSplitEdit ? 0.7 : 1 } },
             displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
-            React.createElement("div", { style: { fontSize: display.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#4ade80" : "#f1f5f9" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${display === "0" ? "0" : display}`)),
-        React.createElement("div", { style: subheading }, "Payment type"),
-        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 12, opacity: type === "credit" ? 0.4 : 1 } }, METHODS.map(m => React.createElement("button", { key: m, style: { background: method === m ? methodColors[m].bg : "#0f172a", border: `1px solid ${method === m ? methodColors[m].border : "#1e293b"}`, borderRadius: 8, color: method === m ? methodColors[m].text : "#475569", padding: "10px 2px", fontSize: 12, fontWeight: method === m ? 700 : 500, cursor: "pointer" }, onClick: () => setMethod(m) }, m))),
-        React.createElement("div", { style: subheading }, "Classification"),
-        React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["credit", "Credit"], ["split", "Split"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#4ade80" : v === "split" ? "#d8b4fe" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l))),
-        type === "split" && (React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", marginBottom: 10, lineHeight: 1.5 } }, splitStage === "total"
+            React.createElement("div", { style: { fontSize: displayStr.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#4ade80" : "#f1f5f9" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`)),
+        !editCredit && React.createElement(React.Fragment, null,
+            React.createElement("div", { style: subheading }, "Payment type"),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 12, opacity: type === "credit" ? 0.4 : 1 } }, METHODS.map(m => React.createElement("button", { key: m, style: { background: method === m ? methodColors[m].bg : "#0f172a", border: `1px solid ${method === m ? methodColors[m].border : "#1e293b"}`, borderRadius: 8, color: method === m ? methodColors[m].text : "#475569", padding: "10px 2px", fontSize: 12, fontWeight: method === m ? 700 : 500, cursor: "pointer" }, onClick: () => setMethod(m) }, m)))),
+        classOptions.length > 0 && React.createElement(React.Fragment, null,
+            React.createElement("div", { style: subheading }, "Classification"),
+            React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#4ade80" : v === "split" ? "#d8b4fe" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
+        type === "split" && !isEdit && (React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", marginBottom: 10, lineHeight: 1.5 } }, splitStage === "total"
             ? "Enter the full amount you paid, then continue."
             : "Enter just the portion that isn't yours — work reimbursement, a friend's share of the bill, etc. The rest stays personal.")),
         React.createElement("button", { style: { background: "none", border: "none", color: showNote ? "#60a5fa" : "#64748b", fontSize: 12, cursor: "pointer", padding: "0 0 8px", textAlign: "left", width: "100%" }, onClick: () => setShowNote(p => !p) }, showNote ? "▾ Hide note" : "▸ Add a note"),
         showNote && React.createElement("input", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: "#f1f5f9", padding: "8px 12px", marginBottom: 10, fontSize: 13, width: "100%", boxSizing: "border-box", outline: "none" }, placeholder: "e.g. golf, birthday", value: note, onChange: e => setNote(e.target.value), autoFocus: true }),
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6 } }, digits.map((row, ri) => (React.createElement(React.Fragment, null,
-            row.map((d, i) => React.createElement("button", { key: `${ri}-${i}`, style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: d === "⌫" ? "#ef4444" : "#cbd5e1", fontSize: d === "⌫" ? 18 : 20, fontWeight: 600, padding: "14px 0", cursor: "pointer" }, onClick: () => d === "⌫" ? pressDelete() : pressDigit(d) }, d)),
+            row.map((d, i) => React.createElement("button", { key: `${ri}-${i}`, style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: d === "⌫" ? "#ef4444" : "#cbd5e1", fontSize: d === "⌫" ? 18 : 20, fontWeight: 600, padding: "14px 0", cursor: "pointer", opacity: isSplitEdit ? 0.4 : 1 }, onClick: () => d === "⌫" ? pressDelete() : pressDigit(d) }, d)),
             ri === 0 && React.createElement("button", { style: { gridRow: "span 4", background: amount > 0 ? mc.bg : "#0f172a", border: `1px solid ${amount > 0 ? mc.border : "#1e293b"}`, borderRadius: 8, color: amount > 0 ? mc.text : "#475569", fontSize: 18, fontWeight: 800, cursor: amount > 0 ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: pressEnter }, enterGlyph)))))));
 }
 // ─── Pin Modal ────────────────────────────────────────────────────────────────
@@ -966,4 +1021,5 @@ const S = {
     modalSheet: { background: "#0f172a", borderRadius: "16px 16px 0 0", padding: "20px 16px 32px", width: "100%", maxWidth: 480, margin: "0 auto", border: "1px solid #1e293b" },
     modalHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
     modalTitle: { fontSize: 15, fontWeight: 700, color: "#f1f5f9" },
+    quickAdd: { position: "fixed", left: "calc(14px + env(safe-area-inset-left))", bottom: "calc(14px + env(safe-area-inset-bottom))", width: 52, height: 52, borderRadius: "50%", background: "#0369a1", border: "none", color: "#f1f5f9", fontSize: 30, fontWeight: 400, lineHeight: 1, cursor: "pointer", zIndex: 50, boxShadow: "0 4px 14px rgba(3,105,161,0.5)", display: "flex", alignItems: "center", justifyContent: "center", paddingBottom: 4 },
 };

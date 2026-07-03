@@ -29,6 +29,20 @@ phone just loads the finished result. Same code, same behaviour, much faster lau
 `app.js` from it, your phone won't see the change — it's still running the old
 `app.js`. The two need to move together.
 
+**The exact compile step** (for whoever regenerates `app.js`): the build uses
+TypeScript's compiler, targeting an older Safari so optional-chaining/`??` are lowered
+while everything else stays as-is:
+
+```
+npx typescript@4.9.5 app.jsx --jsx react --target es2019 --module none \
+  --strict false --alwaysStrict --skipLibCheck --noEmitOnError false --outDir .
+```
+
+(The type-check *warnings* it prints — `React` undefined, `window.SpendVault`, etc. —
+are expected and harmless; there are no type declarations, and `--noEmitOnError false`
+still writes a correct `app.js`.) After regenerating, bump `CACHE_NAME` in `sw.js` so
+returning phones fetch the new files instead of a stale cache.
+
 ## How future updates actually work
 
 Come back to this conversation (or a new one with Claude) and describe what you want
@@ -102,6 +116,18 @@ Three things to genuinely understand:
 The monthly and weekly budgets are **linked** — set either one (in first-run setup
 or later in Settings) and the other is worked out from the number of weeks in your
 current pay period. Change either box and the partner recalculates.
+
+## Logging spends — the quality-of-life bits
+
+- **Amount entry works in pence, filling from the right** — the display starts at
+  `£0.00` and each digit shifts in, so `1` `2` `5` `0` = £12.50. No decimal point to
+  place; there's a `00` key for round pounds.
+- **The keypad remembers your last card** and defaults to it next time.
+- **Tap any logged item to edit it** — fix the amount, card, label, or personal/work
+  type instead of deleting and re-adding. (Editing one half of a *split* keeps its
+  amount locked, since the two halves must still sum to the original total.)
+- **A floating ＋ button (bottom-left)** logs to today's week from any tab, so you
+  don't have to find the right week first.
 
 There's still no cloud backup. But because the data is now encrypted, a future
 sync/backup feature can be built so any server only ever holds ciphertext it

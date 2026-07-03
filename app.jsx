@@ -107,6 +107,7 @@ function defaultState() {
     weeklyBudget: 260,
     amexCutoff: 28,
     lloydsCutoff: 3,
+    lastMethod: "Amex",
     entries: [],
     pins: [],
     credits: [],
@@ -117,13 +118,15 @@ function defaultState() {
 // ─── Reducer ──────────────────────────────────────────────────────────────────
 function reducer(s, a) {
   switch (a.type) {
-    case "ADD_ENTRY": return { ...s, entries: [a.entry, ...s.entries] };
+    case "ADD_ENTRY": return { ...s, entries: [a.entry, ...s.entries], lastMethod: (a.entry.type !== "credit" && a.entry.type !== "excluded" && a.entry.method) ? a.entry.method : s.lastMethod };
     case "DEL_ENTRY": return { ...s, entries: s.entries.filter(e => e.id !== a.id) };
+    case "UPD_ENTRY": return { ...s, entries: s.entries.map(e => e.id === a.entry.id ? a.entry : e) };
     case "ADD_PIN": return { ...s, pins: [...s.pins, a.pin] };
     case "DEL_PIN": return { ...s, pins: s.pins.filter(p => p.id !== a.id) };
     case "UPD_PIN": return { ...s, pins: s.pins.map(p => p.id === a.pin.id ? a.pin : p) };
     case "ADD_CREDIT": return { ...s, credits: [a.credit, ...(s.credits||[])] };
     case "DEL_CREDIT": return { ...s, credits: (s.credits||[]).filter(c => c.id !== a.id) };
+    case "UPD_CREDIT": return { ...s, credits: (s.credits||[]).map(c => c.id === a.credit.id ? a.credit : c) };
     case "SETTINGS": return { ...s, ...a.patch };
     case "MONTH_ROLLOVER": {
       // Snapshot budget figures as they stood this period, so looking back later
@@ -152,6 +155,7 @@ function reducer(s, a) {
         if (i !== a.archiveIndex) return arc;
         if (a.op === "add") return { ...arc, entries: [a.entry, ...arc.entries] };
         if (a.op === "del") return { ...arc, entries: arc.entries.filter(e => e.id !== a.id) };
+        if (a.op === "upd") return { ...arc, entries: arc.entries.map(e => e.id === a.entry.id ? a.entry : e) };
         return arc;
       });
       return { ...s, monthHistory: newHistory };
@@ -161,6 +165,7 @@ function reducer(s, a) {
         if (i !== a.archiveIndex) return arc;
         if (a.op === "add") return { ...arc, credits: [a.credit, ...(arc.credits||[])] };
         if (a.op === "del") return { ...arc, credits: (arc.credits||[]).filter(c => c.id !== a.id) };
+        if (a.op === "upd") return { ...arc, credits: (arc.credits||[]).map(c => c.id === a.credit.id ? a.credit : c) };
         return arc;
       });
       return { ...s, monthHistory: newHistory };
@@ -176,6 +181,7 @@ function App() {
   const [tab, setTab] = useState("week");
   const [activeWeek, setActiveWeek] = useState(1);
   const [showEntryFor, setShowEntryFor] = useState(null);
+  const [editTarget, setEditTarget] = useState(null); // { kind:"entry"|"credit", data, weekIndex } being edited, or null
   const [showAddPin, setShowAddPin] = useState(false);
   const [editPin, setEditPin] = useState(null);
   const [showExport, setShowExport] = useState(false);
@@ -322,6 +328,14 @@ function App() {
     if (viewingPast) dispatch({ type: "EDIT_PAST_CREDIT", op: "del", archiveIndex: viewingPastIndex, id });
     else dispatch({ type: "DEL_CREDIT", id });
   }
+  function updEntry(entry) {
+    if (viewingPast) dispatch({ type: "EDIT_PAST_ENTRY", op: "upd", archiveIndex: viewingPastIndex, entry });
+    else dispatch({ type: "UPD_ENTRY", entry });
+  }
+  function updCredit(credit) {
+    if (viewingPast) dispatch({ type: "EDIT_PAST_CREDIT", op: "upd", archiveIndex: viewingPastIndex, credit });
+    else dispatch({ type: "UPD_CREDIT", credit });
+  }
   // Pins are shared across periods (they're recurring fixed costs), so pin edits always
   // apply live regardless of which period is being viewed.
 
@@ -379,7 +393,7 @@ function App() {
           )}
 
           {weeks.filter(w => w.index === activeWeek).map(week => (
-            <WeekPanel key={week.index} week={week} entries={effectiveData.entries.filter(e => e.weekIndex === week.index)} credits={effectiveData.credits.filter(c => c.weekIndex === week.index) || []} weeklyBudget={rebalancedBudgets[week.index] ?? effectiveData.weeklyBudget} isLastWeek={week.index === weeks.length} onAddEntry={() => setShowEntryFor(week.index)} onDelEntry={delEntry} onDelCredit={delCredit} />
+            <WeekPanel key={week.index} week={week} entries={effectiveData.entries.filter(e => e.weekIndex === week.index)} credits={effectiveData.credits.filter(c => c.weekIndex === week.index) || []} weeklyBudget={rebalancedBudgets[week.index] ?? effectiveData.weeklyBudget} isLastWeek={week.index === weeks.length} onAddEntry={() => setShowEntryFor(week.index)} onDelEntry={delEntry} onDelCredit={delCredit} onEditEntry={(entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex })} onEditCredit={(credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex })} />
           ))}
         </div>
       )}
@@ -531,8 +545,13 @@ function App() {
         </div>
       )}
 
+      {/* Quick-add — floating button that logs to today's week from any tab (live period only) */}
+      {!viewingPast && (
+        <button aria-label="Quick add spend" onClick={() => setShowEntryFor(todayWeekIndex(weeks))} style={S.quickAdd}>+</button>
+      )}
+
       {/* Modals */}
-      {showEntryFor !== null && <EntryModal weekIndex={showEntryFor} onSave={addEntry} onSaveCredit={addCredit} onClose={() => setShowEntryFor(null)} />}
+      {(showEntryFor !== null || editTarget) && <EntryModal weekIndex={editTarget ? editTarget.weekIndex : showEntryFor} edit={editTarget} defaultMethod={state.lastMethod || "Amex"} onSave={addEntry} onSaveCredit={addCredit} onUpdate={updEntry} onUpdateCredit={updCredit} onClose={() => { setShowEntryFor(null); setEditTarget(null); }} />}
       {(showAddPin || editPin) && <PinModal pin={editPin} onSave={pin => { if (editPin) dispatch({ type: "UPD_PIN", pin }); else dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }} onClose={() => { setShowAddPin(false); setEditPin(null); }} />}
       {showExport && <ExportModal state={effectiveData} weeks={weeks} rebalancedBudgets={rebalancedBudgets} totalSpent={totalSpent} remaining={remaining} totalCredits={totalCredits} methodTotals={methodTotals} onClose={() => setShowExport(false)} />}
     </div>
@@ -540,7 +559,7 @@ function App() {
 }
 
 // ─── Week Panel ───────────────────────────────────────────────────────────────
-function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntry, onDelEntry, onDelCredit }) {
+function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit }) {
   const personal = entries.filter(e => e.type === "personal");
   const business = entries.filter(e => e.type === "business");
   const spent = personal.reduce((s, e) => s + e.amount, 0);
@@ -580,12 +599,12 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
       <div style={{ marginTop:12 }}>
         {splitGroups.map(group => (
           <div key={group[0].splitGroupId} style={S.splitGroup}>
-            {group.map((e, i) => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} grouped last={i === group.length - 1} />)}
+            {group.map((e, i) => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} onEdit={() => onEditEntry(e)} grouped last={i === group.length - 1} />)}
           </div>
         ))}
-        {soloPersonal.map(e => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} />)}
-        {soloBusiness.map(e => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} />)}
-        {credits.map(c => <CreditLine key={c.id} credit={c} onDel={() => onDelCredit(c.id)} />)}
+        {soloPersonal.map(e => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} onEdit={() => onEditEntry(e)} />)}
+        {soloBusiness.map(e => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} onEdit={() => onEditEntry(e)} />)}
+        {credits.map(c => <CreditLine key={c.id} credit={c} onDel={() => onDelCredit(c.id)} onEdit={() => onEditCredit(c)} />)}
         {entries.length === 0 && credits.length === 0 && <div style={{ color:"#64748b", fontSize:13, padding:"12px 0" }}>Nothing logged</div>}
       </div>
       <div style={{ display:"flex", gap:8, marginTop:12 }}>
@@ -630,10 +649,10 @@ function ConfirmDeleteButton({ onConfirm, style }) {
 }
 
 // ─── Entry Line ───────────────────────────────────────────────────────────────
-function EntryLine({ entry, onDel, grouped, last }) {
+function EntryLine({ entry, onDel, onEdit, grouped, last }) {
   const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "#e2e8f0";
   return (
-    <div style={{ ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom:"none" } : {}) }}>
+    <div onClick={onEdit} style={{ ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom:"none" } : {}), cursor: onEdit ? "pointer" : "default" }}>
       <span style={{ ...S.dot, background: METHOD_COLOR[entry.method] || "#64748b" }} />
       <span style={{ flex:1, color:col, fontSize:13 }}>
         {entry.label || entry.method}
@@ -648,9 +667,9 @@ function EntryLine({ entry, onDel, grouped, last }) {
 }
 
 // ─── Credit Line ───────────────────────────────────────────────────────────────
-function CreditLine({ credit, onDel }) {
+function CreditLine({ credit, onDel, onEdit }) {
   return (
-    <div style={S.entryRow}>
+    <div onClick={onEdit} style={{ ...S.entryRow, cursor: onEdit ? "pointer" : "default" }}>
       <span style={{ ...S.dot, background:"#22c55e" }} />
       <span style={{ flex:1, color:"#22c55e", fontSize:13 }}>{credit.label || "Credit"}{credit.from && <span style={{ color:"#64748b" }}> from {credit.from}</span>}</span>
       <span style={{ color:"#22c55e", fontWeight:600, fontSize:13 }}>+{fmt(credit.amount)}</span>
@@ -683,48 +702,50 @@ function PinCard({ pin, onEdit, onDelete }) {
 }
 
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, onSave, onSaveCredit, onClose }) {
-  const [display, setDisplay] = useState("0");
-  const [hasDecimal, setHasDecimal] = useState(false);
-  const [method, setMethod] = useState("Amex");
-  const [type, setType] = useState("personal");
-  const [note, setNote] = useState("");
-  const [showNote, setShowNote] = useState(false);
+function EntryModal({ weekIndex, edit, defaultMethod, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
+  const editEntry = edit && edit.kind === "entry" ? edit.data : null;
+  const editCredit = edit && edit.kind === "credit" ? edit.data : null;
+  const editData = editEntry || editCredit;
+  const isEdit = !!editData;
+  // A split's two halves must keep summing to the original total, so editing one can't change
+  // its amount — the card/note stay editable, the amount is locked.
+  const isSplitEdit = !!(editEntry && editEntry.splitGroupId);
+
+  // The amount is an integer number of pence, filled in from the right (calculator style), so the
+  // decimal never has to be typed: tap 1-2-5-0 → £12.50. Starts at £0.00. Prefilled when editing.
+  const [cents, setCents] = useState(() => editData ? Math.round(editData.amount * 100) : 0);
+  const [method, setMethod] = useState(() => editEntry ? editEntry.method : (defaultMethod || "Amex"));
+  const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : "personal"));
+  const [note, setNote] = useState(() => editData ? (editData.label || "") : "");
+  const [showNote, setShowNote] = useState(() => !!(editData && editData.label));
   const [flash, setFlash] = useState(null);
 
   // Split flow: null (not splitting) → "total" (entering the full amount) → "theirs" (entering the portion that isn't yours)
   const [splitStage, setSplitStage] = useState(null);
   const [splitTotal, setSplitTotal] = useState(0);
 
-  const amount = parseFloat(display) || 0;
+  const amount = cents / 100;
+  const displayStr = amount.toFixed(2);
   const creditColors = { bg: "#14532d", border: "#22c55e", text: "#4ade80" };
   const splitColors = { bg: "#3b0764", border: "#a855f7", text: "#d8b4fe" };
   const methodColors = { Amex: { bg: "#1e3a5f", border: "#3b82f6", text: "#93c5fd" }, Lloyds: { bg: "#064e3b", border: "#10b981", text: "#34d399" }, HSBC: { bg: "#450a0a", border: "#dc2626", text: "#fca5a5" }, Cash: { bg: "#451a03", border: "#d97706", text: "#fbbf24" } };
   const mc = type === "credit" ? creditColors : type === "split" ? splitColors : methodColors[method];
 
   function pressDigit(d) {
-    setDisplay(prev => {
-      if (prev === "0" && d !== ".") return String(d);
-      if (d === "." && hasDecimal) return prev;
-      if (d === ".") { setHasDecimal(true); return prev + "."; }
-      const parts = prev.split(".");
-      if (parts[1] && parts[1].length >= 2) return prev;
-      return prev + String(d);
+    if (isSplitEdit) return; // amount locked while editing a split half
+    setCents(prev => {
+      const next = d === "00" ? prev * 100 : prev * 10 + Number(d);
+      return next > 99999999 ? prev : next; // cap at £999,999.99
     });
   }
 
   function pressDelete() {
-    setDisplay(prev => {
-      if (prev.length <= 1) { setHasDecimal(false); return "0"; }
-      const next = prev.slice(0, -1);
-      if (!next.includes(".")) setHasDecimal(false);
-      return next;
-    });
+    if (isSplitEdit) return;
+    setCents(prev => Math.floor(prev / 10));
   }
 
   function resetAfterSave() {
-    setDisplay("0");
-    setHasDecimal(false);
+    setCents(0);
     setNote("");
     setSplitStage(null);
     setSplitTotal(0);
@@ -734,18 +755,28 @@ function EntryModal({ weekIndex, onSave, onSaveCredit, onClose }) {
     setType(v);
     // Changing type away from split mid-flow cancels the split
     if (v !== "split") { setSplitStage(null); setSplitTotal(0); }
-    else { setSplitStage("total"); setDisplay("0"); setHasDecimal(false); }
+    else { setSplitStage("total"); setCents(0); }
   }
 
   function pressEnter() {
     if (amount <= 0) return;
 
+    // Editing an existing item: write the change back in place, keeping id/date/week/split.
+    if (isEdit) {
+      if (editCredit) {
+        onUpdateCredit({ ...editCredit, amount, label: note.trim() });
+      } else {
+        onUpdate({ ...editEntry, amount: isSplitEdit ? editEntry.amount : amount, label: note.trim(), note: note.trim(), method, type });
+      }
+      onClose();
+      return;
+    }
+
     if (type === "split") {
       if (splitStage === "total") {
         // Move to step 2: capture the portion that isn't yours
         setSplitTotal(amount);
-        setDisplay("0");
-        setHasDecimal(false);
+        setCents(0);
         setSplitStage("theirs");
         return;
       }
@@ -779,37 +810,49 @@ function EntryModal({ weekIndex, onSave, onSaveCredit, onClose }) {
     resetAfterSave();
   }
 
-  const digits = [[7,8,9],[4,5,6],[1,2,3],[".",0,"⌫"]];
+  const digits = [[7,8,9],[4,5,6],[1,2,3],["00",0,"⌫"]];
   const subheading = { fontSize:12, color:"#64748b", marginBottom:6, fontWeight:500 };
 
-  // What to show above the number display when mid-split, so it's unambiguous which figure is being entered
+  // In edit mode, only offer the classifications it makes sense to switch between: a normal entry
+  // can flip personal↔work; a split half or a credit keeps its kind (so its bucket stays coherent).
+  const classOptions = isEdit
+    ? (editCredit || isSplitEdit ? [] : [["personal","Personal"],["business","Work"]])
+    : [["personal","Personal"],["business","Work"],["credit","Credit"],["split","Split"]];
+
+  // What to show above the number display: the split steps, or a locked hint when editing a split.
   let displayCaption = null;
   if (type === "split" && splitStage === "total") displayCaption = "Total amount";
   if (type === "split" && splitStage === "theirs") displayCaption = `Not yours, of ${fmt(splitTotal)}`;
+  if (isSplitEdit) displayCaption = "Split amount — locked";
 
   // Enter-key glyph changes on the first split step since it advances rather than saves
   const enterGlyph = type === "split" && splitStage === "total" ? "→" : "↵";
+  const title = isEdit ? (editCredit ? "Edit credit" : "Edit spend") : `Log · Week ${weekIndex}`;
 
   return (
-    <Modal onClose={onClose} title={`Log · Week ${weekIndex}`}>
-      <div style={{ background:"#1e293b", borderRadius:12, padding:"14px 20px", marginBottom:12, textAlign:"center", border:`1px solid ${flash ? mc.border : "#334155"}` }}>
+    <Modal onClose={onClose} title={title}>
+      <div style={{ background:"#1e293b", borderRadius:12, padding:"14px 20px", marginBottom:12, textAlign:"center", border:`1px solid ${flash ? mc.border : "#334155"}`, opacity: isSplitEdit ? 0.7 : 1 }}>
         {displayCaption && <div style={{ fontSize:11, color:"#a78bfa", fontWeight:600, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.04em" }}>{displayCaption}</div>}
-        <div style={{ fontSize: display.length > 7 ? 30 : 42, fontWeight:800, color: flash ? "#4ade80" : "#f1f5f9" }}>
-          {flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${display === "0" ? "0" : display}`}
+        <div style={{ fontSize: displayStr.length > 7 ? 30 : 42, fontWeight:800, color: flash ? "#4ade80" : "#f1f5f9" }}>
+          {flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`}
         </div>
       </div>
 
-      <div style={subheading}>Payment type</div>
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginBottom:12, opacity: type==="credit" ? 0.4 : 1 }}>
-        {METHODS.map(m => <button key={m} style={{ background: method===m ? methodColors[m].bg : "#0f172a", border: `1px solid ${method===m ? methodColors[m].border : "#1e293b"}`, borderRadius:8, color: method===m ? methodColors[m].text : "#475569", padding:"10px 2px", fontSize:12, fontWeight: method===m?700:500, cursor:"pointer" }} onClick={() => setMethod(m)}>{m}</button>)}
-      </div>
+      {!editCredit && <>
+        <div style={subheading}>Payment type</div>
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6, marginBottom:12, opacity: type==="credit" ? 0.4 : 1 }}>
+          {METHODS.map(m => <button key={m} style={{ background: method===m ? methodColors[m].bg : "#0f172a", border: `1px solid ${method===m ? methodColors[m].border : "#1e293b"}`, borderRadius:8, color: method===m ? methodColors[m].text : "#475569", padding:"10px 2px", fontSize:12, fontWeight: method===m?700:500, cursor:"pointer" }} onClick={() => setMethod(m)}>{m}</button>)}
+        </div>
+      </>}
 
-      <div style={subheading}>Classification</div>
-      <div style={{ display:"flex", gap:6, marginBottom:10 }}>
-        {[["personal","Personal"],["business","Work"],["credit","Credit"],["split","Split"]].map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "#1e293b":"#0f172a", border:`1px solid ${type===v?"#334155":"#1e293b"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="credit"?"#4ade80":v==="split"?"#d8b4fe":"#f1f5f9") : "#475569", padding:"8px 4px", fontSize:12, fontWeight:type===v?600:400, cursor:"pointer" }} onClick={() => selectType(v)}>{l}</button>)}
-      </div>
+      {classOptions.length > 0 && <>
+        <div style={subheading}>Classification</div>
+        <div style={{ display:"flex", gap:6, marginBottom:10 }}>
+          {classOptions.map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "#1e293b":"#0f172a", border:`1px solid ${type===v?"#334155":"#1e293b"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="credit"?"#4ade80":v==="split"?"#d8b4fe":"#f1f5f9") : "#475569", padding:"8px 4px", fontSize:12, fontWeight:type===v?600:400, cursor:"pointer" }} onClick={() => selectType(v)}>{l}</button>)}
+        </div>
+      </>}
 
-      {type === "split" && (
+      {type === "split" && !isEdit && (
         <div style={{ fontSize:11, color:"#a78bfa", marginBottom:10, lineHeight:1.5 }}>
           {splitStage === "total"
             ? "Enter the full amount you paid, then continue."
@@ -821,7 +864,7 @@ function EntryModal({ weekIndex, onSave, onSaveCredit, onClose }) {
       {showNote && <input style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:8, color:"#f1f5f9", padding:"8px 12px", marginBottom:10, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" }} placeholder="e.g. golf, birthday" value={note} onChange={e=>setNote(e.target.value)} autoFocus />}
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6 }}>
-        {digits.map((row, ri) => (<>{row.map((d, i) => <button key={`${ri}-${i}`} style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:8, color: d==="⌫" ? "#ef4444" : "#cbd5e1", fontSize: d==="⌫" ? 18 : 20, fontWeight:600, padding:"14px 0", cursor:"pointer" }} onClick={() => d === "⌫" ? pressDelete() : pressDigit(d)}>{d}</button>)}{ri === 0 && <button style={{ gridRow: "span 4", background: amount>0 ? mc.bg : "#0f172a", border:`1px solid ${amount>0 ? mc.border : "#1e293b"}`, borderRadius:8, color: amount>0 ? mc.text : "#475569", fontSize:18, fontWeight:800, cursor: amount>0?"pointer":"default", display:"flex", alignItems:"center", justifyContent:"center" }} onClick={pressEnter}>{enterGlyph}</button>}</> ))}
+        {digits.map((row, ri) => (<>{row.map((d, i) => <button key={`${ri}-${i}`} style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:8, color: d==="⌫" ? "#ef4444" : "#cbd5e1", fontSize: d==="⌫" ? 18 : 20, fontWeight:600, padding:"14px 0", cursor:"pointer", opacity: isSplitEdit ? 0.4 : 1 }} onClick={() => d === "⌫" ? pressDelete() : pressDigit(d)}>{d}</button>)}{ri === 0 && <button style={{ gridRow: "span 4", background: amount>0 ? mc.bg : "#0f172a", border:`1px solid ${amount>0 ? mc.border : "#1e293b"}`, borderRadius:8, color: amount>0 ? mc.text : "#475569", fontSize:18, fontWeight:800, cursor: amount>0?"pointer":"default", display:"flex", alignItems:"center", justifyContent:"center" }} onClick={pressEnter}>{enterGlyph}</button>}</> ))}
       </div>
     </Modal>
   );
@@ -1152,4 +1195,5 @@ const S = {
   modalSheet: { background:"#0f172a", borderRadius:"16px 16px 0 0", padding:"20px 16px 32px", width:"100%", maxWidth:480, margin:"0 auto", border:"1px solid #1e293b" },
   modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 },
   modalTitle: { fontSize:15, fontWeight:700, color:"#f1f5f9" },
+  quickAdd: { position:"fixed", left:"calc(14px + env(safe-area-inset-left))", bottom:"calc(14px + env(safe-area-inset-bottom))", width:52, height:52, borderRadius:"50%", background:"#0369a1", border:"none", color:"#f1f5f9", fontSize:30, fontWeight:400, lineHeight:1, cursor:"pointer", zIndex:50, boxShadow:"0 4px 14px rgba(3,105,161,0.5)", display:"flex", alignItems:"center", justifyContent:"center", paddingBottom:4 },
 };
