@@ -129,6 +129,23 @@ current pay period. Change either box and the partner recalculates.
 - **A floating ＋ button (bottom-left)** logs to today's week from any tab, so you
   don't have to find the right week first.
 
-There's still no cloud backup. But because the data is now encrypted, a future
-sync/backup feature can be built so any server only ever holds ciphertext it
-cannot read — that groundwork is done. Just ask when you want it.
+## Moving your account between browsers/devices
+
+Each browser keeps its **own separate storage** — Safari, Chrome, and the home-screen
+app each start as a fresh "account", and there's no way around that from inside a web
+app (browsers deliberately sandbox storage per-browser, and a page can't read a device
+serial or reach into another browser's data). So to carry your data across, you move it
+yourself:
+
+- **Export** (Settings → *Move to another device* → **Export account**) gives you your
+  account as a backup — a file or copied text. It's the **encrypted** vault, so it's
+  only openable with your passphrase/recovery code; safe to save or send to yourself.
+- **Import** it on the other browser/phone — either at the **welcome screen**
+  ("Been here before? Import a previous account") or in **Settings → Import account**.
+  Importing **replaces** whatever's on that device with the backup, then you unlock it
+  with that account's passphrase. Export the current one first if you might want it back.
+
+This is manual (a button, not live sync). True automatic cloud sync would need a small
+backend — and because the vault is already encrypted client-side, such a server would
+only ever hold ciphertext it can't read. That groundwork is done; just ask when you
+want it.

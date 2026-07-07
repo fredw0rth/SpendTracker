@@ -185,6 +185,8 @@ function App() {
   const [showAddPin, setShowAddPin] = useState(false);
   const [editPin, setEditPin] = useState(null);
   const [showExport, setShowExport] = useState(false);
+  const [showBackup, setShowBackup] = useState(false); // export-account modal
+  const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
   const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
   const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
 
@@ -531,6 +533,15 @@ function App() {
           </div>
 
           <div style={S.settingsCard}>
+            <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Move to another device</div>
+            <div style={{ fontSize:13, color:"#cbd5e1", marginBottom:10, lineHeight:1.5 }}>Each browser keeps its own separate data — so Safari, Chrome and the home-screen app each start fresh. Export your account here, then import it in the other browser or on a new phone to carry everything across.</div>
+            <div style={{ display:"flex", gap:8 }}>
+              <button style={{ ...S.btn, background:"#0369a1", flex:1 }} onClick={() => setShowBackup(true)}>Export account</button>
+              <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", flex:1 }} onClick={() => setShowImportAcct(true)}>Import account</button>
+            </div>
+          </div>
+
+          <div style={S.settingsCard}>
             <div style={{ fontSize:11, fontWeight:600, color:"#f87171", marginBottom:10, textTransform:"uppercase" }}>Reset</div>
             <div style={{ fontSize:13, color:"#cbd5e1", marginBottom:10, lineHeight:1.5 }}>Erase everything on this device — budget, transactions, history and your passphrase — and start over from setup. This can't be undone.</div>
             {!confirmWipe ? (
@@ -554,6 +565,8 @@ function App() {
       {(showEntryFor !== null || editTarget) && <EntryModal weekIndex={editTarget ? editTarget.weekIndex : showEntryFor} edit={editTarget} defaultMethod={state.lastMethod || "Amex"} onSave={addEntry} onSaveCredit={addCredit} onUpdate={updEntry} onUpdateCredit={updCredit} onClose={() => { setShowEntryFor(null); setEditTarget(null); }} />}
       {(showAddPin || editPin) && <PinModal pin={editPin} onSave={pin => { if (editPin) dispatch({ type: "UPD_PIN", pin }); else dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }} onClose={() => { setShowAddPin(false); setEditPin(null); }} />}
       {showExport && <ExportModal state={effectiveData} weeks={weeks} rebalancedBudgets={rebalancedBudgets} totalSpent={totalSpent} remaining={remaining} totalCredits={totalCredits} methodTotals={methodTotals} onClose={() => setShowExport(false)} />}
+      {showBackup && <BackupModal onClose={() => setShowBackup(false)} />}
+      {showImportAcct && <ImportBackupModal onClose={() => setShowImportAcct(false)} />}
     </div>
   );
 }
@@ -1142,6 +1155,87 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
         {text}
       </div>
       <button style={{ ...S.btn, background:copied?"#16a34a":"#0369a1", width:"100%" }} onClick={copy}>{copied ? "✓ Copied" : "Copy to clipboard"}</button>
+    </Modal>
+  );
+}
+
+// ─── Account backup: export (encrypted, portable) ─────────────────────────────
+// The backup is the encrypted vault from crypto.js — ciphertext only, safe to copy or
+// save as a file. Import it in another browser/device (Settings or the welcome screen).
+function BackupModal({ onClose }) {
+  const [text, setText] = useState("");
+  const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (window.SpendVault && window.SpendVault.exportBackup) {
+      window.SpendVault.exportBackup()
+        .then(t => { if (!cancelled) setText(t); })
+        .catch(e => { if (!cancelled) setErr(e.message || "Couldn't build the backup."); });
+    } else setErr("Backup isn't available.");
+    return () => { cancelled = true; };
+  }, []);
+
+  function copy() {
+    navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => {});
+  }
+  function download() {
+    const blob = new Blob([text], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "spendtracker-backup.json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  return (
+    <Modal onClose={onClose} title="Export account">
+      <div style={{ fontSize:13, color:"#cbd5e1", lineHeight:1.5, marginBottom:12 }}>This is your <strong>encrypted</strong> account — it can only be opened with your passphrase or recovery code, so it's safe to save or send to yourself. Import it in another browser or on a new phone to carry everything across.</div>
+      {err && <div style={{ color:"#f87171", fontSize:13, marginBottom:10 }}>{err}</div>}
+      <div style={{ background:"#030712", border:"1px solid #1e293b", borderRadius:8, padding:"12px", fontFamily:"monospace", fontSize:10, color:"#64748b", whiteSpace:"pre-wrap", wordBreak:"break-all", maxHeight:150, overflowY:"auto", marginBottom:12, lineHeight:1.5 }}>{text ? (text.length > 500 ? text.slice(0, 500) + "\n…" : text) : "Preparing…"}</div>
+      <div style={{ display:"flex", gap:8 }}>
+        <button style={{ ...S.btn, background:copied?"#16a34a":"#0369a1", flex:1, ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={copy}>{copied ? "✓ Copied" : "Copy backup"}</button>
+        <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", flex:1, ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={download}>Download file</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Account backup: import (wipes current, installs the imported account) ────
+function ImportBackupModal({ onClose }) {
+  const [text, setText] = useState("");
+  const [err, setErr] = useState("");
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  function onFile(e) {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    f.text().then(t => { setText(t); setErr(""); }).catch(() => setErr("Couldn't read that file."));
+  }
+  async function doImport() {
+    setBusy(true); setErr("");
+    try { await window.SpendVault.importBackup(text); } // reloads on success
+    catch (e) { setErr(e.message || "That import didn't work."); setBusy(false); }
+  }
+
+  return (
+    <Modal onClose={onClose} title="Import account">
+      <div style={{ background:"#1c1207", border:"1px solid #92400e", borderRadius:10, padding:"12px 14px", fontSize:12, color:"#fcd34d", lineHeight:1.6, marginBottom:12 }}>
+        Importing <strong>replaces everything on this device</strong> with the imported account — the data here is wiped. Export your current account first if you might want it back.
+      </div>
+      <textarea style={{ ...S.input, height:90, resize:"none", fontFamily:"monospace", fontSize:11 }} placeholder="Paste a backup here…" value={text} onChange={e => setText(e.target.value)} />
+      <input type="file" accept=".json,application/json" onChange={onFile} style={{ fontSize:12, color:"#64748b", marginBottom:12, width:"100%" }} />
+      {err && <div style={{ color:"#f87171", fontSize:13, marginBottom:10 }}>{err}</div>}
+      {!confirm ? (
+        <button style={{ ...S.btn, background: text?"#b45309":"#1e293b", width:"100%", ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={() => setConfirm(true)}>Continue…</button>
+      ) : (
+        <div style={{ display:"flex", gap:8 }}>
+          <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", flex:1 }} onClick={() => setConfirm(false)}>Cancel</button>
+          <button style={{ ...S.btn, background:"#dc2626", flex:1 }} disabled={busy} onClick={doImport}>{busy ? "Importing…" : "Wipe & import"}</button>
+        </div>
+      )}
     </Modal>
   );
 }

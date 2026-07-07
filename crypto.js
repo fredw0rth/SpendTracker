@@ -347,6 +347,34 @@
     }
   }
 
+  // ─── Backup export / import (no server) ───────────────────────────────────────
+  // A backup is just the encrypted vault wrapped in a small envelope. It stays ciphertext:
+  // it can only be opened with the account's passphrase or recovery code, so it's safe to
+  // copy, email to yourself, or save as a file. Importing it on another browser or phone
+  // reproduces the whole account there (you then unlock it with its passphrase).
+  async function exportVaultJSON() {
+    const v = await loadVault();
+    if (!v) throw new Error("There's no account on this device to export yet.");
+    return JSON.stringify({ app: "SpendTracker", kind: "vault-backup", version: 1, exportedAt: new Date().toISOString(), vault: v }, null, 2);
+  }
+
+  // Validate, then replace whatever's on this device with the imported vault and reload back
+  // to the lock screen. Overwriting the single vault record IS the wipe — the old ciphertext
+  // is gone. (An old Face ID passkey stays orphaned in the OS keychain, which is harmless.)
+  async function importVaultJSON(text) {
+    let obj;
+    try { obj = JSON.parse(text); } catch (e) { throw new Error("That doesn't look like a backup — the text isn't valid."); }
+    const vault = obj && obj.kind === "vault-backup" ? obj.vault : obj;
+    if (!(vault && vault.wraps && vault.wraps.passphrase && vault.state)) {
+      throw new Error("That isn't a SpendTracker backup.");
+    }
+    // Drop the live session first so no queued save can rewrite the record after we replace it.
+    Session._dek = null; Session._state = null; Session._vault = null;
+    await idbSet(VAULT_RECORD, vault);
+    try { localStorage.removeItem(VAULT_KEY); } catch (e) { /* ignore */ }
+    location.reload();
+  }
+
   // ─── In-memory session — the only place a decrypted key/state lives ────────────
   // app.js talks to the app through window.SpendVault (see load()/save() there).
   // Writes are serialized through a promise chain so rapid state changes can't
@@ -379,6 +407,10 @@
     getState: () => Session.getState(),
     save: (s) => Session.save(s),
     requestLock: () => Session.lock(),
+    // Export the encrypted account as portable JSON (flushes any pending save first so the
+    // backup is fully current). Import replaces this device's account with the backup.
+    exportBackup: async () => { try { await Session._queue; } catch (e) { /* ignore */ } return exportVaultJSON(); },
+    importBackup: (text) => importVaultJSON(text),
     // Erase every local trace of the vault, then reload back to first-run setup.
     // Note: a Face ID passkey lives in the OS keychain, not here, so it can't be
     // removed programmatically — it's left orphaned (harmless) and can be deleted
@@ -515,7 +547,7 @@
 
   // ── Setup flow: onboarding (fresh) or migration (existing plaintext data) ──
   //  steps: budget (onboarding only) → passphrase → recovery → biometric → done
-  function SetupFlow({ mode, seedState, onUnlocked }) {
+  function SetupFlow({ mode, seedState, onUnlocked, onImport }) {
     const isMigrate = mode === "migrate";
     const [step, setStep] = useState(isMigrate ? "passphrase" : "budget");
 
@@ -589,7 +621,8 @@
         h("label", { style: C.label }, "Weekly budget (£)"),
         h("input", { style: C.input, type: "number", inputMode: "decimal", placeholder: "auto", value: weekly, onChange: (e) => onWeeklyChange(e.target.value) }),
         h("div", { style: C.note }, `Linked across this pay period — ${period.days} days ≈ ${round2(W)} weeks. Change either box and the other recalculates. You can fine-tune everything in Settings later.`),
-        h("button", { style: { ...C.primary, ...(ok ? {} : C.primaryDisabled) }, disabled: !ok, onClick: () => setStep("passphrase") }, "Continue")
+        h("button", { style: { ...C.primary, ...(ok ? {} : C.primaryDisabled) }, disabled: !ok, onClick: () => setStep("passphrase") }, "Continue"),
+        onImport && h("button", { style: C.link, onClick: onImport }, "Been here before? Import a previous account")
       );
     }
 
@@ -660,10 +693,44 @@
     }, "🔒");
   }
 
+  // ── Import screen: bring in a previously exported account (reached from the welcome flow) ──
+  function ImportScreen({ onCancel }) {
+    const [text, setText] = useState("");
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState("");
+
+    function onFile(e) {
+      const f = e.target.files && e.target.files[0];
+      if (!f) return;
+      f.text().then((t) => { setText(t); setErr(""); }).catch(() => setErr("Couldn't read that file."));
+    }
+    async function doImport() {
+      setBusy(true); setErr("");
+      try { await importVaultJSON(text); } // reloads on success into the lock screen
+      catch (e) { setErr(e.message || "That import didn't work."); setBusy(false); }
+    }
+
+    return h("div", { style: C.page },
+      h("div", { style: C.brand }, "Import an account"),
+      h("div", { style: C.sub }, "Paste a backup you exported from SpendTracker — or choose the backup file — to bring that account onto this device. You'll unlock it with that account's passphrase."),
+      h("textarea", {
+        style: { ...C.input, height: 120, resize: "none", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 12 },
+        placeholder: "Paste your backup here", value: text,
+        autoCapitalize: "none", autoCorrect: "off", spellCheck: false,
+        onChange: (e) => setText(e.target.value),
+      }),
+      h("input", { type: "file", accept: ".json,application/json", onChange: onFile, style: { fontSize: 12, color: "#64748b", marginBottom: 12, width: "100%" } }),
+      h("div", { style: C.err }, err),
+      h("button", { style: { ...C.primary, ...(text && !busy ? {} : C.primaryDisabled) }, disabled: !text || busy, onClick: doImport }, busy ? "Importing…" : "Import this account"),
+      h("button", { style: C.link, onClick: onCancel }, "← Back")
+    );
+  }
+
   // ── Root: decides what to show, gates the real app behind unlock ──
   function Root() {
     const [phase, setPhase] = useState("boot"); // boot | onboard | migrate | locked | unlocked
     const [vault, setVault] = useState(null);
+    const [importing, setImporting] = useState(false); // showing the "import a previous account" screen
 
     useEffect(() => {
       let cancelled = false;
@@ -717,13 +784,17 @@
     if (phase === "locked" && vault) {
       return h(LockScreen, { vault, onUnlocked: handleUnlocked });
     }
+    // Import is reachable from the pre-account screens (welcome / migrate).
+    if (importing && (phase === "onboard" || phase === "migrate")) {
+      return h(ImportScreen, { onCancel: () => setImporting(false) });
+    }
     if (phase === "migrate") {
       let seed = null;
       try { seed = JSON.parse(localStorage.getItem(LEGACY_KEY)); } catch { seed = null; }
-      return h(SetupFlow, { mode: "migrate", seedState: seed, onUnlocked: handleUnlocked });
+      return h(SetupFlow, { mode: "migrate", seedState: seed, onUnlocked: handleUnlocked, onImport: () => setImporting(true) });
     }
     // onboard
-    return h(SetupFlow, { mode: "onboard", seedState: null, onUnlocked: handleUnlocked });
+    return h(SetupFlow, { mode: "onboard", seedState: null, onUnlocked: handleUnlocked, onImport: () => setImporting(true) });
   }
 
   window.SpendTrackerRoot = Root;
