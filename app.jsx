@@ -179,7 +179,7 @@ function reducer(s, a) {
 // ─── Help content: plain-English explainers, shown in the Settings "How it works" card ──
 const HELP_TOPICS = [
   ["The pay period", "SpendTracker follows your pay cycle, not the calendar month. A period runs from your last payday up to the day before your next one, and switches over automatically the moment payday arrives. The month label at the top names the period you're currently spending in."],
-  ["Weekly budgets & rollover", "Your monthly budget is split into weekly allowances. Anything you don't spend in a week rolls forward into the next; if you go over, the difference comes out of later weeks. The final week absorbs whatever's left, so the period always balances out."],
+  ["Weekly budgets & rollover", "Your monthly budget is split into weekly allowances. If you go over in a week, the difference is shared evenly across the weeks you have left, so a single big week doesn't all land on the next one. Overspend in the final week has nowhere left to spread, so it just shows as over."],
   ["The “per day” figures", "On the current week you'll see two per-day numbers: how much you can spend each remaining day to stay inside this week, and the same across the rest of the whole period. They turn red as they get tight."],
   ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. Tap any logged item to edit it."],
   ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't."],
@@ -309,17 +309,27 @@ function App() {
     setActiveWeek(idx);
   }, [state.payMonth, state.payYear, viewingPastIndex]);
 
-  // Weekly budget rebalancing
+  // Weekly budget rebalancing. Each week starts from the base weekly budget; a week's overspend —
+  // measured against its own (already-reduced) budget — is spread EQUALLY across every week that
+  // comes after it, so going over isn't a cliff on the immediately following week. This cascades:
+  // a later week's overspend spreads across the weeks still after it. The final week has nowhere
+  // left to spread to, so an overspend there just shows as "over" (the period's last absorber).
+  // Lapsed earlier weeks are never touched. Underspend does not roll forward (month-level
+  // "remaining" and the per-day-of-month figure already reflect it).
   function getRebalancedBudgets(weeks, entries, weeklyBudget) {
+    const N = weeks.length;
+    const spend = weeks.map(w => entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s,e)=>s+e.amount,0));
+    const reduction = new Array(N).fill(0); // budget cut carried into each week from earlier overspends
     const budgets = {};
-    let carryOver = 0;
     weeks.forEach((w, i) => {
-      const isLast = i === weeks.length - 1;
-      const rawBudget = weeklyBudget - carryOver;
-      const budget = isLast ? Math.max(rawBudget, 0.01) : Math.floor(rawBudget / 10) * 10;
-      budgets[w.index] = Math.max(budget, 0);
-      const wSpend = entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s,e)=>s+e.amount,0);
-      carryOver = Math.max(wSpend - budget, 0);
+      const eff = Math.max(weeklyBudget - reduction[i], 0);
+      budgets[w.index] = eff;
+      const over = Math.max(spend[i] - eff, 0);
+      const weeksLeft = N - 1 - i;
+      if (over > 0 && weeksLeft > 0) {
+        const share = over / weeksLeft;
+        for (let j = i + 1; j < N; j++) reduction[j] += share;
+      }
     });
     return budgets;
   }
