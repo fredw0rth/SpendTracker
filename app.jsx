@@ -642,18 +642,25 @@ function App() {
 // ─── Week Panel ───────────────────────────────────────────────────────────────
 function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit }) {
   const personal = entries.filter(e => e.type === "personal");
-  const business = entries.filter(e => e.type === "business");
   const spent = personal.reduce((s, e) => s + e.amount, 0);
   const over = spent - weeklyBudget;
   const pct = weeklyBudget > 0 ? Math.min((spent / weeklyBudget) * 100, 100) : 0;
 
-  // Group entries for display: split pairs render together as a block,
-  // everything else (ordinary personal/business) renders as single lines.
-  // Order: split groups first (most recent split first), then remaining personal, then remaining business.
-  const splitGroupIds = [...new Set(entries.filter(e => e.splitGroupId).map(e => e.splitGroupId))];
-  const splitGroups = splitGroupIds.map(gid => entries.filter(e => e.splitGroupId === gid));
-  const soloPersonal = personal.filter(e => !e.splitGroupId);
-  const soloBusiness = business.filter(e => !e.splitGroupId);
+  // Build the display list in insertion order (entries are stored newest-first), so a split sits
+  // wherever it was logged in the sequence rather than being hoisted above everything else. A
+  // split's two halves still render together as one block, anchored at the position of the pair's
+  // first-seen half; every other entry renders as a single line in place.
+  const displayItems = [];
+  const seenSplits = new Set();
+  for (const e of entries) {
+    if (e.splitGroupId) {
+      if (seenSplits.has(e.splitGroupId)) continue;
+      seenSplits.add(e.splitGroupId);
+      displayItems.push({ kind: "split", id: e.splitGroupId, group: entries.filter(x => x.splitGroupId === e.splitGroupId) });
+    } else {
+      displayItems.push({ kind: "single", id: e.id, entry: e });
+    }
+  }
 
   // Deleting one half of a split removes both halves, since a lone remainder is meaningless
   function handleDelete(entry) {
@@ -678,13 +685,13 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
         {over > 0 && <div style={{ color:"#ef4444", fontSize:11, marginTop:4, fontWeight:500 }}>↓ {fmt(over)} over</div>}
       </div>
       <div style={{ marginTop:12 }}>
-        {splitGroups.map(group => (
-          <div key={group[0].splitGroupId} style={S.splitGroup}>
-            {group.map((e, i) => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} onEdit={() => onEditEntry(e)} grouped last={i === group.length - 1} />)}
+        {displayItems.map(item => item.kind === "split" ? (
+          <div key={item.id} style={S.splitGroup}>
+            {item.group.map((e, i) => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} onEdit={() => onEditEntry(e)} grouped last={i === item.group.length - 1} />)}
           </div>
+        ) : (
+          <EntryLine key={item.id} entry={item.entry} onDel={() => handleDelete(item.entry)} onEdit={() => onEditEntry(item.entry)} />
         ))}
-        {soloPersonal.map(e => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} onEdit={() => onEditEntry(e)} />)}
-        {soloBusiness.map(e => <EntryLine key={e.id} entry={e} onDel={() => handleDelete(e)} onEdit={() => onEditEntry(e)} />)}
         {credits.map(c => <CreditLine key={c.id} credit={c} onDel={() => onDelCredit(c.id)} onEdit={() => onEditCredit(c)} />)}
         {entries.length === 0 && credits.length === 0 && <div style={{ color:"#64748b", fontSize:13, padding:"12px 0" }}>Nothing logged</div>}
       </div>
