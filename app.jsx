@@ -878,7 +878,7 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
       <span style={{ flex:1, color:col, fontSize:13 }}>
         {entry.label || entry.method}
         {entry.type === "business" && <span style={S.badge}> work</span>}
-        {entry.type === "excluded" && <span style={{ ...S.badge, background:"#3b0764", color:"#d8b4fe" }}> not yours</span>}
+        {entry.type === "excluded" && <span style={{ ...S.badge, background:"#3b0764", color:"#d8b4fe" }}> reimbursable</span>}
         {entry.splitGroupId && entry.type === "personal" && <span style={{ ...S.badge, background:"#1e293b", color:"#94a3b8" }}> split</span>}
       </span>
       <span style={{ color:col, fontWeight:600, fontSize:13 }}>{fmt(entry.amount)}</span>
@@ -1135,10 +1135,13 @@ function PinModal({ pin, onSave, onClose }) {
 function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport }) {
   const [methodDetail, setMethodDetail] = useState(null); // method name or null
 
-  // Gross figure: personal spend + business spend, before business is excluded
+  // Gross figure: personal + business + split (reimbursable) spend, i.e. everything that left
+  // your cards before the reimbursable portions are set aside. All type:"excluded" entries are
+  // split remainders (the modal only creates excluded entries via the split flow).
   const businessTotal = businessEntries.reduce((s, e) => s + e.amount, 0)
     + state.pins.filter(p => p.type === "business").reduce((s, p) => s + (p.amount || 0), 0);
-  const grossSpend = totalSpent + businessTotal;
+  const splitTotal = state.entries.filter(e => e.type === "excluded").reduce((s, e) => s + e.amount, 0);
+  const grossSpend = totalSpent + businessTotal + splitTotal;
 
   // Per-week, per-method breakdown
   const weekRows = weeks.map(w => {
@@ -1187,18 +1190,26 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         <div style={{ fontSize:12, color:"#cbd5e1" }}>{fmt(totalSpent)} spent of {fmt(state.monthlyBudget)}</div>
       </div>
 
-      {/* Gross vs net — only show if there's business spend to make the distinction meaningful */}
-      {businessTotal > 0 && (
+      {/* Gross vs net — shown when there's reimbursable (business or split) spend to distinguish */}
+      {(businessTotal > 0 || splitTotal > 0) && (
         <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
           <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Gross vs net</div>
           <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
             <span style={{ color:"#94a3b8" }}>Personal spend (deducted)</span>
             <span style={{ color:"#e2e8f0", fontWeight:600 }}>{fmt(totalSpent)}</span>
           </div>
-          <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
-            <span style={{ color:"#f59e0b" }}>Business spend (reimbursable)</span>
-            <span style={{ color:"#f59e0b", fontWeight:600 }}>{fmt(businessTotal)}</span>
-          </div>
+          {businessTotal > 0 && (
+            <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
+              <span style={{ color:"#f59e0b" }}>Business spend (reimbursable)</span>
+              <span style={{ color:"#f59e0b", fontWeight:600 }}>{fmt(businessTotal)}</span>
+            </div>
+          )}
+          {splitTotal > 0 && (
+            <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
+              <span style={{ color:"#a78bfa" }}>Split spend (reimbursable)</span>
+              <span style={{ color:"#a78bfa", fontWeight:600 }}>{fmt(splitTotal)}</span>
+            </div>
+          )}
           <div style={{ borderTop:"1px solid #1e293b", marginTop:6, paddingTop:6, display:"flex", justifyContent:"space-between" }}>
             <span style={{ color:"#cbd5e1", fontSize:13, fontWeight:600 }}>Gross spend across all cards</span>
             <span style={{ color:"#f1f5f9", fontWeight:800, fontSize:14 }}>{fmt(grossSpend)}</span>
@@ -1303,7 +1314,7 @@ function MethodDetailModal({ method, transactions, total, onClose }) {
               <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : "#e2e8f0" }}>
                 {t.desc}
                 {t.type === "business" && <span style={S.badge}> work</span>}
-                {t.type === "excluded" && <span style={{ ...S.badge, background:"#3b0764", color:"#d8b4fe" }}> not yours</span>}
+                {t.type === "excluded" && <span style={{ ...S.badge, background:"#3b0764", color:"#d8b4fe" }}> reimbursable</span>}
               </div>
               {t.date && <div style={{ fontSize:11, color:"#64748b", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
             </div>
@@ -1341,7 +1352,7 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
       } else {
         wPersonal.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}]${e.splitGroupId ? " (split)" : ""}`));
         wBusiness.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, work]`));
-        wExcluded.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, not yours]`));
+        wExcluded.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, reimbursable]`));
         wCredits.forEach(c => lines.push(`  +£${c.amount.toFixed(2)}  ${c.label || "Credit"}${c.from ? " from " + c.from : ""}`));
       }
       lines.push("");
@@ -1482,7 +1493,7 @@ const S = {
   pastBannerBtn: { background:"#78350f", border:"1px solid #b45309", borderRadius:6, color:"#fde68a", padding:"4px 10px", fontSize:11, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" },
   tabs: { display:"flex", borderBottom:"1px solid #1e293b", padding:"0 16px" },
   tab: { flex:1, background:"none", border:"none", borderBottom:"2px solid transparent", color:"#64748b", padding:"10px 4px", fontSize:13, fontWeight:500, cursor:"pointer" },
-  tabActive: { color:"#f1f5f9", borderBottomColor:"#0369a1" },
+  tabActive: { color:"#f1f5f9", borderBottom:"2px solid #0369a1" },
   weekNav: { display:"flex", gap:6, marginBottom:12, overflowX:"auto" },
   weekPill: { background:"#0f172a", border:"1px solid #1e293b", borderRadius:20, color:"#64748b", padding:"6px 12px", fontSize:13, fontWeight:500, cursor:"pointer", flexShrink:0 },
   weekPillActive: { background:"#0369a1", borderColor:"#0369a1", color:"#f1f5f9" },

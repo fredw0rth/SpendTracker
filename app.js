@@ -781,7 +781,7 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
         React.createElement("span", { style: { flex: 1, color: col, fontSize: 13 } },
             entry.label || entry.method,
             entry.type === "business" && React.createElement("span", { style: S.badge }, " work"),
-            entry.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " not yours"),
+            entry.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " reimbursable"),
             entry.splitGroupId && entry.type === "personal" && React.createElement("span", { style: { ...S.badge, background: "#1e293b", color: "#94a3b8" } }, " split")),
         React.createElement("span", { style: { color: col, fontWeight: 600, fontSize: 13 } }, fmt(entry.amount)),
         !hideDelete && React.createElement(ConfirmDeleteButton, { onConfirm: onDel, style: S.delBtn })));
@@ -998,10 +998,13 @@ function PinModal({ pin, onSave, onClose }) {
 // ─── Summary View ─────────────────────────────────────────────────────────────
 function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport }) {
     const [methodDetail, setMethodDetail] = useState(null); // method name or null
-    // Gross figure: personal spend + business spend, before business is excluded
+    // Gross figure: personal + business + split (reimbursable) spend, i.e. everything that left
+    // your cards before the reimbursable portions are set aside. All type:"excluded" entries are
+    // split remainders (the modal only creates excluded entries via the split flow).
     const businessTotal = businessEntries.reduce((s, e) => s + e.amount, 0)
         + state.pins.filter(p => p.type === "business").reduce((s, p) => s + (p.amount || 0), 0);
-    const grossSpend = totalSpent + businessTotal;
+    const splitTotal = state.entries.filter(e => e.type === "excluded").reduce((s, e) => s + e.amount, 0);
+    const grossSpend = totalSpent + businessTotal + splitTotal;
     // Per-week, per-method breakdown
     const weekRows = weeks.map(w => {
         var _a;
@@ -1045,14 +1048,17 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                 fmt(totalSpent),
                 " spent of ",
                 fmt(state.monthlyBudget))),
-        businessTotal > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+        (businessTotal > 0 || splitTotal > 0) && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Gross vs net"),
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
                 React.createElement("span", { style: { color: "#94a3b8" } }, "Personal spend (deducted)"),
                 React.createElement("span", { style: { color: "#e2e8f0", fontWeight: 600 } }, fmt(totalSpent))),
-            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
+            businessTotal > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
                 React.createElement("span", { style: { color: "#f59e0b" } }, "Business spend (reimbursable)"),
-                React.createElement("span", { style: { color: "#f59e0b", fontWeight: 600 } }, fmt(businessTotal))),
+                React.createElement("span", { style: { color: "#f59e0b", fontWeight: 600 } }, fmt(businessTotal)))),
+            splitTotal > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
+                React.createElement("span", { style: { color: "#a78bfa" } }, "Split spend (reimbursable)"),
+                React.createElement("span", { style: { color: "#a78bfa", fontWeight: 600 } }, fmt(splitTotal)))),
             React.createElement("div", { style: { borderTop: "1px solid #1e293b", marginTop: 6, paddingTop: 6, display: "flex", justifyContent: "space-between" } },
                 React.createElement("span", { style: { color: "#cbd5e1", fontSize: 13, fontWeight: 600 } }, "Gross spend across all cards"),
                 React.createElement("span", { style: { color: "#f1f5f9", fontWeight: 800, fontSize: 14 } }, fmt(grossSpend))))),
@@ -1129,7 +1135,7 @@ function MethodDetailModal({ method, transactions, total, onClose }) {
                     React.createElement("div", { style: { fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : "#e2e8f0" } },
                         t.desc,
                         t.type === "business" && React.createElement("span", { style: S.badge }, " work"),
-                        t.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " not yours")),
+                        t.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " reimbursable")),
                     t.date && React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 1 } }, dateStr(new Date(t.date)))),
                 React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : col } }, fmt(t.amount))))))));
 }
@@ -1159,7 +1165,7 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
             else {
                 wPersonal.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}]${e.splitGroupId ? " (split)" : ""}`));
                 wBusiness.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, work]`));
-                wExcluded.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, not yours]`));
+                wExcluded.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, reimbursable]`));
                 wCredits.forEach(c => lines.push(`  +£${c.amount.toFixed(2)}  ${c.label || "Credit"}${c.from ? " from " + c.from : ""}`));
             }
             lines.push("");
@@ -1291,7 +1297,7 @@ const S = {
     pastBannerBtn: { background: "#78350f", border: "1px solid #b45309", borderRadius: 6, color: "#fde68a", padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
     tabs: { display: "flex", borderBottom: "1px solid #1e293b", padding: "0 16px" },
     tab: { flex: 1, background: "none", border: "none", borderBottom: "2px solid transparent", color: "#64748b", padding: "10px 4px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
-    tabActive: { color: "#f1f5f9", borderBottomColor: "#0369a1" },
+    tabActive: { color: "#f1f5f9", borderBottom: "2px solid #0369a1" },
     weekNav: { display: "flex", gap: 6, marginBottom: 12, overflowX: "auto" },
     weekPill: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 20, color: "#64748b", padding: "6px 12px", fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 },
     weekPillActive: { background: "#0369a1", borderColor: "#0369a1", color: "#f1f5f9" },
