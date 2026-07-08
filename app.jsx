@@ -785,7 +785,7 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
         <div style={S.bar}><div style={{ ...S.barFill, width: pct + "%", background: over > 0 ? "#ef4444" : "#06b6d4" }} /></div>
         <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginTop:6, color:"#94a3b8" }}>
           <span>{fmt(spent)}</span>
-          <span>of {fmt(weeklyBudget)}{isLastWeek ? " (final)" : ""}</span>
+          <span>{fmt(Math.max(weeklyBudget - spent, 0))} left of {fmt(weeklyBudget)}{isLastWeek ? " (final)" : ""}</span>
         </div>
         {over > 0 && <div style={{ color:"#ef4444", fontSize:11, marginTop:4, fontWeight:500 }}>↓ {fmt(over)} over</div>}
       </div>
