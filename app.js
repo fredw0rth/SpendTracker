@@ -540,7 +540,7 @@ function App() {
                     React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe)
                             window.SpendVault.wipe(); } }, "Erase everything")))))),
         !viewingPast && (React.createElement("button", { "aria-label": "Quick add spend", onClick: () => setShowEntryFor(todayWeekIndex(weeks)), style: S.quickAdd }, "+")),
-        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, edit: editTarget, defaultMethod: state.lastMethod || "Amex", onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
+        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || "Amex", onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
         (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
@@ -807,7 +807,7 @@ function PinCard({ pin, onEdit, onDelete }) {
         pin.note && React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 4 } }, pin.note)));
 }
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, edit, defaultMethod, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
     const editEntry = edit && edit.kind === "entry" ? edit.data : null;
     const editCredit = edit && edit.kind === "credit" ? edit.data : null;
     const editData = editEntry || editCredit;
@@ -818,6 +818,10 @@ function EntryModal({ weekIndex, edit, defaultMethod, onSave, onSaveCredit, onUp
     // The amount is an integer number of pence, filled in from the right (calculator style), so the
     // decimal never has to be typed: tap 1-2-5-0 → £12.50. Starts at £0.00. Prefilled when editing.
     const [cents, setCents] = useState(() => editData ? Math.round(editData.amount * 100) : 0);
+    // Which week a new entry is logged to. Seeds from the weekIndex prop every time the modal opens
+    // (the modal is remounted per open), so the quick-add ＋ always defaults back to the current
+    // calendar week — the chosen week is never persisted across opens.
+    const [selectedWeek, setSelectedWeek] = useState(weekIndex);
     const [method, setMethod] = useState(() => editEntry ? editEntry.method : (defaultMethod || "Amex"));
     const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : "personal"));
     const [note, setNote] = useState(() => editData ? (editData.label || "") : "");
@@ -894,12 +898,12 @@ function EntryModal({ weekIndex, edit, defaultMethod, onSave, onSaveCredit, onUp
                 // and moves as a single unit when the list is sorted or hand-reordered.
                 const baseOrder = Date.now();
                 if (yourPortion > 0) {
-                    onSave({ id: Math.random().toString(36).slice(2), amount: yourPortion, label: note.trim(), note: note.trim(), method, type: "personal", weekIndex, date: baseDate, order: baseOrder, splitGroupId: groupId });
+                    onSave({ id: Math.random().toString(36).slice(2), amount: yourPortion, label: note.trim(), note: note.trim(), method, type: "personal", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId });
                 }
                 // The "not yours" portion is excluded from your spend total — same bucket as shared/not-me pins.
                 // This covers both work reimbursement and splitting a tab with friends; neither should
                 // touch your remaining budget, and neither should be conflated with actual work expenses.
-                onSave({ id: Math.random().toString(36).slice(2), amount: theirPortion, label: note.trim(), note: note.trim(), method, type: "excluded", weekIndex, date: baseDate, order: baseOrder, splitGroupId: groupId });
+                onSave({ id: Math.random().toString(36).slice(2), amount: theirPortion, label: note.trim(), note: note.trim(), method, type: "excluded", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId });
                 setFlash({ amount: splitTotal, split: true });
                 setTimeout(() => setFlash(null), 900);
                 resetAfterSave();
@@ -907,11 +911,11 @@ function EntryModal({ weekIndex, edit, defaultMethod, onSave, onSaveCredit, onUp
             }
         }
         if (type === "credit") {
-            onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), weekIndex, from: "", date: new Date().toISOString(), order: Date.now() });
+            onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), weekIndex: selectedWeek, from: "", date: new Date().toISOString(), order: Date.now() });
             setFlash({ amount, credit: true });
         }
         else {
-            onSave({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), note: note.trim(), method, type, weekIndex, date: new Date().toISOString(), order: Date.now() });
+            onSave({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), note: note.trim(), method, type, weekIndex: selectedWeek, date: new Date().toISOString(), order: Date.now() });
             setFlash({ amount, method });
         }
         setTimeout(() => setFlash(null), 900);
@@ -934,7 +938,17 @@ function EntryModal({ weekIndex, edit, defaultMethod, onSave, onSaveCredit, onUp
         displayCaption = "Split amount — locked";
     // Enter-key glyph changes on the first split step since it advances rather than saves
     const enterGlyph = type === "split" && splitStage === "total" ? "→" : "↵";
-    const title = isEdit ? (editCredit ? "Edit credit" : "Edit spend") : `Log · Week ${weekIndex}`;
+    // When logging (not editing), the title carries a week picker so a cost can be dropped into any
+    // week of the period — not just today's. Editing keeps a plain title (a row's week can't change).
+    const title = isEdit ? (editCredit ? "Edit credit" : "Edit spend") : (React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 6 } },
+        "Log \u00B7",
+        React.createElement("select", { value: selectedWeek, onChange: e => setSelectedWeek(Number(e.target.value)), style: S.weekSelect }, (weeks || []).map(w => React.createElement("option", { key: w.index, value: w.index },
+            "Week ",
+            w.index,
+            " \u00B7 ",
+            dateStr(w.start),
+            "\u2013",
+            dateStr(w.end))))));
     return (React.createElement(Modal, { onClose: onClose, title: title },
         React.createElement("div", { style: { background: "#1e293b", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "#334155"}`, opacity: isSplitEdit ? 0.7 : 1 } },
             displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
@@ -1303,6 +1317,7 @@ const S = {
     modalSheet: { background: "#0f172a", borderRadius: "16px 16px 0 0", padding: "20px 16px 32px", width: "100%", maxWidth: 480, margin: "0 auto", border: "1px solid #1e293b" },
     modalHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
     modalTitle: { fontSize: 15, fontWeight: 700, color: "#f1f5f9" },
+    weekSelect: { background: "#1e293b", border: "1px solid #334155", borderRadius: 6, color: "#f1f5f9", fontSize: 14, fontWeight: 700, padding: "3px 6px", cursor: "pointer", outline: "none", fontFamily: "inherit" },
     quickAdd: { position: "fixed", left: "calc(14px + env(safe-area-inset-left))", bottom: "calc(14px + env(safe-area-inset-bottom))", width: 52, height: 52, borderRadius: "50%", background: "#0369a1", border: "none", color: "#f1f5f9", fontSize: 30, fontWeight: 400, lineHeight: 1, cursor: "pointer", zIndex: 50, boxShadow: "0 4px 14px rgba(3,105,161,0.5)", display: "flex", alignItems: "center", justifyContent: "center", paddingBottom: 4 },
     hintBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#0c2a4a", borderBottom: "1px solid #0369a1", padding: "8px 16px", fontSize: 12, color: "#bfdbfe", lineHeight: 1.4 },
     hintBtn: { background: "#0369a1", border: "none", borderRadius: 6, color: "#f1f5f9", padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
