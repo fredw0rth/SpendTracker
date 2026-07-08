@@ -108,6 +108,7 @@ function defaultState() {
     amexCutoff: 28,
     lloydsCutoff: 3,
     lastMethod: "Amex",
+    helpHintSeen: false, // drives the one-time "take a tour" hint for brand-new accounts only
     entries: [],
     pins: [],
     credits: [],
@@ -175,6 +176,59 @@ function reducer(s, a) {
   }
 }
 
+// ─── Help content: plain-English explainers, shown in the Settings "How it works" card ──
+const HELP_TOPICS = [
+  ["The pay period", "SpendTracker follows your pay cycle, not the calendar month. A period runs from your last payday up to the day before your next one, and switches over automatically the moment payday arrives. The month label at the top names the period you're currently spending in."],
+  ["Weekly budgets & rollover", "Your monthly budget is split into weekly allowances. Anything you don't spend in a week rolls forward into the next; if you go over, the difference comes out of later weeks. The final week absorbs whatever's left, so the period always balances out."],
+  ["The “per day” figures", "On the current week you'll see two per-day numbers: how much you can spend each remaining day to stay inside this week, and the same across the rest of the whole period. They turn red as they get tight."],
+  ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. Tap any logged item to edit it."],
+  ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't."],
+  ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Mark one Work or “Not me” to keep it out of your personal total."],
+  ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover."],
+  ["Summary & export", "The Summary tab breaks the period down: spend vs budget, personal vs reimbursable work spend, a per-card breakdown you can tap into, your biggest spends, and where spending came from. You can export it all as text."],
+  ["Going back to a past period", "In Settings, “Go back to…” lets you revisit a finished period. Its figures reflect that period's own budget, and any edits you make there apply only to it — your current period is left untouched."],
+  ["Your data & security", "Everything is encrypted on your device with your passphrase and never leaves your phone. Your recovery code is the only way back in if you forget the passphrase, so keep it somewhere safe. Face ID unlocks where supported, the app auto-locks after a couple of minutes in the background, and the 🔒 button locks it instantly."],
+  ["Moving to another device", "Each browser keeps its own separate data. Use Export account (below) to get an encrypted backup, then import it in another browser or on a new phone to carry everything across."],
+];
+
+// Collapsible "How it works" card: an outer expand reveals a single-open topic accordion.
+// `focus` flips true from the new-user hint's "Show me" → open the card + first topic and scroll to it.
+function HelpCard({ focus }) {
+  const [expanded, setExpanded] = useState(false);
+  const [open, setOpen] = useState(null); // index of the open topic, or null
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (focus) {
+      setExpanded(true);
+      setOpen(0);
+      if (ref.current && ref.current.scrollIntoView) ref.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [focus]);
+
+  return (
+    <div ref={ref} style={S.settingsCard}>
+      <button style={{ background:"none", border:"none", width:"100%", padding:0, display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" }} onClick={() => setExpanded(e => !e)}>
+        <span style={{ fontSize:11, fontWeight:600, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.04em" }}>How it works</span>
+        <span style={{ color:"#64748b", fontSize:12 }}>{expanded ? "▾" : "▸"}</span>
+      </button>
+      {expanded && (
+        <div style={{ marginTop:6 }}>
+          {HELP_TOPICS.map(([q, a], i) => (
+            <div key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #1e293b" }}>
+              <button style={{ background:"none", border:"none", width:"100%", padding:"10px 0", display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, cursor:"pointer", textAlign:"left" }} onClick={() => setOpen(open === i ? null : i)}>
+                <span style={{ fontSize:13, fontWeight:600, color:"#cbd5e1" }}>{q}</span>
+                <span style={{ color:"#475569", fontSize:12, flexShrink:0 }}>{open === i ? "▾" : "▸"}</span>
+              </button>
+              {open === i && <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.6, padding:"0 0 12px" }}>{a}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
   const [state, dispatch] = useReducer(reducer, null, () => load() || defaultState());
@@ -188,6 +242,7 @@ function App() {
   const [showBackup, setShowBackup] = useState(false); // export-account modal
   const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
   const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
+  const [helpFocus, setHelpFocus] = useState(false); // when true, Settings' "How it works" card auto-opens (from the new-user hint)
   const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
 
   // If history trims (caps at 12 months) while a past period is being viewed, the index
@@ -363,6 +418,17 @@ function App() {
         </div>
       )}
 
+      {/* First-run hint — shown once, only to brand-new accounts (helpHintSeen === false) */}
+      {!viewingPast && state.helpHintSeen === false && (
+        <div style={S.hintBanner}>
+          <span>👋 New here? Take a quick tour of how it all works.</span>
+          <div style={{ display:"flex", alignItems:"center", gap:6, flexShrink:0 }}>
+            <button style={S.hintBtn} onClick={() => { dispatch({ type:"SETTINGS", patch:{ helpHintSeen: true } }); setTab("settings"); setHelpFocus(true); }}>Show me</button>
+            <button style={S.hintDismiss} aria-label="Dismiss" onClick={() => dispatch({ type:"SETTINGS", patch:{ helpHintSeen: true } })}>✕</button>
+          </div>
+        </div>
+      )}
+
       {/* Tabs */}
       <div style={S.tabs}>
         {[["week","Week"],["pins","Pinned"],["savings","Savings"],["summary","Summary"],["settings","⚙"]].map(([k,l]) => (
@@ -489,6 +555,8 @@ function App() {
       {/* SETTINGS */}
       {tab === "settings" && (
         <div style={{ padding:"12px 16px" }}>
+          <HelpCard focus={helpFocus} />
+
           <div style={S.settingsCard}>
             <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Budget</div>
             <div style={{ marginBottom:10 }}>
@@ -1290,4 +1358,7 @@ const S = {
   modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 },
   modalTitle: { fontSize:15, fontWeight:700, color:"#f1f5f9" },
   quickAdd: { position:"fixed", left:"calc(14px + env(safe-area-inset-left))", bottom:"calc(14px + env(safe-area-inset-bottom))", width:52, height:52, borderRadius:"50%", background:"#0369a1", border:"none", color:"#f1f5f9", fontSize:30, fontWeight:400, lineHeight:1, cursor:"pointer", zIndex:50, boxShadow:"0 4px 14px rgba(3,105,161,0.5)", display:"flex", alignItems:"center", justifyContent:"center", paddingBottom:4 },
+  hintBanner: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, background:"#0c2a4a", borderBottom:"1px solid #0369a1", padding:"8px 16px", fontSize:12, color:"#bfdbfe", lineHeight:1.4 },
+  hintBtn: { background:"#0369a1", border:"none", borderRadius:6, color:"#f1f5f9", padding:"4px 10px", fontSize:12, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" },
+  hintDismiss: { background:"none", border:"none", color:"#7dd3fc", fontSize:14, cursor:"pointer", padding:"2px 4px", lineHeight:1 },
 };
