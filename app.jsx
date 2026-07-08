@@ -1135,13 +1135,23 @@ function PinModal({ pin, onSave, onClose }) {
 function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport }) {
   const [methodDetail, setMethodDetail] = useState(null); // method name or null
 
-  // Gross figure: personal + business + split (reimbursable) spend, i.e. everything that left
-  // your cards before the reimbursable portions are set aside. All type:"excluded" entries are
-  // split remainders (the modal only creates excluded entries via the split flow).
+  // Gross (as charged) per card = everything that hit each card — all entries + all pins.
+  // This matches the card's own statement (Amex app etc.), since work and full split amounts
+  // are charged in full and reimbursed separately. Credits are income, not card charges, and
+  // live in a separate array, so they're naturally excluded.
+  const grossByMethod = {};
+  METHODS.forEach(m => {
+    grossByMethod[m] = state.entries.filter(e => e.method === m).reduce((s, e) => s + e.amount, 0)
+      + state.pins.filter(p => p.method === m).reduce((s, p) => s + (p.amount || 0), 0);
+  });
+  const grossSpend = METHODS.reduce((s, m) => s + grossByMethod[m], 0);
+  // Waterfall totals, all derived so they reconcile exactly (incl. pins):
+  //   Business + Split = Reimbursable, and Gross − Reimbursable = Net.
   const businessTotal = businessEntries.reduce((s, e) => s + e.amount, 0)
     + state.pins.filter(p => p.type === "business").reduce((s, p) => s + (p.amount || 0), 0);
-  const splitTotal = state.entries.filter(e => e.type === "excluded").reduce((s, e) => s + e.amount, 0);
-  const grossSpend = totalSpent + businessTotal + splitTotal;
+  const netTotal = totalSpent;                          // personal (entries + personal pins)
+  const reimbursableTotal = grossSpend - netTotal;      // business + split (entries + pins)
+  const splitTotal = reimbursableTotal - businessTotal; // excluded entries + any "not me" pins
 
   // Per-week, per-method breakdown
   const weekRows = weeks.map(w => {
@@ -1160,7 +1170,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
       .map(e => ({ date: e.date, amount: e.amount, desc: e.label || e.method, type: e.type }));
     const fromPins = state.pins
       .filter(p => p.method === method)
-      .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", type: p.type === "business" ? "business" : "personal" }));
+      .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", type: p.type === "business" ? "business" : p.type === "excluded" ? "excluded" : "personal" }));
     return [...fromEntries, ...fromPins].sort((a, b) => {
       if (!a.date) return 1;
       if (!b.date) return -1;
@@ -1190,32 +1200,53 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         <div style={{ fontSize:12, color:"#cbd5e1" }}>{fmt(totalSpent)} spent of {fmt(state.monthlyBudget)}</div>
       </div>
 
-      {/* Gross vs net — shown when there's reimbursable (business or split) spend to distinguish */}
-      {(businessTotal > 0 || splitTotal > 0) && (
+      {/* Gross vs net — waterfall from what hit your cards down to what's actually yours. Shown
+          only when there's reimbursable (business or split) spend to make the distinction. */}
+      {reimbursableTotal > 0 && (
         <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
           <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Gross vs net</div>
-          <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
-            <span style={{ color:"#94a3b8" }}>Personal spend (deducted)</span>
-            <span style={{ color:"#e2e8f0", fontWeight:600 }}>{fmt(totalSpent)}</span>
-          </div>
           {businessTotal > 0 && (
             <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
-              <span style={{ color:"#f59e0b" }}>Business spend (reimbursable)</span>
+              <span style={{ color:"#f59e0b" }}>Business spend</span>
               <span style={{ color:"#f59e0b", fontWeight:600 }}>{fmt(businessTotal)}</span>
             </div>
           )}
           {splitTotal > 0 && (
             <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
-              <span style={{ color:"#a78bfa" }}>Split spend (reimbursable)</span>
+              <span style={{ color:"#a78bfa" }}>Split spend</span>
               <span style={{ color:"#a78bfa", fontWeight:600 }}>{fmt(splitTotal)}</span>
             </div>
           )}
-          <div style={{ borderTop:"1px solid #1e293b", marginTop:6, paddingTop:6, display:"flex", justifyContent:"space-between" }}>
+          <div style={{ borderTop:"1px solid #1e293b", marginTop:6, display:"flex", justifyContent:"space-between", padding:"6px 0 5px" }}>
             <span style={{ color:"#cbd5e1", fontSize:13, fontWeight:600 }}>Gross spend across all cards</span>
-            <span style={{ color:"#f1f5f9", fontWeight:800, fontSize:14 }}>{fmt(grossSpend)}</span>
+            <span style={{ color:"#f1f5f9", fontWeight:700, fontSize:13 }}>{fmt(grossSpend)}</span>
+          </div>
+          <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
+            <span style={{ color:"#94a3b8" }}>Reimbursable spend</span>
+            <span style={{ color:"#94a3b8", fontWeight:600 }}>− {fmt(reimbursableTotal)}</span>
+          </div>
+          <div style={{ borderTop:"1px solid #1e293b", marginTop:6, paddingTop:8, display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
+            <span style={{ color:"#f1f5f9", fontSize:13, fontWeight:700 }}>Net spend</span>
+            <span style={{ color:"#f1f5f9", fontWeight:800, fontSize:15 }}>{fmt(netTotal)}</span>
           </div>
         </div>
       )}
+
+      {/* By card · as charged — gross per card, matching each card's own statement. Tappable for
+          a per-card gross/net breakdown + the transactions that make it up. */}
+      <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
+        <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:2, textTransform:"uppercase" }}>By card · as charged</div>
+        <div style={{ fontSize:11, color:"#475569", marginBottom:10 }}>Matches your card statement</div>
+        {METHODS.filter(m => grossByMethod[m] > 0).map(m => (
+          <button key={m} onClick={() => setMethodDetail(m)} style={{ width:"100%", display:"flex", alignItems:"center", gap:10, padding:"9px 0", background:"none", border:"none", borderBottom:"1px solid #1e293b", cursor:"pointer", textAlign:"left" }}>
+            <span style={{ ...S.dot, background: METHOD_COLOR[m] }} />
+            <span style={{ flex:1, fontSize:13, color:"#cbd5e1" }}>{m}</span>
+            <span style={{ fontWeight:600, color: METHOD_COLOR[m], fontSize:13 }}>{fmt(grossByMethod[m])}</span>
+            <span style={{ color:"#94a3b8", fontSize:20, fontWeight:700, lineHeight:1 }}>›</span>
+          </button>
+        ))}
+        {METHODS.every(m => grossByMethod[m] === 0) && <div style={{ color:"#475569", fontSize:13, padding:"4px 0" }}>No spend logged yet</div>}
+      </div>
 
       {/* Weekly breakdown */}
       <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
@@ -1239,19 +1270,6 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         ))}
       </div>
 
-      {/* By payment method — tappable for transaction detail */}
-      <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
-        <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>By payment method</div>
-        {METHODS.filter(m => methodTotals[m] > 0).map(m => (
-          <button key={m} onClick={() => setMethodDetail(m)} style={{ width:"100%", display:"flex", alignItems:"center", gap:10, padding:"9px 0", background:"none", border:"none", borderBottom:"1px solid #1e293b", cursor:"pointer", textAlign:"left" }}>
-            <span style={{ ...S.dot, background: METHOD_COLOR[m] }} />
-            <span style={{ flex:1, fontSize:13, color:"#cbd5e1" }}>{m}</span>
-            <span style={{ fontWeight:600, color: METHOD_COLOR[m], fontSize:13 }}>{fmt(methodTotals[m])}</span>
-            <span style={{ color:"#475569", fontSize:14 }}>›</span>
-          </button>
-        ))}
-        {METHODS.every(m => methodTotals[m] === 0) && <div style={{ color:"#475569", fontSize:13, padding:"4px 0" }}>No spend logged yet</div>}
-      </div>
 
       {/* Largest spends */}
       {allSpendItems.length > 0 && (
@@ -1291,20 +1309,32 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
       )}
 
       {methodDetail && (
-        <MethodDetailModal method={methodDetail} transactions={transactionsFor(methodDetail)} total={methodTotals[methodDetail]} onClose={() => setMethodDetail(null)} />
+        <MethodDetailModal method={methodDetail} transactions={transactionsFor(methodDetail)} gross={grossByMethod[methodDetail]} net={methodTotals[methodDetail]} onClose={() => setMethodDetail(null)} />
       )}
     </div>
   );
 }
 
 // ─── Method Detail Modal ──────────────────────────────────────────────────────
-function MethodDetailModal({ method, transactions, total, onClose }) {
+function MethodDetailModal({ method, transactions, gross, net, onClose }) {
   const col = METHOD_COLOR[method];
+  const reimbursable = gross - net;
   return (
     <Modal onClose={onClose} title={`${method} transactions`}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:14, padding:"0 2px" }}>
+      {/* Gross (what hit the card / matches the statement) reconciled down to your net share */}
+      <div style={{ display:"flex", gap:8, marginBottom:14 }}>
+        <div style={{ flex:1, background:"#1e293b", borderRadius:8, padding:"8px 10px" }}>
+          <div style={{ fontSize:10, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.03em" }}>Gross · as charged</div>
+          <div style={{ fontSize:17, fontWeight:800, color: col }}>{fmt(gross)}</div>
+        </div>
+        <div style={{ flex:1, background:"#1e293b", borderRadius:8, padding:"8px 10px" }}>
+          <div style={{ fontSize:10, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.03em" }}>Net · your share</div>
+          <div style={{ fontSize:17, fontWeight:800, color:"#f1f5f9" }}>{fmt(net)}</div>
+        </div>
+      </div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:12, padding:"0 2px" }}>
         <span style={{ fontSize:12, color:"#64748b" }}>{transactions.length} transaction{transactions.length === 1 ? "" : "s"}</span>
-        <span style={{ fontSize:18, fontWeight:800, color: col }}>{fmt(total)}</span>
+        {reimbursable > 0.005 && <span style={{ fontSize:11, color:"#94a3b8" }}>{fmt(reimbursable)} reimbursable</span>}
       </div>
       <div style={{ maxHeight:360, overflowY:"auto" }}>
         {transactions.length === 0 && <div style={{ color:"#475569", fontSize:13, padding:"12px 0", textAlign:"center" }}>No transactions yet</div>}
