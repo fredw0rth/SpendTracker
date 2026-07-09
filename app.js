@@ -879,17 +879,17 @@ function PinCard({ pin, onEdit, onDelete }) {
 // derived from each type's single colour.
 function MethodSelector({ value, onChange, dimmed }) {
     const ref = useRef(null);
-    const [moreBelow, setMoreBelow] = useState(false);
+    const [moreRight, setMoreRight] = useState(false);
     const check = () => { const el = ref.current; if (el)
-        setMoreBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 4); };
-    useLayoutEffect(() => { check(); }, []); // measure before paint so the ▾ hint shows on first open
-    return (React.createElement("div", { style: { marginBottom: 12, opacity: dimmed ? 0.4 : 1 } },
-        React.createElement("div", { ref: ref, onScroll: check, style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, maxHeight: 96, overflowY: "auto" } }, METHODS.map(m => {
+        setMoreRight(el.scrollWidth - el.scrollLeft - el.clientWidth > 4); };
+    useLayoutEffect(() => { check(); }, []); // measure before paint so the ▸ hint shows on first open
+    return (React.createElement("div", { style: { position: "relative", marginBottom: 12, opacity: dimmed ? 0.4 : 1 } },
+        React.createElement("div", { ref: ref, onScroll: check, style: { display: "flex", gap: 6, overflowX: "auto", scrollbarWidth: "none" } }, METHODS.map(m => {
             const on = value === m.id;
             const c = chipColors(m.color);
-            return React.createElement("button", { key: m.id, onClick: () => onChange(m.id), title: m.name, style: { background: on ? c.bg : "#0f172a", border: `1px solid ${on ? c.border : "#1e293b"}`, borderRadius: 8, color: on ? c.text : "#475569", padding: "10px 2px", fontSize: 12, fontWeight: on ? 700 : 500, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, m.name);
+            return React.createElement("button", { key: m.id, onClick: () => onChange(m.id), title: m.name, style: { flex: "0 0 calc((100% - 18px) / 4)", background: on ? c.bg : "#0f172a", border: `1px solid ${on ? c.border : "#1e293b"}`, borderRadius: 8, color: on ? c.text : "#475569", padding: "10px 2px", fontSize: 12, fontWeight: on ? 700 : 500, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, m.name);
         })),
-        moreBelow && React.createElement("div", { "aria-hidden": "true", style: { textAlign: "center", color: "#64748b", fontSize: 12, lineHeight: 1, marginTop: 3 } }, "\u25BE")));
+        moreRight && React.createElement("div", { "aria-hidden": "true", style: { position: "absolute", top: 0, bottom: 0, right: 0, width: 24, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 2, pointerEvents: "none", color: "#94a3b8", fontSize: 12, background: "linear-gradient(to right, rgba(15,23,42,0), #0f172a 70%)" } }, "\u25B8")));
 }
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
 function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
