@@ -1,8 +1,25 @@
 "use strict";
-const { useState, useEffect, useReducer, useRef } = React;
+const { useState, useEffect, useLayoutEffect, useReducer, useRef } = React;
 // ─── Constants ────────────────────────────────────────────────────────────────
-const METHODS = ["Amex", "Lloyds", "HSBC", "Cash"];
-const METHOD_COLOR = { Amex: "#60a5fa", Lloyds: "#34d399", HSBC: "#f87171", Cash: "#fbbf24" };
+// Payment types are user-editable (name + colour, add/remove) and live in state.methods.
+// Each method's `id` is stable and is what entries/pins store in `.method`; the defaults use
+// their old names AS ids so pre-existing data keeps resolving with zero migration.
+const DEFAULT_METHODS = [
+    { id: "Amex", name: "Amex", color: "#60a5fa" },
+    { id: "Lloyds", name: "Lloyds", color: "#34d399" },
+    { id: "HSBC", name: "HSBC", color: "#f87171" },
+    { id: "Cash", name: "Cash", color: "#fbbf24" },
+];
+const MAX_METHODS = 12;
+const genId = () => Math.random().toString(36).slice(2);
+// These module-level views are refreshed from state.methods at the top of App() each render, so
+// the ~30 existing `METHODS` / `METHOD_COLOR[id]` call-sites keep working without prop-threading.
+// (Single synchronous root render, no StrictMode → children read the fresh values in the same pass.)
+let METHODS = DEFAULT_METHODS; // [{id,name,color}]
+let METHOD_COLOR = Object.fromEntries(DEFAULT_METHODS.map(m => [m.id, m.color])); // id -> colour
+let METHOD_NAME = Object.fromEntries(DEFAULT_METHODS.map(m => [m.id, m.name])); // id -> display name
+// Derive a coherent chip palette (used by the selectors) from a single method colour.
+const chipColors = (c) => ({ bg: c + "22", border: c, text: c });
 const STORAGE_KEY = "spendtracker_v6";
 // Persistence goes through the encrypted session in crypto.js (window.SpendVault),
 // which holds the decrypted state in memory and writes only ciphertext to disk.
@@ -111,6 +128,7 @@ function defaultState() {
         amexCutoff: 28,
         lloydsCutoff: 3,
         lastMethod: "Amex",
+        methods: DEFAULT_METHODS,
         helpHintSeen: false,
         entries: [],
         pins: [],
@@ -149,7 +167,8 @@ function reducer(s, a) {
             const newHistory = [...(s.monthHistory || []), archive].slice(-12);
             return { payYear: a.newYear, payMonth: a.newMonth, monthLabel: a.newLabel,
                 monthlyBudget: s.monthlyBudget, weeklyBudget: s.weeklyBudget,
-                amexCutoff: s.amexCutoff, lloydsCutoff: s.lloydsCutoff, pins: s.pins, monthHistory: newHistory,
+                amexCutoff: s.amexCutoff, lloydsCutoff: s.lloydsCutoff, pins: s.pins, methods: s.methods,
+                lastMethod: s.lastMethod, monthHistory: newHistory,
                 entries: [], credits: [] };
         }
         case "EDIT_PAST_ENTRY": {
@@ -226,7 +245,15 @@ function HelpCard({ focus }) {
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
     var _a;
-    const [state, dispatch] = useReducer(reducer, null, () => load() || defaultState());
+    const [state, dispatch] = useReducer(reducer, null, () => {
+        const s = load() || defaultState();
+        // Backfill payment methods for accounts created before they were customisable.
+        return (s.methods && s.methods.length) ? s : { ...s, methods: DEFAULT_METHODS };
+    });
+    // Refresh the module-level method views from state before any child renders (see Constants).
+    METHODS = state.methods;
+    METHOD_COLOR = Object.fromEntries(state.methods.map(m => [m.id, m.color]));
+    METHOD_NAME = Object.fromEntries(state.methods.map(m => [m.id, m.name]));
     const [tab, setTab] = useState("week");
     const [activeWeek, setActiveWeek] = useState(1);
     const [showEntryFor, setShowEntryFor] = useState(null);
@@ -333,8 +360,8 @@ function App() {
     const byMethod = (entries, pins) => {
         const res = {};
         METHODS.forEach(m => {
-            res[m] = entries.filter(e => e.method === m).reduce((s, e) => s + e.amount, 0) +
-                pins.filter(p => p.method === m).reduce((s, p) => s + (p.amount || 0), 0);
+            res[m.id] = entries.filter(e => e.method === m.id).reduce((s, e) => s + e.amount, 0) +
+                pins.filter(p => p.method === m.id).reduce((s, p) => s + (p.amount || 0), 0);
         });
         return res;
     };
@@ -519,6 +546,34 @@ function App() {
                     "Monthly and weekly are linked across this ",
                     periodDays,
                     "-day period \u2014 changing one recalculates the other.")),
+            (() => {
+                // Every method id referenced by a live or archived transaction/pin — such types can't be removed.
+                const used = new Set();
+                [state, ...(state.monthHistory || [])].forEach(src => {
+                    (src.entries || []).forEach(e => used.add(e.method));
+                    (src.pins || []).forEach(p => used.add(p.method));
+                });
+                const setMethods = (ms) => dispatch({ type: "SETTINGS", patch: { methods: ms } });
+                const update = (id, patch) => setMethods(state.methods.map(m => m.id === id ? { ...m, ...patch } : m));
+                const remove = (id) => setMethods(state.methods.filter(m => m.id !== id));
+                const add = () => setMethods([...state.methods, { id: genId(), name: "New card", color: "#60a5fa" }]);
+                const anyInUse = state.methods.some(m => used.has(m.id));
+                return (React.createElement("div", { style: S.settingsCard },
+                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Payment methods"),
+                    state.methods.map(m => {
+                        const canDelete = !used.has(m.id) && state.methods.length > 1;
+                        return (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
+                            React.createElement("input", { type: "color", value: m.color, onChange: e => update(m.id, { color: e.target.value }), "aria-label": `${m.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid #1e293b", borderRadius: 8, background: "#0f172a", cursor: "pointer", flexShrink: 0 } }),
+                            React.createElement("input", { key: `mname-${m.id}-${m.name}`, defaultValue: m.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== m.name)
+                                    update(m.id, { name: v });
+                                else if (!v)
+                                    e.target.value = m.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
+                            React.createElement("button", { onClick: () => { if (canDelete)
+                                    remove(m.id); }, disabled: !canDelete, title: used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "#334155", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")));
+                    }),
+                    anyInUse && React.createElement("div", { style: { fontSize: 11, color: "#475569", marginTop: 2, marginBottom: 8 } }, "Types with logged transactions can't be removed."),
+                    React.createElement("button", { onClick: add, disabled: state.methods.length >= MAX_METHODS, style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", width: "100%", marginTop: 4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" } }, state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type")));
+            })(),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Card cutoff dates"),
                 [["Amex statement date", "amexCutoff"], ["Lloyds statement date", "lloydsCutoff"]].map(([lbl, k]) => (React.createElement("div", { key: k, style: { marginBottom: 10 } },
@@ -551,7 +606,7 @@ function App() {
                     React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe)
                             window.SpendVault.wipe(); } }, "Erase everything")))))),
         !viewingPast && (React.createElement("button", { "aria-label": "Quick add spend", onClick: () => setShowEntryFor(todayWeekIndex(weeks)), style: S.quickAdd }, "+")),
-        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || "Amex", onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
+        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
         (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
@@ -779,7 +834,7 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
     return (React.createElement("div", { onClick: onEdit, style: { ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom: "none" } : {}), cursor: onEdit ? "pointer" : "default" } },
         React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[entry.method] || "#64748b" } }),
         React.createElement("span", { style: { flex: 1, color: col, fontSize: 13 } },
-            entry.label || entry.method,
+            entry.label || METHOD_NAME[entry.method] || entry.method,
             entry.type === "business" && React.createElement("span", { style: S.badge }, " work"),
             entry.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " reimbursable"),
             entry.splitGroupId && entry.type === "personal" && React.createElement("span", { style: { ...S.badge, background: "#1e293b", color: "#94a3b8" } }, " split")),
@@ -817,6 +872,25 @@ function PinCard({ pin, onEdit, onDelete }) {
         React.createElement("div", { style: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: isB ? "#f59e0b" : isX ? "#a78bfa" : METHOD_COLOR[pin.method] || "#e2e8f0", marginBottom: 4 } }, pin.amount ? fmt(pin.amount) : "—"),
         pin.note && React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 4 } }, pin.note)));
 }
+// ─── Method Selector ──────────────────────────────────────────────────────────
+// The payment-type chooser used by both the log and pin modals. Renders the user's payment
+// types (state.methods, via the module METHODS view) as a wrapping 4-col grid that scrolls when
+// there are many, with a ▾ hint shown while more sit below the fold. Selected chip colours are
+// derived from each type's single colour.
+function MethodSelector({ value, onChange, dimmed }) {
+    const ref = useRef(null);
+    const [moreBelow, setMoreBelow] = useState(false);
+    const check = () => { const el = ref.current; if (el)
+        setMoreBelow(el.scrollHeight - el.scrollTop - el.clientHeight > 4); };
+    useLayoutEffect(() => { check(); }, []); // measure before paint so the ▾ hint shows on first open
+    return (React.createElement("div", { style: { marginBottom: 12, opacity: dimmed ? 0.4 : 1 } },
+        React.createElement("div", { ref: ref, onScroll: check, style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, maxHeight: 96, overflowY: "auto" } }, METHODS.map(m => {
+            const on = value === m.id;
+            const c = chipColors(m.color);
+            return React.createElement("button", { key: m.id, onClick: () => onChange(m.id), title: m.name, style: { background: on ? c.bg : "#0f172a", border: `1px solid ${on ? c.border : "#1e293b"}`, borderRadius: 8, color: on ? c.text : "#475569", padding: "10px 2px", fontSize: 12, fontWeight: on ? 700 : 500, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, m.name);
+        })),
+        moreBelow && React.createElement("div", { "aria-hidden": "true", style: { textAlign: "center", color: "#64748b", fontSize: 12, lineHeight: 1, marginTop: 3 } }, "\u25BE")));
+}
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
 function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
     const editEntry = edit && edit.kind === "entry" ? edit.data : null;
@@ -833,7 +907,11 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
     // (the modal is remounted per open), so the quick-add ＋ always defaults back to the current
     // calendar week — the chosen week is never persisted across opens.
     const [selectedWeek, setSelectedWeek] = useState(weekIndex);
-    const [method, setMethod] = useState(() => editEntry ? editEntry.method : (defaultMethod || "Amex"));
+    // Fall back to the first method if the seeded id no longer exists (e.g. its type was removed).
+    const [method, setMethod] = useState(() => {
+        const seed = editEntry ? editEntry.method : defaultMethod;
+        return METHOD_NAME[seed] ? seed : METHODS[0].id;
+    });
     const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : "personal"));
     const [note, setNote] = useState(() => editData ? (editData.label || "") : "");
     const [showNote, setShowNote] = useState(() => !!(editData && editData.label));
@@ -845,8 +923,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
     const displayStr = amount.toFixed(2);
     const creditColors = { bg: "#14532d", border: "#22c55e", text: "#4ade80" };
     const splitColors = { bg: "#3b0764", border: "#a855f7", text: "#d8b4fe" };
-    const methodColors = { Amex: { bg: "#1e3a5f", border: "#3b82f6", text: "#93c5fd" }, Lloyds: { bg: "#064e3b", border: "#10b981", text: "#34d399" }, HSBC: { bg: "#450a0a", border: "#dc2626", text: "#fca5a5" }, Cash: { bg: "#451a03", border: "#d97706", text: "#fbbf24" } };
-    const mc = type === "credit" ? creditColors : type === "split" ? splitColors : methodColors[method];
+    const mc = type === "credit" ? creditColors : type === "split" ? splitColors : chipColors(METHOD_COLOR[method] || "#60a5fa");
     function pressDigit(d) {
         if (isSplitEdit)
             return; // amount locked while editing a split half
@@ -966,7 +1043,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
             React.createElement("div", { style: { fontSize: displayStr.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#4ade80" : "#f1f5f9" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`)),
         !editCredit && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Payment type"),
-            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 12, opacity: type === "credit" ? 0.4 : 1 } }, METHODS.map(m => React.createElement("button", { key: m, style: { background: method === m ? methodColors[m].bg : "#0f172a", border: `1px solid ${method === m ? methodColors[m].border : "#1e293b"}`, borderRadius: 8, color: method === m ? methodColors[m].text : "#475569", padding: "10px 2px", fontSize: 12, fontWeight: method === m ? 700 : 500, cursor: "pointer" }, onClick: () => setMethod(m) }, m)))),
+            React.createElement(MethodSelector, { value: method, onChange: setMethod, dimmed: type === "credit" })),
         classOptions.length > 0 && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Classification"),
             React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#4ade80" : v === "split" ? "#d8b4fe" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
@@ -984,13 +1061,13 @@ function PinModal({ pin, onSave, onClose }) {
     var _a;
     const [label, setLabel] = useState((pin === null || pin === void 0 ? void 0 : pin.label) || "");
     const [amount, setAmount] = useState(((_a = pin === null || pin === void 0 ? void 0 : pin.amount) === null || _a === void 0 ? void 0 : _a.toString()) || "");
-    const [method, setMethod] = useState((pin === null || pin === void 0 ? void 0 : pin.method) || "Amex");
+    const [method, setMethod] = useState(() => (pin && METHOD_NAME[pin.method]) ? pin.method : METHODS[0].id);
     const [type, setType] = useState((pin === null || pin === void 0 ? void 0 : pin.type) || "personal");
     const [note, setNote] = useState((pin === null || pin === void 0 ? void 0 : pin.note) || "");
     return (React.createElement(Modal, { onClose: onClose, title: pin ? "Edit" : "New pin" },
         React.createElement("input", { style: S.input, placeholder: "Label e.g. Gym", value: label, onChange: e => setLabel(e.target.value) }),
         React.createElement("input", { style: { ...S.input, marginBottom: 10 }, type: "number", inputMode: "decimal", placeholder: "Amount", value: amount, onChange: e => setAmount(e.target.value) }),
-        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, METHODS.map(m => React.createElement("button", { key: m, style: { flex: 1, background: method === m ? "#1e293b" : "#0f172a", border: `1px solid ${method === m ? "#334155" : "#1e293b"}`, borderRadius: 8, color: method === m ? METHOD_COLOR[m] : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setMethod(m) }, m))),
+        React.createElement(MethodSelector, { value: method, onChange: setMethod }),
         React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["excluded", "Not me"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "excluded" ? "#a78bfa" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setType(v) }, l))),
         React.createElement("textarea", { style: { ...S.input, height: 60, resize: "none" }, placeholder: "Note", value: note, onChange: e => setNote(e.target.value) }),
         React.createElement("button", { style: { ...S.btn, background: "#0369a1", marginTop: 12 }, onClick: () => onSave({ id: (pin === null || pin === void 0 ? void 0 : pin.id) || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, note: note.trim() }) }, "Save")));
@@ -1004,10 +1081,10 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     // live in a separate array, so they're naturally excluded.
     const grossByMethod = {};
     METHODS.forEach(m => {
-        grossByMethod[m] = state.entries.filter(e => e.method === m).reduce((s, e) => s + e.amount, 0)
-            + state.pins.filter(p => p.method === m).reduce((s, p) => s + (p.amount || 0), 0);
+        grossByMethod[m.id] = state.entries.filter(e => e.method === m.id).reduce((s, e) => s + e.amount, 0)
+            + state.pins.filter(p => p.method === m.id).reduce((s, p) => s + (p.amount || 0), 0);
     });
-    const grossSpend = METHODS.reduce((s, m) => s + grossByMethod[m], 0);
+    const grossSpend = METHODS.reduce((s, m) => s + grossByMethod[m.id], 0);
     // Waterfall totals, all derived so they reconcile exactly (incl. pins):
     //   Business + Split = Reimbursable, and Gross − Reimbursable = Net.
     const businessTotal = businessEntries.reduce((s, e) => s + e.amount, 0)
@@ -1021,7 +1098,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         const wEntries = state.entries.filter(e => e.weekIndex === w.index && e.type === "personal");
         const wTotal = wEntries.reduce((s, e) => s + e.amount, 0);
         const wByMethod = {};
-        METHODS.forEach(m => { wByMethod[m] = wEntries.filter(e => e.method === m).reduce((s, e) => s + e.amount, 0); });
+        METHODS.forEach(m => { wByMethod[m.id] = wEntries.filter(e => e.method === m.id).reduce((s, e) => s + e.amount, 0); });
         const wBudget = (_a = rebalancedBudgets[w.index]) !== null && _a !== void 0 ? _a : state.weeklyBudget;
         return { week: w, total: wTotal, byMethod: wByMethod, budget: wBudget };
     });
@@ -1029,7 +1106,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     function transactionsFor(method) {
         const fromEntries = state.entries
             .filter(e => e.method === method)
-            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || e.method, type: e.type }));
+            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, type: e.type }));
         const fromPins = state.pins
             .filter(p => p.method === method)
             .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", type: p.type === "business" ? "business" : p.type === "excluded" ? "excluded" : "personal" }));
@@ -1043,7 +1120,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     }
     // Largest individual spends this month (entries + pins, personal + business — excludes credits and the "not yours" portion of splits)
     const allSpendItems = [
-        ...state.entries.filter(e => e.type !== "credit" && e.type !== "excluded").map(e => ({ desc: e.label || e.method, amount: e.amount, method: e.method, type: e.type })),
+        ...state.entries.filter(e => e.type !== "credit" && e.type !== "excluded").map(e => ({ desc: e.label || METHOD_NAME[e.method] || e.method, amount: e.amount, method: e.method, type: e.type })),
         ...state.pins.filter(p => p.type !== "excluded").map(p => ({ desc: p.label, amount: p.amount || 0, method: p.method, type: p.type })),
     ].sort((a, b) => b.amount - a.amount).slice(0, 5);
     // Source split: how much of personal spend came from pins vs quick-logged entries
@@ -1080,12 +1157,12 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 2, textTransform: "uppercase" } }, "By card \u00B7 as charged"),
             React.createElement("div", { style: { fontSize: 11, color: "#475569", marginBottom: 10 } }, "Matches your card statement"),
-            METHODS.filter(m => grossByMethod[m] > 0).map(m => (React.createElement("button", { key: m, onClick: () => setMethodDetail(m), style: { width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 0", background: "none", border: "none", borderBottom: "1px solid #1e293b", cursor: "pointer", textAlign: "left" } },
-                React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[m] } }),
-                React.createElement("span", { style: { flex: 1, fontSize: 13, color: "#cbd5e1" } }, m),
-                React.createElement("span", { style: { fontWeight: 600, color: METHOD_COLOR[m], fontSize: 13 } }, fmt(grossByMethod[m])),
+            METHODS.filter(m => grossByMethod[m.id] > 0).map(m => (React.createElement("button", { key: m.id, onClick: () => setMethodDetail(m.id), style: { width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 0", background: "none", border: "none", borderBottom: "1px solid #1e293b", cursor: "pointer", textAlign: "left" } },
+                React.createElement("span", { style: { ...S.dot, background: m.color } }),
+                React.createElement("span", { style: { flex: 1, fontSize: 13, color: "#cbd5e1" } }, m.name),
+                React.createElement("span", { style: { fontWeight: 600, color: m.color, fontSize: 13 } }, fmt(grossByMethod[m.id])),
                 React.createElement("span", { style: { color: "#94a3b8", fontSize: 20, fontWeight: 700, lineHeight: 1 } }, "\u203A")))),
-            METHODS.every(m => grossByMethod[m] === 0) && React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "4px 0" } }, "No spend logged yet")),
+            METHODS.every(m => grossByMethod[m.id] === 0) && React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "4px 0" } }, "No spend logged yet")),
         React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Weekly breakdown"),
             weekRows.map(({ week, total, byMethod, budget }) => (React.createElement("div", { key: week.index, style: { marginBottom: week.index < weeks.length ? 12 : 0, paddingBottom: week.index < weeks.length ? 12 : 0, borderBottom: week.index < weeks.length ? "1px solid #1e293b" : "none" } },
@@ -1100,12 +1177,12 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                             "/ ",
                             fmt(budget)))),
                 React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 } },
-                    METHODS.filter(m => byMethod[m] > 0).map(m => (React.createElement("div", { key: m, style: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#94a3b8" } },
-                        React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[m] } }),
-                        m,
+                    METHODS.filter(m => byMethod[m.id] > 0).map(m => (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#94a3b8" } },
+                        React.createElement("span", { style: { ...S.dot, background: m.color } }),
+                        m.name,
                         " ",
-                        fmt(byMethod[m])))),
-                    METHODS.every(m => byMethod[m] === 0) && React.createElement("span", { style: { fontSize: 11, color: "#475569" } }, "Nothing logged")))))),
+                        fmt(byMethod[m.id])))),
+                    METHODS.every(m => byMethod[m.id] === 0) && React.createElement("span", { style: { fontSize: 11, color: "#475569" } }, "Nothing logged")))))),
         allSpendItems.length > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Largest spends"),
             allSpendItems.map((item, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid #1e293b" : "none" } },
@@ -1138,7 +1215,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 function MethodDetailModal({ method, transactions, gross, net, onClose }) {
     const col = METHOD_COLOR[method];
     const reimbursable = gross - net;
-    return (React.createElement(Modal, { onClose: onClose, title: `${method} transactions` },
+    return (React.createElement(Modal, { onClose: onClose, title: `${METHOD_NAME[method] || method} transactions` },
         React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } },
             React.createElement("div", { style: { flex: 1, background: "#1e293b", borderRadius: 8, padding: "8px 10px" } },
                 React.createElement("div", { style: { fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.03em" } }, "Gross \u00B7 as charged"),
@@ -1169,6 +1246,7 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
 function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, totalCredits, methodTotals, onClose }) {
     const [copied, setCopied] = useState(false);
     function buildText() {
+        const mn = (id) => METHOD_NAME[id] || id; // resolve a stored method id to its display name
         const lines = [];
         lines.push(`SpendTracker — ${state.monthLabel}`);
         lines.push(`${fmt(totalSpent)} spent · ${fmt(remaining)} left of ${fmt(state.monthlyBudget)}`);
@@ -1189,9 +1267,9 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
                 lines.push(`  (nothing logged)`);
             }
             else {
-                wPersonal.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}]${e.splitGroupId ? " (split)" : ""}`));
-                wBusiness.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, work]`));
-                wExcluded.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || e.method}  [${e.method}, reimbursable]`));
+                wPersonal.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || mn(e.method)}  [${mn(e.method)}]${e.splitGroupId ? " (split)" : ""}`));
+                wBusiness.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || mn(e.method)}  [${mn(e.method)}, work]`));
+                wExcluded.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || mn(e.method)}  [${mn(e.method)}, reimbursable]`));
                 wCredits.forEach(c => lines.push(`  +£${c.amount.toFixed(2)}  ${c.label || "Credit"}${c.from ? " from " + c.from : ""}`));
             }
             lines.push("");
@@ -1201,15 +1279,15 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
         const excludedPins = state.pins.filter(p => p.type === "excluded");
         if (state.pins.length > 0) {
             lines.push("Pinned costs:");
-            personalPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${p.method}]`));
-            businessPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${p.method}, work]`));
-            excludedPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${p.method}, not me]`));
+            personalPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}]`));
+            businessPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}, work]`));
+            excludedPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}, not me]`));
             lines.push("");
         }
-        const methodLines = METHODS.filter(m => methodTotals[m] > 0);
+        const methodLines = METHODS.filter(m => methodTotals[m.id] > 0);
         if (methodLines.length > 0) {
             lines.push("By payment method:");
-            methodLines.forEach(m => lines.push(`  ${m}: ${fmt(methodTotals[m])}`));
+            methodLines.forEach(m => lines.push(`  ${m.name}: ${fmt(methodTotals[m.id])}`));
         }
         return lines.join("\n");
     }
