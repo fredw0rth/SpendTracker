@@ -102,6 +102,79 @@ function buildWeeks(payStart, payEnd, amexCutoff, lloydsCutoff) {
         days,
     }));
 }
+// Period bounds for a labelled period (payYear/payMonth). A period labelled X starts on
+// (X-1)'s payday and ends the day before X's own payday. Extracted so archived months can
+// rebuild their own weeks (savings) with the same logic the live view uses.
+function periodBounds(payYear, payMonth) {
+    const prevMonth = payMonth - 1 < 0 ? 11 : payMonth - 1;
+    const prevMonthYear = payMonth - 1 < 0 ? payYear - 1 : payYear;
+    const start = lastWorkingDay(prevMonthYear, prevMonth);
+    const end = addDays(lastWorkingDay(payYear, payMonth), -1);
+    return { start, end };
+}
+// A scheduled pin (freq monthly/weekly) is populated into the Week log as read-only "virtual"
+// entries, one per occurrence in the period, so it counts against the week it lands in — instead
+// of the flat whole-period pin total. `day` is the day-of-month (1-31) for monthly, or the
+// day-of-week (0=Sun..6=Sat) for weekly. Pins with no freq (or "none") are left to the flat model.
+function isScheduledPin(p) {
+    return !!(p.freq && p.freq !== "none");
+}
+function makePinEntry(pin, weekIndex, date) {
+    return {
+        id: "pin-" + pin.id + "-" + weekIndex,
+        amount: pin.amount || 0,
+        label: pin.label,
+        note: pin.note || "",
+        method: pin.method,
+        type: pin.type,
+        weekIndex,
+        date: date.toISOString(),
+        order: date.getTime(),
+        pinned: true,
+        pinId: pin.id,
+    };
+}
+function expandScheduledPins(pins, weeks) {
+    const out = [];
+    for (const p of pins) {
+        if (!isScheduledPin(p))
+            continue;
+        if (p.freq === "weekly") {
+            // One occurrence per week that contains the chosen weekday (partial first/last weeks
+            // that don't include it are simply skipped).
+            for (const w of weeks) {
+                const match = w.days.find(d => d.getDay() === p.day);
+                if (match)
+                    out.push(makePinEntry(p, w.index, match));
+            }
+        }
+        else if (p.freq === "monthly") {
+            // First day in the period matching the chosen day-of-month (a pay period can span two
+            // calendar months, so a boundary date can occur twice — first occurrence wins). If the
+            // day never occurs (e.g. the 31st in a shorter window), clamp to the period's last day
+            // so the charge isn't silently dropped.
+            let target = null, targetWeek = null;
+            for (const w of weeks) {
+                const match = w.days.find(d => d.getDate() === p.day);
+                if (match) {
+                    target = match;
+                    targetWeek = w.index;
+                    break;
+                }
+            }
+            if (!target) {
+                const lastWeek = weeks[weeks.length - 1];
+                if (lastWeek) {
+                    target = lastWeek.days[lastWeek.days.length - 1];
+                    targetWeek = lastWeek.index;
+                }
+            }
+            if (target)
+                out.push(makePinEntry(p, targetWeek, target));
+        }
+    }
+    return out;
+}
 function todayWeekIndex(weeks) {
     var _a, _b;
     const norm = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
@@ -211,7 +284,7 @@ const HELP_TOPICS = [
     ["The “per day” figures", "On the current week you'll see two per-day numbers: how much you can spend each remaining day to stay inside this week, and the same across the rest of the whole period. They turn red as they get tight."],
     ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. Tap any logged item to edit it."],
     ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't."],
-    ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Mark one Work or “Not me” to keep it out of your personal total."],
+    ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Monthly or Weekly frequency and it's dropped straight into the right week of the log, counting against that week. Mark one Work or “Split” to keep it out of your personal total."],
     ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover."],
     ["Summary & export", "The Summary tab breaks the period down: spend vs budget, personal vs reimbursable work spend, a per-card breakdown you can tap into, your biggest spends, and where spending came from. You can export it all as text."],
     ["Going back to a past period", "In Settings, “Go back to…” lets you revisit a finished period. Its figures reflect that period's own budget, and any edits you make there apply only to it — your current period is left untouched."],
@@ -278,7 +351,7 @@ function App() {
     // state everywhere below, so none of the existing derivation logic needs to know
     // whether it's looking at the live month or an archived one.
     const viewingPast = viewingPastIndex !== null && state.monthHistory && state.monthHistory[viewingPastIndex];
-    const effectiveData = viewingPast || state;
+    const periodData = viewingPast || state;
     // Auto-switch month — a period labelled X starts on (X-1)'s payday and runs up to (not
     // including) X's own payday, since X's payday is what pays you for the work X represents
     // and is the moment you clear last period's card debt. So the switch to X+1 fires the
@@ -309,17 +382,24 @@ function App() {
     // is when last month's card debt gets cleared and a fresh accounting period begins, the
     // period labelled "July" starts on JUNE's payday and runs up to (not including) JULY's
     // payday. payYear/payMonth store the label (X); periodStart/periodEnd are derived from it.
-    const { payYear: y, payMonth: m } = effectiveData;
-    const prevMonth = m - 1 < 0 ? 11 : m - 1;
-    const prevMonthYear = m - 1 < 0 ? y - 1 : y;
-    const periodStart = lastWorkingDay(prevMonthYear, prevMonth);
-    const nextPayday = lastWorkingDay(y, m);
-    const periodEnd = addDays(nextPayday, -1);
+    const { payYear: y, payMonth: m } = periodData;
+    const { start: periodStart, end: periodEnd } = periodBounds(y, m);
     // Fractional weeks in this pay period, so Settings can convert monthly <-> weekly
     // the same way first-run setup does (crypto.js uses the identical days/7 basis).
     const periodDays = Math.round((periodEnd - periodStart) / 86400000) + 1;
     const weeksInPeriod = periodDays / 7;
-    const weeks = buildWeeks(periodStart, periodEnd, effectiveData.amexCutoff, effectiveData.lloydsCutoff);
+    const weeks = buildWeeks(periodStart, periodEnd, periodData.amexCutoff, periodData.lloydsCutoff);
+    // Scheduled pins are expanded into read-only virtual entries and folded into the derived data
+    // layer, so every downstream figure (week panels, totals, summary, export) treats them as
+    // entries — counting against the week they land in — while they're dropped from the flat pin
+    // total to avoid double-counting. Non-scheduled pins keep the flat whole-period behaviour.
+    // effectiveData keeps its name so all derivations below read the augmented data unchanged.
+    const pinEntries = expandScheduledPins(periodData.pins, weeks);
+    const effectiveData = {
+        ...periodData,
+        entries: [...periodData.entries, ...pinEntries],
+        pins: periodData.pins.filter(p => !isScheduledPin(p)),
+    };
     useEffect(() => {
         const idx = todayWeekIndex(weeks);
         setActiveWeek(idx);
@@ -484,8 +564,13 @@ function App() {
             // first month. A month's leftover is computed exactly like the header's
             // "remaining": its own monthlyBudget − personal spend (entries + pins) + credits.
             const monthSaved = (m) => {
-                const spentEntries = m.entries.filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0);
-                const spentPins = m.pins.filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
+                // Scheduled pins are counted as their per-occurrence week entries (so a weekly pin
+                // counts once per week), matching how the live period and week log count them.
+                const { start, end } = periodBounds(m.payYear, m.payMonth);
+                const mWeeks = buildWeeks(start, end, m.amexCutoff, m.lloydsCutoff);
+                const pinEntries = expandScheduledPins(m.pins, mWeeks);
+                const spentEntries = [...m.entries, ...pinEntries].filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0);
+                const spentPins = m.pins.filter(p => !isScheduledPin(p) && p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
                 const credits = (m.credits || []).reduce((s, c) => s + c.amount, 0);
                 return m.monthlyBudget - (spentEntries + spentPins) + credits;
             };
@@ -646,7 +731,7 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
             units.push({ kind: "split", id: e.splitGroupId, order: effOrder(e), group: entries.filter(x => x.splitGroupId === e.splitGroupId) });
         }
         else {
-            units.push({ kind: "single", id: e.id, order: effOrder(e), entry: e });
+            units.push({ kind: "single", id: e.id, order: effOrder(e), entry: e, pinned: !!e.pinned });
         }
     }
     for (const c of credits)
@@ -688,8 +773,11 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
     function commitReorder(finalUnits) {
         if (!finalUnits)
             return;
-        const values = finalUnits.map(u => u.order).sort((a, b) => b - a);
-        finalUnits.forEach((u, i) => {
+        // Pinned (scheduled-pin) rows are read-only and derived — never reorder or persist them,
+        // and keep their order values out of the redistribution pool.
+        const movable = finalUnits.filter(u => !u.pinned);
+        const values = movable.map(u => u.order).sort((a, b) => b - a);
+        movable.forEach((u, i) => {
             const newOrder = values[i];
             if (u.order === newOrder)
                 return;
@@ -758,6 +846,9 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
             return (React.createElement("div", { style: S.splitGroup }, unit.group.map((e, i) => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e), onEdit: () => onEditEntry(e), grouped: true, last: i === unit.group.length - 1, hideDelete: editMode }))));
         if (unit.kind === "credit")
             return React.createElement(CreditLine, { credit: unit.credit, onDel: () => onDelCredit(unit.credit.id), onEdit: () => onEditCredit(unit.credit), hideDelete: editMode });
+        // Scheduled-pin rows are read-only here (managed from the Pinned tab): no edit tap, no delete.
+        if (unit.pinned)
+            return React.createElement(EntryLine, { entry: unit.entry, hideDelete: true });
         return React.createElement(EntryLine, { entry: unit.entry, onDel: () => handleDelete(unit.entry), onEdit: () => onEditEntry(unit.entry), hideDelete: editMode });
     }
     return (React.createElement("div", null,
@@ -785,9 +876,11 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
                     rowRefs.current[unit.id] = el;
                 else
                     delete rowRefs.current[unit.id]; }, style: { display: "flex", alignItems: "center", gap: 6, ...(dragId === unit.id ? S.rowDragging : {}) } },
-                editMode && (React.createElement("button", { style: { ...S.checkbox, ...(selected.has(unit.id) ? S.checkboxOn : {}) }, onClick: () => toggleSelect(unit.id) }, selected.has(unit.id) ? "✓" : "")),
+                editMode && (unit.pinned
+                    ? React.createElement("span", { style: { ...S.checkbox, opacity: 0.25, cursor: "default" } })
+                    : React.createElement("button", { style: { ...S.checkbox, ...(selected.has(unit.id) ? S.checkboxOn : {}) }, onClick: () => toggleSelect(unit.id) }, selected.has(unit.id) ? "✓" : "")),
                 React.createElement("div", { style: { flex: 1, minWidth: 0 } }, renderUnitContent(unit)),
-                editMode && (React.createElement("button", { style: S.dragHandle, "aria-label": "Drag to reorder", onMouseDown: (e) => { e.preventDefault(); e.stopPropagation(); beginDrag(e.clientY, unit, false); }, onTouchStart: (e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, unit, true); } }, "\u2261"))))),
+                editMode && !unit.pinned && (React.createElement("button", { style: S.dragHandle, "aria-label": "Drag to reorder", onMouseDown: (e) => { e.preventDefault(); e.stopPropagation(); beginDrag(e.clientY, unit, false); }, onTouchStart: (e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, unit, true); } }, "\u2261"))))),
             units.length === 0 && React.createElement("div", { style: { color: "#64748b", fontSize: 13, padding: "12px 0" } }, "Nothing logged")),
         !editMode ? (React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
             React.createElement("button", { style: { ...S.actionBtn, flex: 1 }, onClick: onAddEntry }, "Log spend"),
@@ -835,6 +928,7 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
         React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[entry.method] || "#64748b" } }),
         React.createElement("span", { style: { flex: 1, color: col, fontSize: 13 } },
             entry.label || METHOD_NAME[entry.method] || entry.method,
+            entry.pinned && React.createElement("span", { style: { ...S.badge, background: "#0c4a6e", color: "#7dd3fc" } }, " \uD83D\uDCCC fixed"),
             entry.type === "business" && React.createElement("span", { style: S.badge }, " work"),
             entry.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " reimbursable"),
             entry.splitGroupId && entry.type === "personal" && React.createElement("span", { style: { ...S.badge, background: "#1e293b", color: "#94a3b8" } }, " split")),
@@ -866,10 +960,14 @@ function PinCard({ pin, onEdit, onDelete }) {
             React.createElement("span", { style: { flex: 1, fontWeight: 600, fontSize: 14, color: col } },
                 pin.label,
                 isB && React.createElement("span", { style: S.badge }, " work"),
-                isX && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " not me")),
+                isX && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " split")),
             React.createElement("button", { style: S.iconBtn, onClick: onEdit }, "\u270E"),
             React.createElement(ConfirmDeleteButton, { onConfirm: onDelete, style: { ...S.iconBtn, color: "#ef4444" } })),
         React.createElement("div", { style: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: isB ? "#f59e0b" : isX ? "#a78bfa" : METHOD_COLOR[pin.method] || "#e2e8f0", marginBottom: 4 } }, pin.amount ? fmt(pin.amount) : "—"),
+        isScheduledPin(pin) && React.createElement("div", { style: { fontSize: 11, color: "#7dd3fc", marginTop: 2 } },
+            "\uD83D\uDCCC ",
+            pin.freq === "weekly" ? `Every ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][pin.day]}` : `Monthly · day ${pin.day}`,
+            " \u00B7 in week log"),
         pin.note && React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 4 } }, pin.note)));
 }
 // ─── Method Selector ──────────────────────────────────────────────────────────
@@ -988,7 +1086,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
                 if (yourPortion > 0) {
                     onSave({ id: Math.random().toString(36).slice(2), amount: yourPortion, label: note.trim(), note: note.trim(), method, type: "personal", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId });
                 }
-                // The "not yours" portion is excluded from your spend total — same bucket as shared/not-me pins.
+                // The "not yours" portion is excluded from your spend total — same bucket as shared/split pins.
                 // This covers both work reimbursement and splitting a tab with friends; neither should
                 // touch your remaining budget, and neither should be conflated with actual work expenses.
                 onSave({ id: Math.random().toString(36).slice(2), amount: theirPortion, label: note.trim(), note: note.trim(), method, type: "excluded", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId });
@@ -1058,19 +1156,43 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
 }
 // ─── Pin Modal ────────────────────────────────────────────────────────────────
 function PinModal({ pin, onSave, onClose }) {
-    var _a;
+    var _a, _b, _c;
     const [label, setLabel] = useState((pin === null || pin === void 0 ? void 0 : pin.label) || "");
     const [amount, setAmount] = useState(((_a = pin === null || pin === void 0 ? void 0 : pin.amount) === null || _a === void 0 ? void 0 : _a.toString()) || "");
     const [method, setMethod] = useState(() => (pin && METHOD_NAME[pin.method]) ? pin.method : METHODS[0].id);
     const [type, setType] = useState((pin === null || pin === void 0 ? void 0 : pin.type) || "personal");
     const [note, setNote] = useState((pin === null || pin === void 0 ? void 0 : pin.note) || "");
+    // Scheduling. Keep the month-day and week-day choices in separate state so switching
+    // frequency back and forth doesn't lose the other selection. `day` on the saved pin is
+    // the day-of-month for monthly and the day-of-week (0=Sun) for weekly.
+    const [freq, setFreq] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) || "none");
+    const [dom, setDom] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) === "monthly" ? ((_b = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _b !== void 0 ? _b : 1) : 1);
+    const [dow, setDow] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) === "weekly" ? ((_c = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _c !== void 0 ? _c : 1) : 1);
+    const segBtn = (on) => ({ flex: 1, background: on ? "#1e293b" : "#0f172a", border: `1px solid ${on ? "#334155" : "#1e293b"}`, borderRadius: 8, color: on ? "#f1f5f9" : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
+    const dayBtn = (on) => ({ flex: 1, background: on ? "#0c4a6e" : "#0f172a", border: `1px solid ${on ? "#0369a1" : "#1e293b"}`, borderRadius: 8, color: on ? "#7dd3fc" : "#475569", padding: "7px 2px", fontSize: 11, fontWeight: 600, cursor: "pointer" });
+    const hint = { fontSize: 11, color: "#64748b", marginBottom: 6 };
     return (React.createElement(Modal, { onClose: onClose, title: pin ? "Edit" : "New pin" },
         React.createElement("input", { style: S.input, placeholder: "Label e.g. Gym", value: label, onChange: e => setLabel(e.target.value) }),
         React.createElement("input", { style: { ...S.input, marginBottom: 10 }, type: "number", inputMode: "decimal", placeholder: "Amount", value: amount, onChange: e => setAmount(e.target.value) }),
         React.createElement(MethodSelector, { value: method, onChange: setMethod }),
-        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["excluded", "Not me"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "excluded" ? "#a78bfa" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setType(v) }, l))),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["excluded", "Split"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "excluded" ? "#a78bfa" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setType(v) }, l))),
+        React.createElement("div", { style: hint }, "Populate into the week log"),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["none", "One-off"], ["monthly", "Monthly"], ["weekly", "Weekly"]].map(([v, l]) => React.createElement("button", { key: v, style: segBtn(freq === v), onClick: () => setFreq(v) }, l))),
+        freq === "monthly" && (React.createElement("div", { style: { marginBottom: 10 } },
+            React.createElement("div", { style: hint }, "On day of the month it falls"),
+            React.createElement("input", { style: { ...S.input, marginBottom: 0 }, type: "number", inputMode: "numeric", min: "1", max: "31", value: dom, onChange: e => setDom(Math.min(31, Math.max(1, parseInt(e.target.value, 10) || 1))) }))),
+        freq === "weekly" && (React.createElement("div", { style: { marginBottom: 10 } },
+            React.createElement("div", { style: hint }, "On this day, every week"),
+            React.createElement("div", { style: { display: "flex", gap: 4 } }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => React.createElement("button", { key: i, style: dayBtn(dow === i), onClick: () => setDow(i) }, d))))),
         React.createElement("textarea", { style: { ...S.input, height: 60, resize: "none" }, placeholder: "Note", value: note, onChange: e => setNote(e.target.value) }),
-        React.createElement("button", { style: { ...S.btn, background: "#0369a1", marginTop: 12 }, onClick: () => onSave({ id: (pin === null || pin === void 0 ? void 0 : pin.id) || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, note: note.trim() }) }, "Save")));
+        React.createElement("button", { style: { ...S.btn, background: "#0369a1", marginTop: 12 }, onClick: () => {
+                const base = { id: (pin === null || pin === void 0 ? void 0 : pin.id) || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, note: note.trim(), freq };
+                if (freq === "monthly")
+                    base.day = dom;
+                else if (freq === "weekly")
+                    base.day = dow;
+                onSave(base);
+            } }, "Save")));
 }
 // ─── Summary View ─────────────────────────────────────────────────────────────
 function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport }) {
@@ -1091,7 +1213,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         + state.pins.filter(p => p.type === "business").reduce((s, p) => s + (p.amount || 0), 0);
     const netTotal = totalSpent; // personal (entries + personal pins)
     const reimbursableTotal = grossSpend - netTotal; // business + split (entries + pins)
-    const splitTotal = reimbursableTotal - businessTotal; // excluded entries + any "not me" pins
+    const splitTotal = reimbursableTotal - businessTotal; // excluded entries + any "split" pins
     // Per-week, per-method breakdown
     const weekRows = weeks.map(w => {
         var _a;
@@ -1281,7 +1403,7 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
             lines.push("Pinned costs:");
             personalPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}]`));
             businessPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}, work]`));
-            excludedPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}, not me]`));
+            excludedPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}, split]`));
             lines.push("");
         }
         const methodLines = METHODS.filter(m => methodTotals[m.id] > 0);
