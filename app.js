@@ -224,6 +224,7 @@ function defaultState() {
         weeklyBudget: 260,
         paydayKind: "last-working",
         paydayDay: 25,
+        theme: "dark",
         lastMethod: "Amex",
         methods: DEFAULT_METHODS,
         helpHintSeen: false,
@@ -264,7 +265,7 @@ function reducer(s, a) {
             const newHistory = [...(s.monthHistory || []), archive].slice(-12);
             return { payYear: a.newYear, payMonth: a.newMonth, monthLabel: a.newLabel,
                 monthlyBudget: s.monthlyBudget, weeklyBudget: s.weeklyBudget,
-                paydayKind: s.paydayKind, paydayDay: s.paydayDay, pins: s.pins, methods: s.methods,
+                paydayKind: s.paydayKind, paydayDay: s.paydayDay, theme: s.theme, pins: s.pins, methods: s.methods,
                 lastMethod: s.lastMethod, monthHistory: newHistory,
                 entries: [], credits: [] };
         }
@@ -331,13 +332,13 @@ function HelpCard({ focus }) {
     }, [focus]);
     return (React.createElement("div", { ref: ref, style: S.settingsCard },
         React.createElement("button", { style: { background: "none", border: "none", width: "100%", padding: 0, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }, onClick: () => setExpanded(e => !e) },
-            React.createElement("span", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.04em" } }, "How it works"),
-            React.createElement("span", { style: { color: "#64748b", fontSize: 12 } }, expanded ? "▾" : "▸")),
-        expanded && (React.createElement("div", { style: { marginTop: 6 } }, HELP_TOPICS.map(([q, a], i) => (React.createElement("div", { key: i, style: { borderTop: i === 0 ? "none" : "1px solid #1e293b" } },
+            React.createElement("span", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.04em" } }, "How it works"),
+            React.createElement("span", { style: { color: "var(--text-secondary)", fontSize: 12 } }, expanded ? "▾" : "▸")),
+        expanded && (React.createElement("div", { style: { marginTop: 6 } }, HELP_TOPICS.map(([q, a], i) => (React.createElement("div", { key: i, style: { borderTop: i === 0 ? "none" : "1px solid var(--border)" } },
             React.createElement("button", { style: { background: "none", border: "none", width: "100%", padding: "10px 0", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, cursor: "pointer", textAlign: "left" }, onClick: () => setOpen(open === i ? null : i) },
-                React.createElement("span", { style: { fontSize: 13, fontWeight: 600, color: "#cbd5e1" } }, q),
-                React.createElement("span", { style: { color: "#475569", fontSize: 12, flexShrink: 0 } }, open === i ? "▾" : "▸")),
-            open === i && React.createElement("div", { style: { fontSize: 12, color: "#94a3b8", lineHeight: 1.6, padding: "0 0 12px" } }, a))))))));
+                React.createElement("span", { style: { fontSize: 13, fontWeight: 600, color: "var(--text-body)" } }, q),
+                React.createElement("span", { style: { color: "var(--text-muted)", fontSize: 12, flexShrink: 0 } }, open === i ? "▾" : "▸")),
+            open === i && React.createElement("div", { style: { fontSize: 12, color: "var(--text-tertiary)", lineHeight: 1.6, padding: "0 0 12px" } }, a))))))));
 }
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
@@ -398,6 +399,17 @@ function App() {
         return () => clearInterval(interval);
     }, [state.payYear, state.payMonth, state.paydayKind, state.paydayDay]);
     useEffect(() => { save(state); }, [state]);
+    // Applies the chosen theme to the whole document (the CSS variables driving every neutral
+    // colour live on :root, so this is the only DOM touch light mode needs) and tints the
+    // browser chrome to match. Runs post-unlock only — the lock screen and onboarding, which
+    // can't read encrypted state, stay on the dark theme they've always used.
+    useEffect(() => {
+        const theme = state.theme === "light" ? "light" : "dark";
+        document.documentElement.dataset.theme = theme;
+        const meta = document.querySelector('meta[name="theme-color"]');
+        if (meta)
+            meta.content = theme === "light" ? "#f8fafc" : "#030712";
+    }, [state.theme]);
     // Build calendar from payday — uses the viewed period's own pay dates and payday rule
     // when looking at the past, not today's live settings.
     //
@@ -568,7 +580,7 @@ function App() {
                         "d left")),
                 React.createElement("div", { style: S.dailyCard },
                     React.createElement("div", { style: S.dailyLabel }, "Per day \u00B7 month"),
-                    React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: dailyFromMonth < 20 ? "#ef4444" : "#94a3b8" } }, fmt(dailyFromMonth)),
+                    React.createElement("div", { style: { fontSize: 20, fontWeight: 700, color: dailyFromMonth < 20 ? "#ef4444" : "var(--text-tertiary)" } }, fmt(dailyFromMonth)),
                     React.createElement("div", { style: S.dailySub },
                         daysLeftInMonth,
                         "d left")))),
@@ -605,35 +617,35 @@ function App() {
             const totalSaved = rows.reduce((s, r) => s + r.saved, 0);
             const signed = (n) => (n < 0 ? "-" : "+") + fmt(n);
             return (React.createElement("div", { style: { padding: "12px 16px" } },
-                React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "20px", marginBottom: 12 } },
-                    React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginBottom: 4, textTransform: "uppercase" } }, "Total saved"),
+                React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "20px", marginBottom: 12 } },
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 4, textTransform: "uppercase" } }, "Total saved"),
                     React.createElement("div", { style: { fontSize: 36, fontWeight: 800, color: totalSaved >= 0 ? "#4ade80" : "#f87171", marginBottom: 8 } },
                         totalSaved < 0 ? "-" : "",
                         fmt(totalSaved)),
-                    React.createElement("div", { style: { fontSize: 12, color: "#64748b", lineHeight: 1.5 } },
+                    React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 } },
                         "Leftover budget carried over from completed months. ",
                         state.monthLabel,
                         "'s leftover is added to this once the month ends.")),
-                !viewingPast && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 12, padding: "12px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" } },
+                !viewingPast && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "12px 14px", marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center" } },
                     React.createElement("div", null,
-                        React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", fontWeight: 600 } },
+                        React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", fontWeight: 600 } },
                             state.monthLabel,
                             " ",
-                            React.createElement("span", { style: { color: "#64748b", fontWeight: 400 } }, "\u00B7 in progress")),
-                        React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 2 } },
+                            React.createElement("span", { style: { color: "var(--text-secondary)", fontWeight: 400 } }, "\u00B7 in progress")),
+                        React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 2 } },
                             "Adds to savings when ",
                             state.monthLabel,
                             " ends")),
-                    React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: remaining >= 0 ? "#94a3b8" : "#f87171" } }, signed(remaining)))),
-                React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px" } },
-                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Month by month"),
-                    rows.length === 0 ? (React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "4px 0", lineHeight: 1.5 } },
+                    React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: remaining >= 0 ? "var(--text-tertiary)" : "#f87171" } }, signed(remaining)))),
+                React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px" } },
+                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Month by month"),
+                    rows.length === 0 ? (React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "4px 0", lineHeight: 1.5 } },
                         "No completed months yet. Your first month's leftover shows up here once ",
                         state.monthLabel,
-                        " ends.")) : rows.map((r, i) => (React.createElement("div", { key: r.label, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: i < rows.length - 1 ? "1px solid #1e293b" : "none" } },
+                        " ends.")) : rows.map((r, i) => (React.createElement("div", { key: r.label, style: { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: i < rows.length - 1 ? "1px solid var(--border)" : "none" } },
                         React.createElement("div", null,
-                            React.createElement("div", { style: { fontSize: 13, color: "#e2e8f0", fontWeight: 600 } }, r.label),
-                            React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 1 } },
+                            React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)", fontWeight: 600 } }, r.label),
+                            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } },
                                 fmt(r.spent),
                                 " spent of ",
                                 fmt(r.budget))),
@@ -641,18 +653,26 @@ function App() {
         })(),
         tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true) })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
+            React.createElement("div", { style: S.settingsCard },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 2, textTransform: "uppercase" } }, "Appearance"),
+                        React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)" } },
+                            state.theme === "light" ? "Light" : "Dark",
+                            " mode")),
+                    React.createElement(ThemeToggle, { theme: state.theme || "dark", onToggle: () => dispatch({ type: "SETTINGS", patch: { theme: state.theme === "light" ? "dark" : "light" } }) }))),
             React.createElement(HelpCard, { focus: helpFocus }),
             React.createElement("div", { style: S.settingsCard },
-                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Budget"),
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Budget"),
                 React.createElement("div", { style: { marginBottom: 10 } },
-                    React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, "Monthly budget (\u00A3)"),
+                    React.createElement("label", { style: { fontSize: 12, color: "var(--text-secondary)", display: "block", marginBottom: 4 } }, "Monthly budget (\u00A3)"),
                     React.createElement("input", { key: `monthlyBudget-${state.monthlyBudget}`, style: S.input, type: "number", defaultValue: state.monthlyBudget, onBlur: e => { const v = parseFloat(e.target.value); if (!isNaN(v))
                             dispatch({ type: "SETTINGS", patch: { monthlyBudget: v, weeklyBudget: Math.round((v / weeksInPeriod) * 100) / 100 } }); } })),
                 React.createElement("div", { style: { marginBottom: 10 } },
-                    React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, "Weekly budget (\u00A3)"),
+                    React.createElement("label", { style: { fontSize: 12, color: "var(--text-secondary)", display: "block", marginBottom: 4 } }, "Weekly budget (\u00A3)"),
                     React.createElement("input", { key: `weeklyBudget-${state.weeklyBudget}`, style: S.input, type: "number", defaultValue: state.weeklyBudget, onBlur: e => { const v = parseFloat(e.target.value); if (!isNaN(v))
                             dispatch({ type: "SETTINGS", patch: { weeklyBudget: v, monthlyBudget: Math.round((v * weeksInPeriod) * 100) / 100 } }); } })),
-                React.createElement("div", { style: { fontSize: 11, color: "#475569" } },
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
                     "Monthly and weekly are linked across this ",
                     periodDays,
                     "-day period \u2014 changing one recalculates the other.")),
@@ -669,56 +689,56 @@ function App() {
                 const add = () => setMethods([...state.methods, { id: genId(), name: "New card", color: "#60a5fa" }]);
                 const anyInUse = state.methods.some(m => used.has(m.id));
                 return (React.createElement("div", { style: S.settingsCard },
-                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Payment methods"),
+                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Payment methods"),
                     state.methods.map(m => {
                         const canDelete = !used.has(m.id) && state.methods.length > 1;
                         return (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
-                            React.createElement("input", { type: "color", value: m.color, onChange: e => update(m.id, { color: e.target.value }), "aria-label": `${m.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid #1e293b", borderRadius: 8, background: "#0f172a", cursor: "pointer", flexShrink: 0 } }),
+                            React.createElement("input", { type: "color", value: m.color, onChange: e => update(m.id, { color: e.target.value }), "aria-label": `${m.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
                             React.createElement("input", { key: `mname-${m.id}-${m.name}`, defaultValue: m.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== m.name)
                                     update(m.id, { name: v });
                                 else if (!v)
                                     e.target.value = m.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
                             React.createElement("button", { onClick: () => { if (canDelete)
-                                    remove(m.id); }, disabled: !canDelete, title: used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "#334155", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")));
+                                    remove(m.id); }, disabled: !canDelete, title: used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")));
                     }),
-                    anyInUse && React.createElement("div", { style: { fontSize: 11, color: "#475569", marginTop: 2, marginBottom: 8 } }, "Types with logged transactions can't be removed."),
-                    React.createElement("button", { onClick: add, disabled: state.methods.length >= MAX_METHODS, style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", width: "100%", marginTop: 4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" } }, state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type")));
+                    anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Types with logged transactions can't be removed."),
+                    React.createElement("button", { onClick: add, disabled: state.methods.length >= MAX_METHODS, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" } }, state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type")));
             })(),
             React.createElement("div", { style: S.settingsCard },
-                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Pay period"),
-                React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", marginBottom: 10 } },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Pay period"),
+                React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10 } },
                     "Currently tracking ",
-                    React.createElement("strong", { style: { color: "#f1f5f9" } }, state.monthLabel),
+                    React.createElement("strong", { style: { color: "var(--text-heading)" } }, state.monthLabel),
                     ". A period starts on the previous month's payday and runs until this period's own payday \u2014 the tracker switches automatically the moment that payday arrives."),
                 (() => {
                     const kind = state.paydayKind || "last-working";
-                    const kindBtn = (on) => ({ background: on ? "#1e293b" : "#0f172a", border: `1px solid ${on ? "#334155" : "#1e293b"}`, borderRadius: 8, color: on ? "#f1f5f9" : "#475569", padding: "9px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
+                    const kindBtn = (on) => ({ background: on ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "9px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
                     return (React.createElement("div", { style: { marginBottom: 12 } },
-                        React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 6 } }, "Payday"),
+                        React.createElement("label", { style: { fontSize: 12, color: "var(--text-secondary)", display: "block", marginBottom: 6 } }, "Payday"),
                         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 } }, [["last-working", "Last working day"], ["last-friday", "Last Friday"], ["last-calendar", "Last calendar day"], ["fixed", "Fixed date"]].map(([v, l]) => (React.createElement("button", { key: v, style: kindBtn(kind === v), onClick: () => dispatch({ type: "SETTINGS", patch: { paydayKind: v } }) }, l)))),
                         kind === "fixed" && (React.createElement("div", { style: { marginBottom: 8 } },
-                            React.createElement("label", { style: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 4 } }, "Day of the month"),
+                            React.createElement("label", { style: { fontSize: 12, color: "var(--text-secondary)", display: "block", marginBottom: 4 } }, "Day of the month"),
                             React.createElement("input", { key: `payday-${state.paydayDay}`, style: { ...S.input, marginBottom: 0 }, type: "number", inputMode: "numeric", min: 1, max: 31, defaultValue: state.paydayDay || 25, onBlur: e => { const v = parseInt(e.target.value); if (!isNaN(v) && v >= 1 && v <= 31)
                                     dispatch({ type: "SETTINGS", patch: { paydayDay: v } }); } }))),
-                        React.createElement("div", { style: { fontSize: 11, color: "#475569", lineHeight: 1.5 } }, "Payday defines when a period starts and ends. Fixed dates falling on a weekend move to the working day before. Changing this redraws the current period's weeks \u2014 and if it moves the payday into the past, the tracker rolls into the next period, as it would on any payday.")));
+                        React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5 } }, "Payday defines when a period starts and ends. Fixed dates falling on a weekend move to the working day before. Changing this redraws the current period's weeks \u2014 and if it moves the payday into the past, the tracker rolls into the next period, as it would on any payday.")));
                 })(),
-                mostRecentArchiveIndex !== null ? (viewingPast ? (React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", width: "100%" }, onClick: () => setViewingPastIndex(null) },
+                mostRecentArchiveIndex !== null ? (viewingPast ? (React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: () => setViewingPastIndex(null) },
                     "\u2190 Return to current period (",
                     state.monthLabel,
-                    ")")) : (React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", width: "100%" }, onClick: () => setViewingPastIndex(mostRecentArchiveIndex) },
+                    ")")) : (React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: () => setViewingPastIndex(mostRecentArchiveIndex) },
                     "\u2190 Go back to ",
-                    state.monthHistory[mostRecentArchiveIndex].monthLabel))) : (React.createElement("div", { style: { fontSize: 12, color: "#475569" } }, "No previous period to go back to yet."))),
+                    state.monthHistory[mostRecentArchiveIndex].monthLabel))) : (React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)" } }, "No previous period to go back to yet."))),
             React.createElement("div", { style: S.settingsCard },
-                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Move to another device"),
-                React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", marginBottom: 10, lineHeight: 1.5 } }, "Each browser keeps its own separate data \u2014 so Safari, Chrome and the home-screen app each start fresh. Export your account here, then import it in the other browser or on a new phone to carry everything across."),
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Move to another device"),
+                React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Each browser keeps its own separate data \u2014 so Safari, Chrome and the home-screen app each start fresh. Export your account here, then import it in the other browser or on a new phone to carry everything across."),
                 React.createElement("div", { style: { display: "flex", gap: 8 } },
                     React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1 }, onClick: () => setShowBackup(true) }, "Export account"),
-                    React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", flex: 1 }, onClick: () => setShowImportAcct(true) }, "Import account"))),
+                    React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setShowImportAcct(true) }, "Import account"))),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#f87171", marginBottom: 10, textTransform: "uppercase" } }, "Reset"),
-                React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", marginBottom: 10, lineHeight: 1.5 } }, "Erase everything on this device \u2014 budget, transactions, history and your passphrase \u2014 and start over from setup. This can't be undone."),
+                React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Erase everything on this device \u2014 budget, transactions, history and your passphrase \u2014 and start over from setup. This can't be undone."),
                 !confirmWipe ? (React.createElement("button", { style: { ...S.btn, background: "#7f1d1d", border: "1px solid #b91c1c", width: "100%" }, onClick: () => setConfirmWipe(true) }, "Reset app & erase all data")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
-                    React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", flex: 1 }, onClick: () => setConfirmWipe(false) }, "Cancel"),
+                    React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirmWipe(false) }, "Cancel"),
                     React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe)
                             window.SpendVault.wipe(); } }, "Erase everything")))))),
         !viewingPast && (React.createElement("button", { "aria-label": "Quick add spend", onClick: () => setShowEntryFor(todayWeekIndex(weeks)), style: S.quickAdd }, "+")),
@@ -884,14 +904,14 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
     }
     return (React.createElement("div", null,
         React.createElement("div", { style: S.weekHeader },
-            React.createElement("span", { style: { fontWeight: 600, color: "#f1f5f9", fontSize: 14 } },
+            React.createElement("span", { style: { fontWeight: 600, color: "var(--text-heading)", fontSize: 14 } },
                 dateStr(week.start),
                 " \u2014 ",
                 dateStr(week.end))),
         React.createElement("div", { style: S.budgetCard },
             React.createElement("div", { style: S.bar },
                 React.createElement("div", { style: { ...S.barFill, width: pct + "%", background: over > 0 ? "#ef4444" : "#06b6d4" } })),
-            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 6, color: "#94a3b8" } },
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 6, color: "var(--text-tertiary)" } },
                 React.createElement("span", null, fmt(spent)),
                 React.createElement("span", null,
                     fmt(Math.max(weeklyBudget - spent, 0)),
@@ -912,12 +932,12 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
                     : React.createElement("button", { style: { ...S.checkbox, ...(selected.has(unit.id) ? S.checkboxOn : {}) }, onClick: () => toggleSelect(unit.id) }, selected.has(unit.id) ? "✓" : "")),
                 React.createElement("div", { style: { flex: 1, minWidth: 0 } }, renderUnitContent(unit)),
                 editMode && !unit.pinned && (React.createElement("button", { style: S.dragHandle, "aria-label": "Drag to reorder", onMouseDown: (e) => { e.preventDefault(); e.stopPropagation(); beginDrag(e.clientY, unit, false); }, onTouchStart: (e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, unit, true); } }, "\u2261"))))),
-            units.length === 0 && React.createElement("div", { style: { color: "#64748b", fontSize: 13, padding: "12px 0" } }, "Nothing logged")),
+            units.length === 0 && React.createElement("div", { style: { color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" } }, "Nothing logged")),
         !editMode ? (React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
             React.createElement("button", { style: { ...S.actionBtn, flex: 1 }, onClick: onAddEntry }, "Log spend"),
             units.length > 0 && React.createElement("button", { style: S.editToggle, onClick: () => setEditMode(true) }, "Edit"))) : (React.createElement("div", { style: S.bulkDelBar },
             React.createElement("button", { style: S.editToggle, onClick: exitEdit }, "Done"),
-            React.createElement("div", { style: { flex: 1, fontSize: 12, color: "#64748b", textAlign: "center" } }, "Drag \u2261 to reorder"),
+            React.createElement("div", { style: { flex: 1, fontSize: 12, color: "var(--text-secondary)", textAlign: "center" } }, "Drag \u2261 to reorder"),
             selected.size > 0 && (confirmBulk
                 ? React.createElement("button", { style: { ...S.btn, background: "#dc2626", padding: "10px 14px", fontSize: 13 }, onClick: bulkDelete },
                     "Delete ",
@@ -926,6 +946,14 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
                 : React.createElement("button", { style: { ...S.btn, background: "#7f1d1d", border: "1px solid #b91c1c", padding: "10px 14px", fontSize: 13 }, onClick: () => setConfirmBulk(true) },
                     "Delete ",
                     selected.size))))));
+}
+// ─── Theme Toggle ─────────────────────────────────────────────────────────────
+// A classic sun/moon switch: a single thumb carries whichever glyph is active and slides
+// between the two ends of the track (moon/dark on the left, sun/light on the right).
+function ThemeToggle({ theme, onToggle }) {
+    const isLight = theme === "light";
+    return (React.createElement("button", { role: "switch", "aria-checked": isLight, "aria-label": isLight ? "Switch to dark mode" : "Switch to light mode", onClick: onToggle, style: { position: "relative", width: 56, height: 30, borderRadius: 15, border: "1px solid var(--border-strong)", background: "var(--surface-2)", cursor: "pointer", padding: 0, flexShrink: 0 } },
+        React.createElement("span", { "aria-hidden": "true", style: { position: "absolute", top: 2, left: isLight ? 28 : 2, width: 24, height: 24, borderRadius: "50%", background: "var(--surface)", border: "1px solid var(--border-strong)", boxShadow: "0 1px 3px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, lineHeight: 1, transition: "left 0.2s ease" } }, isLight ? "☀️" : "🌙")));
 }
 // ─── Confirm Delete Button ────────────────────────────────────────────────────
 // Tapping × turns it into a red "confirm?" for ~3s; a second tap deletes.
@@ -954,15 +982,15 @@ function ConfirmDeleteButton({ onConfirm, style }) {
 }
 // ─── Entry Line ───────────────────────────────────────────────────────────────
 function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
-    const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "#e2e8f0";
+    const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "var(--text-primary)";
     return (React.createElement("div", { onClick: onEdit, style: { ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom: "none" } : {}), cursor: onEdit ? "pointer" : "default" } },
-        React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[entry.method] || "#64748b" } }),
+        React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[entry.method] || "var(--text-secondary)" } }),
         React.createElement("span", { style: { flex: 1, color: col, fontSize: 13 } },
             entry.label || METHOD_NAME[entry.method] || entry.method,
             entry.pinned && React.createElement("span", { style: { ...S.badge, background: "#0c4a6e", color: "#7dd3fc" } }, " \uD83D\uDCCC fixed"),
             entry.type === "business" && React.createElement("span", { style: S.badge }, " work"),
             entry.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " reimbursable"),
-            entry.splitGroupId && entry.type === "personal" && React.createElement("span", { style: { ...S.badge, background: "#1e293b", color: "#94a3b8" } }, " split")),
+            entry.splitGroupId && entry.type === "personal" && React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, " split")),
         React.createElement("span", { style: { color: col, fontWeight: 600, fontSize: 13 } }, fmt(entry.amount)),
         !hideDelete && React.createElement(ConfirmDeleteButton, { onConfirm: onDel, style: S.delBtn })));
 }
@@ -972,7 +1000,7 @@ function CreditLine({ credit, onDel, onEdit, hideDelete }) {
         React.createElement("span", { style: { ...S.dot, background: "#22c55e" } }),
         React.createElement("span", { style: { flex: 1, color: "#22c55e", fontSize: 13 } },
             credit.label || "Credit",
-            credit.from && React.createElement("span", { style: { color: "#64748b" } },
+            credit.from && React.createElement("span", { style: { color: "var(--text-secondary)" } },
                 " from ",
                 credit.from)),
         React.createElement("span", { style: { color: "#22c55e", fontWeight: 600, fontSize: 13 } },
@@ -984,22 +1012,22 @@ function CreditLine({ credit, onDel, onEdit, hideDelete }) {
 function PinCard({ pin, onEdit, onDelete }) {
     const isB = pin.type === "business";
     const isX = pin.type === "excluded";
-    const col = isB ? "#f59e0b" : isX ? "#a78bfa" : "#f1f5f9";
+    const col = isB ? "#f59e0b" : isX ? "#a78bfa" : "var(--text-heading)";
     return (React.createElement("div", { style: S.pinCard },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
-            React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[pin.method] || "#64748b" } }),
+            React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[pin.method] || "var(--text-secondary)" } }),
             React.createElement("span", { style: { flex: 1, fontWeight: 600, fontSize: 14, color: col } },
                 pin.label,
                 isB && React.createElement("span", { style: S.badge }, " work"),
                 isX && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " split")),
             React.createElement("button", { style: S.iconBtn, onClick: onEdit }, "\u270E"),
             React.createElement(ConfirmDeleteButton, { onConfirm: onDelete, style: { ...S.iconBtn, color: "#ef4444" } })),
-        React.createElement("div", { style: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: isB ? "#f59e0b" : isX ? "#a78bfa" : METHOD_COLOR[pin.method] || "#e2e8f0", marginBottom: 4 } }, pin.amount ? fmt(pin.amount) : "—"),
+        React.createElement("div", { style: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: isB ? "#f59e0b" : isX ? "#a78bfa" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom: 4 } }, pin.amount ? fmt(pin.amount) : "—"),
         isScheduledPin(pin) && React.createElement("div", { style: { fontSize: 11, color: "#7dd3fc", marginTop: 2 } },
             "\uD83D\uDCCC ",
             pin.freq === "weekly" ? `Every ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][pin.day]}` : `Monthly · day ${pin.day}`,
             " \u00B7 in week log"),
-        pin.note && React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 4 } }, pin.note)));
+        pin.note && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 4 } }, pin.note)));
 }
 // ─── Method Selector ──────────────────────────────────────────────────────────
 // The payment-type chooser used by both the log and pin modals. Renders the user's payment
@@ -1016,9 +1044,9 @@ function MethodSelector({ value, onChange, dimmed }) {
         React.createElement("div", { ref: ref, onScroll: check, style: { display: "flex", gap: 6, overflowX: "auto", scrollbarWidth: "none" } }, METHODS.map(m => {
             const on = value === m.id;
             const c = chipColors(m.color);
-            return React.createElement("button", { key: m.id, onClick: () => onChange(m.id), title: m.name, style: { flex: "0 0 calc((100% - 18px) / 4)", background: on ? c.bg : "#0f172a", border: `1px solid ${on ? c.border : "#1e293b"}`, borderRadius: 8, color: on ? c.text : "#475569", padding: "10px 2px", fontSize: 12, fontWeight: on ? 700 : 500, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, m.name);
+            return React.createElement("button", { key: m.id, onClick: () => onChange(m.id), title: m.name, style: { flex: "0 0 calc((100% - 18px) / 4)", background: on ? c.bg : "var(--surface)", border: `1px solid ${on ? c.border : "var(--border)"}`, borderRadius: 8, color: on ? c.text : "var(--text-muted)", padding: "10px 2px", fontSize: 12, fontWeight: on ? 700 : 500, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, m.name);
         })),
-        moreRight && React.createElement("div", { "aria-hidden": "true", style: { position: "absolute", top: 0, bottom: 0, right: 0, width: 24, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 2, pointerEvents: "none", color: "#94a3b8", fontSize: 12, background: "linear-gradient(to right, rgba(15,23,42,0), #0f172a 70%)" } }, "\u25B8")));
+        moreRight && React.createElement("div", { "aria-hidden": "true", style: { position: "absolute", top: 0, bottom: 0, right: 0, width: 24, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 2, pointerEvents: "none", color: "var(--text-tertiary)", fontSize: 12, background: "linear-gradient(to right, rgba(15,23,42,0), var(--surface) 70%)" } }, "\u25B8")));
 }
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
 function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
@@ -1139,7 +1167,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
         resetAfterSave();
     }
     const digits = [[7, 8, 9], [4, 5, 6], [1, 2, 3], ["00", 0, "⌫"]];
-    const subheading = { fontSize: 12, color: "#64748b", marginBottom: 6, fontWeight: 500 };
+    const subheading = { fontSize: 12, color: "var(--text-secondary)", marginBottom: 6, fontWeight: 500 };
     // In edit mode, only offer the classifications it makes sense to switch between: a normal entry
     // can flip personal↔work; a split half or a credit keeps its kind (so its bucket stays coherent).
     const classOptions = isEdit
@@ -1167,23 +1195,23 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
             "\u2013",
             dateStr(w.end))))));
     return (React.createElement(Modal, { onClose: onClose, title: title },
-        React.createElement("div", { style: { background: "#1e293b", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "#334155"}`, opacity: isSplitEdit ? 0.7 : 1 } },
+        React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "var(--border-strong)"}`, opacity: isSplitEdit ? 0.7 : 1 } },
             displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
-            React.createElement("div", { style: { fontSize: displayStr.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#4ade80" : "#f1f5f9" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`)),
+            React.createElement("div", { style: { fontSize: displayStr.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#4ade80" : "var(--text-heading)" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`)),
         !editCredit && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Payment type"),
             React.createElement(MethodSelector, { value: method, onChange: setMethod, dimmed: type === "credit" })),
         classOptions.length > 0 && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Classification"),
-            React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#4ade80" : v === "split" ? "#d8b4fe" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
+            React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#4ade80" : v === "split" ? "#d8b4fe" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
         type === "split" && !isEdit && (React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", marginBottom: 10, lineHeight: 1.5 } }, splitStage === "total"
             ? "Enter the full amount you paid, then continue."
             : "Enter just the portion that isn't yours — work reimbursement, a friend's share of the bill, etc. The rest stays personal.")),
-        React.createElement("button", { style: { background: "none", border: "none", color: showNote ? "#60a5fa" : "#64748b", fontSize: 12, cursor: "pointer", padding: "0 0 8px", textAlign: "left", width: "100%" }, onClick: () => setShowNote(p => !p) }, showNote ? "▾ Hide note" : "▸ Add a note"),
-        showNote && React.createElement("input", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: "#f1f5f9", padding: "8px 12px", marginBottom: 10, fontSize: 13, width: "100%", boxSizing: "border-box", outline: "none" }, placeholder: "e.g. golf, birthday", value: note, onChange: e => setNote(e.target.value), autoFocus: true }),
+        React.createElement("button", { style: { background: "none", border: "none", color: showNote ? "#60a5fa" : "var(--text-secondary)", fontSize: 12, cursor: "pointer", padding: "0 0 8px", textAlign: "left", width: "100%" }, onClick: () => setShowNote(p => !p) }, showNote ? "▾ Hide note" : "▸ Add a note"),
+        showNote && React.createElement("input", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-heading)", padding: "8px 12px", marginBottom: 10, fontSize: 13, width: "100%", boxSizing: "border-box", outline: "none" }, placeholder: "e.g. golf, birthday", value: note, onChange: e => setNote(e.target.value), autoFocus: true }),
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6 } }, digits.map((row, ri) => (React.createElement(React.Fragment, null,
-            row.map((d, i) => React.createElement("button", { key: `${ri}-${i}`, style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: d === "⌫" ? "#ef4444" : "#cbd5e1", fontSize: d === "⌫" ? 18 : 20, fontWeight: 600, padding: "14px 0", cursor: "pointer", opacity: isSplitEdit ? 0.4 : 1 }, onClick: () => d === "⌫" ? pressDelete() : pressDigit(d) }, d)),
-            ri === 0 && React.createElement("button", { style: { gridRow: "span 4", background: amount > 0 ? mc.bg : "#0f172a", border: `1px solid ${amount > 0 ? mc.border : "#1e293b"}`, borderRadius: 8, color: amount > 0 ? mc.text : "#475569", fontSize: 18, fontWeight: 800, cursor: amount > 0 ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: pressEnter }, enterGlyph)))))));
+            row.map((d, i) => React.createElement("button", { key: `${ri}-${i}`, style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: d === "⌫" ? "#ef4444" : "var(--text-body)", fontSize: d === "⌫" ? 18 : 20, fontWeight: 600, padding: "14px 0", cursor: "pointer", opacity: isSplitEdit ? 0.4 : 1 }, onClick: () => d === "⌫" ? pressDelete() : pressDigit(d) }, d)),
+            ri === 0 && React.createElement("button", { style: { gridRow: "span 4", background: amount > 0 ? mc.bg : "var(--surface)", border: `1px solid ${amount > 0 ? mc.border : "var(--border)"}`, borderRadius: 8, color: amount > 0 ? mc.text : "var(--text-muted)", fontSize: 18, fontWeight: 800, cursor: amount > 0 ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: pressEnter }, enterGlyph)))))));
 }
 // ─── Pin Modal ────────────────────────────────────────────────────────────────
 function PinModal({ pin, onSave, onClose }) {
@@ -1199,14 +1227,14 @@ function PinModal({ pin, onSave, onClose }) {
     const [freq, setFreq] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) || "none");
     const [dom, setDom] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) === "monthly" ? ((_b = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _b !== void 0 ? _b : 1) : 1);
     const [dow, setDow] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) === "weekly" ? ((_c = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _c !== void 0 ? _c : 1) : 1);
-    const segBtn = (on) => ({ flex: 1, background: on ? "#1e293b" : "#0f172a", border: `1px solid ${on ? "#334155" : "#1e293b"}`, borderRadius: 8, color: on ? "#f1f5f9" : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
-    const dayBtn = (on) => ({ flex: 1, background: on ? "#0c4a6e" : "#0f172a", border: `1px solid ${on ? "#0369a1" : "#1e293b"}`, borderRadius: 8, color: on ? "#7dd3fc" : "#475569", padding: "7px 2px", fontSize: 11, fontWeight: 600, cursor: "pointer" });
-    const hint = { fontSize: 11, color: "#64748b", marginBottom: 6 };
+    const segBtn = (on) => ({ flex: 1, background: on ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
+    const dayBtn = (on) => ({ flex: 1, background: on ? "#0c4a6e" : "var(--surface)", border: `1px solid ${on ? "#0369a1" : "var(--border)"}`, borderRadius: 8, color: on ? "#7dd3fc" : "var(--text-muted)", padding: "7px 2px", fontSize: 11, fontWeight: 600, cursor: "pointer" });
+    const hint = { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 };
     return (React.createElement(Modal, { onClose: onClose, title: pin ? "Edit" : "New pin" },
         React.createElement("input", { style: S.input, placeholder: "Label e.g. Gym", value: label, onChange: e => setLabel(e.target.value) }),
         React.createElement("input", { style: { ...S.input, marginBottom: 10 }, type: "number", inputMode: "decimal", placeholder: "Amount", value: amount, onChange: e => setAmount(e.target.value) }),
         React.createElement(MethodSelector, { value: method, onChange: setMethod }),
-        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["excluded", "Split"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "#1e293b" : "#0f172a", border: `1px solid ${type === v ? "#334155" : "#1e293b"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "excluded" ? "#a78bfa" : "#f1f5f9") : "#475569", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setType(v) }, l))),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["excluded", "Split"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "excluded" ? "#a78bfa" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setType(v) }, l))),
         React.createElement("div", { style: hint }, "Populate into the week log"),
         React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["none", "One-off"], ["monthly", "Monthly"], ["weekly", "Weekly"]].map(([v, l]) => React.createElement("button", { key: v, style: segBtn(freq === v), onClick: () => setFreq(v) }, l))),
         freq === "monthly" && (React.createElement("div", { style: { marginBottom: 10 } },
@@ -1280,73 +1308,73 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     const sourcePct = totalSpent > 0 ? Math.round((totalPinned / totalSpent) * 100) : 0;
     return (React.createElement("div", { style: { padding: "12px 16px" } },
         React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 10 } },
-            React.createElement("button", { style: { background: "#1e293b", border: "1px solid #334155", borderRadius: 8, color: "#94a3b8", padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 500 }, onClick: onExport }, "\u2197 Export")),
-        React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "18px", marginBottom: 12 } },
-            React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginBottom: 6, textTransform: "uppercase" } }, "Month overview"),
+            React.createElement("button", { style: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 500 }, onClick: onExport }, "\u2197 Export")),
+        React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "18px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6, textTransform: "uppercase" } }, "Month overview"),
             React.createElement("div", { style: { fontSize: 32, fontWeight: 800, color: remaining < 0 ? "#ef4444" : remaining < state.monthlyBudget * 0.15 ? "#f97316" : "#22c55e", marginBottom: 12 } }, fmt(remaining)),
-            React.createElement("div", { style: { fontSize: 12, color: "#cbd5e1" } },
+            React.createElement("div", { style: { fontSize: 12, color: "var(--text-body)" } },
                 fmt(totalSpent),
                 " spent of ",
                 fmt(state.monthlyBudget))),
-        reimbursableTotal > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
-            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Gross vs net"),
+        reimbursableTotal > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Gross vs net"),
             businessTotal > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
                 React.createElement("span", { style: { color: "#f59e0b" } }, "Business spend"),
                 React.createElement("span", { style: { color: "#f59e0b", fontWeight: 600 } }, fmt(businessTotal)))),
             splitTotal > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
                 React.createElement("span", { style: { color: "#a78bfa" } }, "Split spend"),
                 React.createElement("span", { style: { color: "#a78bfa", fontWeight: 600 } }, fmt(splitTotal)))),
-            React.createElement("div", { style: { borderTop: "1px solid #1e293b", marginTop: 6, display: "flex", justifyContent: "space-between", padding: "6px 0 5px" } },
-                React.createElement("span", { style: { color: "#cbd5e1", fontSize: 13, fontWeight: 600 } }, "Gross spend across all cards"),
-                React.createElement("span", { style: { color: "#f1f5f9", fontWeight: 700, fontSize: 13 } }, fmt(grossSpend))),
+            React.createElement("div", { style: { borderTop: "1px solid var(--border)", marginTop: 6, display: "flex", justifyContent: "space-between", padding: "6px 0 5px" } },
+                React.createElement("span", { style: { color: "var(--text-body)", fontSize: 13, fontWeight: 600 } }, "Gross spend across all cards"),
+                React.createElement("span", { style: { color: "var(--text-heading)", fontWeight: 700, fontSize: 13 } }, fmt(grossSpend))),
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
-                React.createElement("span", { style: { color: "#94a3b8" } }, "Reimbursable spend"),
-                React.createElement("span", { style: { color: "#94a3b8", fontWeight: 600 } },
+                React.createElement("span", { style: { color: "var(--text-tertiary)" } }, "Reimbursable spend"),
+                React.createElement("span", { style: { color: "var(--text-tertiary)", fontWeight: 600 } },
                     "\u2212 ",
                     fmt(reimbursableTotal))),
-            React.createElement("div", { style: { borderTop: "1px solid #1e293b", marginTop: 6, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "baseline" } },
-                React.createElement("span", { style: { color: "#f1f5f9", fontSize: 13, fontWeight: 700 } }, "Net spend"),
-                React.createElement("span", { style: { color: "#f1f5f9", fontWeight: 800, fontSize: 15 } }, fmt(netTotal))))),
-        React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
-            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 2, textTransform: "uppercase" } }, "By card \u00B7 as charged"),
-            React.createElement("div", { style: { fontSize: 11, color: "#475569", marginBottom: 10 } }, "Matches your card statement"),
-            METHODS.filter(m => grossByMethod[m.id] > 0).map(m => (React.createElement("button", { key: m.id, onClick: () => setMethodDetail(m.id), style: { width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 0", background: "none", border: "none", borderBottom: "1px solid #1e293b", cursor: "pointer", textAlign: "left" } },
+            React.createElement("div", { style: { borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "baseline" } },
+                React.createElement("span", { style: { color: "var(--text-heading)", fontSize: 13, fontWeight: 700 } }, "Net spend"),
+                React.createElement("span", { style: { color: "var(--text-heading)", fontWeight: 800, fontSize: 15 } }, fmt(netTotal))))),
+        React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 2, textTransform: "uppercase" } }, "By card \u00B7 as charged"),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginBottom: 10 } }, "Matches your card statement"),
+            METHODS.filter(m => grossByMethod[m.id] > 0).map(m => (React.createElement("button", { key: m.id, onClick: () => setMethodDetail(m.id), style: { width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "9px 0", background: "none", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer", textAlign: "left" } },
                 React.createElement("span", { style: { ...S.dot, background: m.color } }),
-                React.createElement("span", { style: { flex: 1, fontSize: 13, color: "#cbd5e1" } }, m.name),
+                React.createElement("span", { style: { flex: 1, fontSize: 13, color: "var(--text-body)" } }, m.name),
                 React.createElement("span", { style: { fontWeight: 600, color: m.color, fontSize: 13 } }, fmt(grossByMethod[m.id])),
-                React.createElement("span", { style: { color: "#94a3b8", fontSize: 20, fontWeight: 700, lineHeight: 1 } }, "\u203A")))),
-            METHODS.every(m => grossByMethod[m.id] === 0) && React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "4px 0" } }, "No spend logged yet")),
-        React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
-            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Weekly breakdown"),
-            weekRows.map(({ week, total, byMethod, budget }) => (React.createElement("div", { key: week.index, style: { marginBottom: week.index < weeks.length ? 12 : 0, paddingBottom: week.index < weeks.length ? 12 : 0, borderBottom: week.index < weeks.length ? "1px solid #1e293b" : "none" } },
+                React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 20, fontWeight: 700, lineHeight: 1 } }, "\u203A")))),
+            METHODS.every(m => grossByMethod[m.id] === 0) && React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "4px 0" } }, "No spend logged yet")),
+        React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Weekly breakdown"),
+            weekRows.map(({ week, total, byMethod, budget }) => (React.createElement("div", { key: week.index, style: { marginBottom: week.index < weeks.length ? 12 : 0, paddingBottom: week.index < weeks.length ? 12 : 0, borderBottom: week.index < weeks.length ? "1px solid var(--border)" : "none" } },
                 React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 } },
-                    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "#f1f5f9" } },
+                    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-heading)" } },
                         "Week ",
                         week.index),
-                    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: total > budget ? "#ef4444" : "#cbd5e1" } },
+                    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: total > budget ? "#ef4444" : "var(--text-body)" } },
                         fmt(total),
                         " ",
-                        React.createElement("span", { style: { color: "#64748b", fontWeight: 400 } },
+                        React.createElement("span", { style: { color: "var(--text-secondary)", fontWeight: 400 } },
                             "/ ",
                             fmt(budget)))),
                 React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 } },
-                    METHODS.filter(m => byMethod[m.id] > 0).map(m => (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "#94a3b8" } },
+                    METHODS.filter(m => byMethod[m.id] > 0).map(m => (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-tertiary)" } },
                         React.createElement("span", { style: { ...S.dot, background: m.color } }),
                         m.name,
                         " ",
                         fmt(byMethod[m.id])))),
-                    METHODS.every(m => byMethod[m.id] === 0) && React.createElement("span", { style: { fontSize: 11, color: "#475569" } }, "Nothing logged")))))),
-        allSpendItems.length > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
-            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Largest spends"),
-            allSpendItems.map((item, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid #1e293b" : "none" } },
-                React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[item.method] || "#64748b" } }),
-                React.createElement("span", { style: { flex: 1, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "#cbd5e1" } },
+                    METHODS.every(m => byMethod[m.id] === 0) && React.createElement("span", { style: { fontSize: 11, color: "var(--text-muted)" } }, "Nothing logged")))))),
+        allSpendItems.length > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Largest spends"),
+            allSpendItems.map((item, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid var(--border)" : "none" } },
+                React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[item.method] || "var(--text-secondary)" } }),
+                React.createElement("span", { style: { flex: 1, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" } },
                     item.desc,
                     item.type === "business" && React.createElement("span", { style: S.badge }, " work")),
-                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "#e2e8f0" } }, fmt(item.amount))))))),
-        totalSpent > 0 && totalPinned > 0 && totalEntries > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px", marginBottom: 12 } },
-            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#64748b", marginBottom: 10, textTransform: "uppercase" } }, "Spend source"),
-            React.createElement("div", { style: { height: 6, background: "#1e293b", borderRadius: 3, overflow: "hidden", marginBottom: 8, display: "flex" } },
+                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(item.amount))))))),
+        totalSpent > 0 && totalPinned > 0 && totalEntries > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Spend source"),
+            React.createElement("div", { style: { height: 6, background: "var(--surface-2)", borderRadius: 3, overflow: "hidden", marginBottom: 8, display: "flex" } },
                 React.createElement("div", { style: { height: "100%", width: sourcePct + "%", background: "#0369a1" } }),
                 React.createElement("div", { style: { height: "100%", width: (100 - sourcePct) + "%", background: "#06b6d4" } })),
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11 } },
@@ -1357,7 +1385,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                     "Quick-logged ",
                     fmt(totalEntries),
                     " \u25CF")))),
-        totalCredits > 0 && (React.createElement("div", { style: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 14, padding: "14px" } },
+        totalCredits > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px" } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#22c55e", marginBottom: 8, textTransform: "uppercase" } }, "Credits"),
             React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#4ade80" } },
                 "+",
@@ -1370,29 +1398,29 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
     const reimbursable = gross - net;
     return (React.createElement(Modal, { onClose: onClose, title: `${METHOD_NAME[method] || method} transactions` },
         React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } },
-            React.createElement("div", { style: { flex: 1, background: "#1e293b", borderRadius: 8, padding: "8px 10px" } },
-                React.createElement("div", { style: { fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.03em" } }, "Gross \u00B7 as charged"),
+            React.createElement("div", { style: { flex: 1, background: "var(--surface-2)", borderRadius: 8, padding: "8px 10px" } },
+                React.createElement("div", { style: { fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em" } }, "Gross \u00B7 as charged"),
                 React.createElement("div", { style: { fontSize: 17, fontWeight: 800, color: col } }, fmt(gross))),
-            React.createElement("div", { style: { flex: 1, background: "#1e293b", borderRadius: 8, padding: "8px 10px" } },
-                React.createElement("div", { style: { fontSize: 10, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.03em" } }, "Net \u00B7 your share"),
-                React.createElement("div", { style: { fontSize: 17, fontWeight: 800, color: "#f1f5f9" } }, fmt(net)))),
+            React.createElement("div", { style: { flex: 1, background: "var(--surface-2)", borderRadius: 8, padding: "8px 10px" } },
+                React.createElement("div", { style: { fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: "0.03em" } }, "Net \u00B7 your share"),
+                React.createElement("div", { style: { fontSize: 17, fontWeight: 800, color: "var(--text-heading)" } }, fmt(net)))),
         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, padding: "0 2px" } },
-            React.createElement("span", { style: { fontSize: 12, color: "#64748b" } },
+            React.createElement("span", { style: { fontSize: 12, color: "var(--text-secondary)" } },
                 transactions.length,
                 " transaction",
                 transactions.length === 1 ? "" : "s"),
-            reimbursable > 0.005 && React.createElement("span", { style: { fontSize: 11, color: "#94a3b8" } },
+            reimbursable > 0.005 && React.createElement("span", { style: { fontSize: 11, color: "var(--text-tertiary)" } },
                 fmt(reimbursable),
                 " reimbursable")),
         React.createElement("div", { style: { maxHeight: 360, overflowY: "auto" } },
-            transactions.length === 0 && React.createElement("div", { style: { color: "#475569", fontSize: 13, padding: "12px 0", textAlign: "center" } }, "No transactions yet"),
-            transactions.map((t, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid #1e293b" : "none" } },
+            transactions.length === 0 && React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "12px 0", textAlign: "center" } }, "No transactions yet"),
+            transactions.map((t, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none" } },
                 React.createElement("div", { style: { flex: 1 } },
-                    React.createElement("div", { style: { fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : "#e2e8f0" } },
+                    React.createElement("div", { style: { fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : "var(--text-primary)" } },
                         t.desc,
                         t.type === "business" && React.createElement("span", { style: S.badge }, " work"),
                         t.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " reimbursable")),
-                    t.date && React.createElement("div", { style: { fontSize: 11, color: "#64748b", marginTop: 1 } }, dateStr(new Date(t.date)))),
+                    t.date && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } }, dateStr(new Date(t.date)))),
                 React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : col } }, fmt(t.amount))))))));
 }
 // ─── Export Modal ─────────────────────────────────────────────────────────────
@@ -1449,7 +1477,7 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
         navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
     }
     return (React.createElement(Modal, { onClose: onClose, title: "Export" },
-        React.createElement("div", { style: { background: "#030712", border: "1px solid #1e293b", borderRadius: 8, padding: "12px", fontFamily: "monospace", fontSize: 11, color: "#94a3b8", whiteSpace: "pre-wrap", maxHeight: 360, overflowY: "auto", marginBottom: 12, lineHeight: 1.6 } }, text),
+        React.createElement("div", { style: { background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "12px", fontFamily: "monospace", fontSize: 11, color: "var(--text-tertiary)", whiteSpace: "pre-wrap", maxHeight: 360, overflowY: "auto", marginBottom: 12, lineHeight: 1.6 } }, text),
         React.createElement("button", { style: { ...S.btn, background: copied ? "#16a34a" : "#0369a1", width: "100%" }, onClick: copy }, copied ? "✓ Copied" : "Copy to clipboard")));
 }
 // ─── Account backup: export (encrypted, portable) ─────────────────────────────
@@ -1487,15 +1515,15 @@ function BackupModal({ onClose }) {
         setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
     return (React.createElement(Modal, { onClose: onClose, title: "Export account" },
-        React.createElement("div", { style: { fontSize: 13, color: "#cbd5e1", lineHeight: 1.5, marginBottom: 12 } },
+        React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", lineHeight: 1.5, marginBottom: 12 } },
             "This is your ",
             React.createElement("strong", null, "encrypted"),
             " account \u2014 it can only be opened with your passphrase or recovery code, so it's safe to save or send to yourself. Import it in another browser or on a new phone to carry everything across."),
         err && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10 } }, err),
-        React.createElement("div", { style: { background: "#030712", border: "1px solid #1e293b", borderRadius: 8, padding: "12px", fontFamily: "monospace", fontSize: 10, color: "#64748b", whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 150, overflowY: "auto", marginBottom: 12, lineHeight: 1.5 } }, text ? (text.length > 500 ? text.slice(0, 500) + "\n…" : text) : "Preparing…"),
+        React.createElement("div", { style: { background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "12px", fontFamily: "monospace", fontSize: 10, color: "var(--text-secondary)", whiteSpace: "pre-wrap", wordBreak: "break-all", maxHeight: 150, overflowY: "auto", marginBottom: 12, lineHeight: 1.5 } }, text ? (text.length > 500 ? text.slice(0, 500) + "\n…" : text) : "Preparing…"),
         React.createElement("div", { style: { display: "flex", gap: 8 } },
             React.createElement("button", { style: { ...S.btn, background: copied ? "#16a34a" : "#0369a1", flex: 1, ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: copy }, copied ? "✓ Copied" : "Copy backup"),
-            React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", flex: 1, ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: download }, "Download file"))));
+            React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1, ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: download }, "Download file"))));
 }
 // ─── Account backup: import (wipes current, installs the imported account) ────
 function ImportBackupModal({ onClose }) {
@@ -1526,10 +1554,10 @@ function ImportBackupModal({ onClose }) {
             React.createElement("strong", null, "replaces everything on this device"),
             " with the imported account \u2014 the data here is wiped. Export your current account first if you might want it back."),
         React.createElement("textarea", { style: { ...S.input, height: 90, resize: "none", fontFamily: "monospace", fontSize: 11 }, placeholder: "Paste a backup here\u2026", value: text, onChange: e => setText(e.target.value) }),
-        React.createElement("input", { type: "file", accept: ".json,application/json", onChange: onFile, style: { fontSize: 12, color: "#64748b", marginBottom: 12, width: "100%" } }),
+        React.createElement("input", { type: "file", accept: ".json,application/json", onChange: onFile, style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 12, width: "100%" } }),
         err && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10 } }, err),
-        !confirm ? (React.createElement("button", { style: { ...S.btn, background: text ? "#b45309" : "#1e293b", width: "100%", ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: () => setConfirm(true) }, "Continue\u2026")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
-            React.createElement("button", { style: { ...S.btn, background: "#1e293b", border: "1px solid #334155", flex: 1 }, onClick: () => setConfirm(false) }, "Cancel"),
+        !confirm ? (React.createElement("button", { style: { ...S.btn, background: text ? "#b45309" : "var(--surface-2)", color: text ? "var(--on-accent)" : "var(--text-heading)", width: "100%", ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: () => setConfirm(true) }, "Continue\u2026")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirm(false) }, "Cancel"),
             React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, disabled: busy, onClick: doImport }, busy ? "Importing…" : "Wipe & import")))));
 }
 // ─── Modal ────────────────────────────────────────────────────────────────────
@@ -1543,57 +1571,57 @@ function Modal({ children, onClose, title }) {
 }
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
-    root: { fontFamily: "'Inter', system-ui, sans-serif", background: "#030712", minHeight: "100vh", color: "#e2e8f0", maxWidth: 480, margin: "0 auto", paddingBottom: 40 },
-    header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "20px 16px 12px", borderBottom: "1px solid #1e293b" },
-    appTitle: { fontSize: 24, fontWeight: 800, letterSpacing: "-1px", color: "#f1f5f9" },
-    appSub: { fontSize: 12, color: "#64748b", marginTop: 2 },
+    root: { fontFamily: "'Inter', system-ui, sans-serif", background: "var(--bg)", minHeight: "100vh", color: "var(--text-primary)", maxWidth: 480, margin: "0 auto", paddingBottom: 40 },
+    header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "20px 16px 12px", borderBottom: "1px solid var(--border)" },
+    appTitle: { fontSize: 24, fontWeight: 800, letterSpacing: "-1px", color: "var(--text-heading)" },
+    appSub: { fontSize: 12, color: "var(--text-secondary)", marginTop: 2 },
     headerRight: { textAlign: "right" },
     remaining: { fontSize: 28, fontWeight: 800, letterSpacing: "-1px", lineHeight: 1 },
-    remainLabel: { fontSize: 10, color: "#64748b", textTransform: "uppercase" },
+    remainLabel: { fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase" },
     pastBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#451a03", borderBottom: "1px solid #92400e", padding: "8px 16px", fontSize: 11, color: "#fcd34d" },
     pastBannerBtn: { background: "#78350f", border: "1px solid #b45309", borderRadius: 6, color: "#fde68a", padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
-    tabs: { display: "flex", borderBottom: "1px solid #1e293b", padding: "0 16px" },
-    tab: { flex: 1, background: "none", border: "none", borderBottom: "2px solid transparent", color: "#64748b", padding: "10px 4px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
-    tabActive: { color: "#f1f5f9", borderBottom: "2px solid #0369a1" },
+    tabs: { display: "flex", borderBottom: "1px solid var(--border)", padding: "0 16px" },
+    tab: { flex: 1, background: "none", border: "none", borderBottom: "2px solid transparent", color: "var(--text-secondary)", padding: "10px 4px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
+    tabActive: { color: "var(--text-heading)", borderBottom: "2px solid #0369a1" },
     weekNav: { display: "flex", gap: 6, marginBottom: 12, overflowX: "auto" },
-    weekPill: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 20, color: "#64748b", padding: "6px 12px", fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 },
-    weekPillActive: { background: "#0369a1", borderColor: "#0369a1", color: "#f1f5f9" },
-    dailyCard: { flex: 1, background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: "10px 12px" },
-    dailyLabel: { fontSize: 10, color: "#64748b", textTransform: "uppercase", marginBottom: 3 },
-    dailySub: { fontSize: 10, color: "#64748b", marginTop: 2 },
-    weekHeader: { padding: "10px 0 8px", borderBottom: "1px solid #1e293b", marginBottom: 10 },
-    budgetCard: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: "12px" },
-    bar: { height: 6, background: "#1e293b", borderRadius: 3, overflow: "hidden" },
+    weekPill: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 20, color: "var(--text-secondary)", padding: "6px 12px", fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 },
+    weekPillActive: { background: "#0369a1", borderColor: "#0369a1", color: "var(--on-accent)" },
+    dailyCard: { flex: 1, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" },
+    dailyLabel: { fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 3 },
+    dailySub: { fontSize: 10, color: "var(--text-secondary)", marginTop: 2 },
+    weekHeader: { padding: "10px 0 8px", borderBottom: "1px solid var(--border)", marginBottom: 10 },
+    budgetCard: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px" },
+    bar: { height: 6, background: "var(--surface-2)", borderRadius: 3, overflow: "hidden" },
     barFill: { height: "100%", borderRadius: 3 },
-    entryRow: { display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid #0f172a" },
+    entryRow: { display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--surface)" },
     splitGroup: { background: "#0c0a1a", border: "1px solid #2e1065", borderRadius: 8, padding: "2px 10px", marginBottom: 8 },
     entryRowGrouped: { borderBottom: "1px solid #1e1338" },
     dot: { width: 7, height: 7, borderRadius: "50%", flexShrink: 0 },
     badge: { fontSize: 10, background: "#451a03", color: "#f59e0b", borderRadius: 3, padding: "1px 4px", marginLeft: 4 },
-    delBtn: { background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 16, padding: "0 2px" },
-    actionBtn: { background: "#0f172a", border: "1px dashed #334155", borderRadius: 8, color: "#94a3b8", padding: "10px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
-    editToggle: { background: "#0f172a", border: "1px solid #334155", borderRadius: 8, color: "#94a3b8", padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", flexShrink: 0 },
+    delBtn: { background: "none", border: "none", color: "var(--text-secondary)", cursor: "pointer", fontSize: 16, padding: "0 2px" },
+    actionBtn: { background: "var(--surface)", border: "1px dashed var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "10px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
+    editToggle: { background: "var(--surface)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", flexShrink: 0 },
     bulkDelBar: { display: "flex", alignItems: "center", gap: 8, marginTop: 12 },
-    checkbox: { width: 22, height: 22, flexShrink: 0, borderRadius: 6, border: "1px solid #334155", background: "#0f172a", color: "#4ade80", fontSize: 13, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 },
+    checkbox: { width: 22, height: 22, flexShrink: 0, borderRadius: 6, border: "1px solid var(--border-strong)", background: "var(--surface)", color: "#4ade80", fontSize: 13, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 },
     checkboxOn: { background: "#064e3b", borderColor: "#22c55e" },
-    dragHandle: { flexShrink: 0, background: "none", border: "none", color: "#475569", fontSize: 20, lineHeight: 1, cursor: "grab", padding: "6px 4px", touchAction: "none", userSelect: "none" },
-    rowDragging: { opacity: 0.55, background: "#0f172a", borderRadius: 8 },
-    sectionTitle: { fontSize: 13, fontWeight: 700, color: "#cbd5e1", textTransform: "uppercase", letterSpacing: "0.08em" },
-    addBtn: { background: "#0369a1", border: "none", borderRadius: 6, color: "#f1f5f9", padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" },
+    dragHandle: { flexShrink: 0, background: "none", border: "none", color: "var(--text-muted)", fontSize: 20, lineHeight: 1, cursor: "grab", padding: "6px 4px", touchAction: "none", userSelect: "none" },
+    rowDragging: { opacity: 0.55, background: "var(--surface)", borderRadius: 8 },
+    sectionTitle: { fontSize: 13, fontWeight: 700, color: "var(--text-body)", textTransform: "uppercase", letterSpacing: "0.08em" },
+    addBtn: { background: "#0369a1", border: "none", borderRadius: 6, color: "var(--on-accent)", padding: "5px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" },
     pinGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
-    pinCard: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: "12px" },
-    empty: { color: "#475569", fontSize: 13, padding: "12px 0" },
-    iconBtn: { background: "none", border: "none", color: "#64748b", cursor: "pointer", fontSize: 13, padding: "0 2px" },
-    input: { width: "100%", background: "#0f172a", border: "1px solid #1e293b", borderRadius: 8, color: "#f1f5f9", padding: "10px 12px", marginBottom: 10, fontSize: 14, outline: "none", boxSizing: "border-box" },
-    btn: { border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 600, cursor: "pointer", color: "#f1f5f9" },
-    settingsCard: { background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, padding: "14px", marginBottom: 12 },
+    pinCard: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px" },
+    empty: { color: "var(--text-muted)", fontSize: 13, padding: "12px 0" },
+    iconBtn: { background: "none", border: "none", color: "var(--text-secondary)", cursor: "pointer", fontSize: 13, padding: "0 2px" },
+    input: { width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-heading)", padding: "10px 12px", marginBottom: 10, fontSize: 14, outline: "none", boxSizing: "border-box" },
+    btn: { border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 600, cursor: "pointer", color: "var(--on-accent)" },
+    settingsCard: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px", marginBottom: 12 },
     modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "flex-end", zIndex: 100 },
-    modalSheet: { background: "#0f172a", borderRadius: "16px 16px 0 0", padding: "20px 16px 32px", width: "100%", maxWidth: 480, margin: "0 auto", border: "1px solid #1e293b" },
+    modalSheet: { background: "var(--surface)", borderRadius: "16px 16px 0 0", padding: "20px 16px 32px", width: "100%", maxWidth: 480, margin: "0 auto", border: "1px solid var(--border)" },
     modalHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
-    modalTitle: { fontSize: 15, fontWeight: 700, color: "#f1f5f9" },
-    weekSelect: { background: "#1e293b", border: "1px solid #334155", borderRadius: 6, color: "#f1f5f9", fontSize: 14, fontWeight: 700, padding: "3px 6px", cursor: "pointer", outline: "none", fontFamily: "inherit" },
-    quickAdd: { position: "fixed", left: "calc(14px + env(safe-area-inset-left))", bottom: "calc(14px + env(safe-area-inset-bottom))", width: 52, height: 52, borderRadius: "50%", background: "#0369a1", border: "none", color: "#f1f5f9", fontSize: 30, fontWeight: 400, lineHeight: 1, cursor: "pointer", zIndex: 50, boxShadow: "0 4px 14px rgba(3,105,161,0.5)", display: "flex", alignItems: "center", justifyContent: "center", paddingBottom: 4 },
+    modalTitle: { fontSize: 15, fontWeight: 700, color: "var(--text-heading)" },
+    weekSelect: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 6, color: "var(--text-heading)", fontSize: 14, fontWeight: 700, padding: "3px 6px", cursor: "pointer", outline: "none", fontFamily: "inherit" },
+    quickAdd: { position: "fixed", left: "calc(14px + env(safe-area-inset-left))", bottom: "calc(14px + env(safe-area-inset-bottom))", width: 52, height: 52, borderRadius: "50%", background: "#0369a1", border: "none", color: "var(--on-accent)", fontSize: 30, fontWeight: 400, lineHeight: 1, cursor: "pointer", zIndex: 50, boxShadow: "0 4px 14px rgba(3,105,161,0.5)", display: "flex", alignItems: "center", justifyContent: "center", paddingBottom: 4 },
     hintBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#0c2a4a", borderBottom: "1px solid #0369a1", padding: "8px 16px", fontSize: 12, color: "#bfdbfe", lineHeight: 1.4 },
-    hintBtn: { background: "#0369a1", border: "none", borderRadius: 6, color: "#f1f5f9", padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
+    hintBtn: { background: "#0369a1", border: "none", borderRadius: 6, color: "var(--on-accent)", padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
     hintDismiss: { background: "none", border: "none", color: "#7dd3fc", fontSize: 14, cursor: "pointer", padding: "2px 4px", lineHeight: 1 },
 };

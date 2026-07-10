@@ -16,10 +16,42 @@
 <link rel="apple-touch-icon" href="icon-192.png" />
 
 <style>
+  /* Theme tokens for the app's neutral chrome (backgrounds, borders, text). Category/accent
+     colours (work amber, split purple, credit green, danger red, primary blue) are fixed and
+     unaffected by theme — only these neutrals flip. Dark is the default so existing users see
+     no change; light is opted into via the switch in Settings, which sets data-theme on <html>. */
+  :root, :root[data-theme="dark"] {
+    --bg: #030712;
+    --surface: #0f172a;
+    --surface-2: #1e293b;
+    --border: #1e293b;
+    --border-strong: #334155;
+    --text-muted: #475569;
+    --text-secondary: #64748b;
+    --text-tertiary: #94a3b8;
+    --text-body: #cbd5e1;
+    --text-primary: #e2e8f0;
+    --text-heading: #f1f5f9;
+    --on-accent: #f8fafc;
+  }
+  :root[data-theme="light"] {
+    --bg: #f8fafc;
+    --surface: #ffffff;
+    --surface-2: #e2e8f0;
+    --border: #e2e8f0;
+    --border-strong: #cbd5e1;
+    --text-muted: #94a3b8;
+    --text-secondary: #64748b;
+    --text-tertiary: #475569;
+    --text-body: #334155;
+    --text-primary: #1e293b;
+    --text-heading: #0f172a;
+    --on-accent: #f8fafc;
+  }
   * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0;
-    background: #030712;
+    background: var(--bg);
     /* Prevents the elastic overscroll bounce revealing white/black gaps above/below content on iOS */
     overscroll-behavior-y: none;
     /* Respects the iPhone notch/home-indicator safe areas so content isn't obscured */
