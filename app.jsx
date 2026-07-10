@@ -54,6 +54,27 @@ function lastWorkingDay(year, month) {
   return d;
 }
 
+// Payday for a given month under the user's configured rule. Defaults keep every existing
+// caller (including crypto.js, which runs pre-unlock with no access to settings) on the
+// original last-working-day behaviour, so vaults without the setting need no migration.
+// "fixed" follows payroll convention: a payday landing on a weekend moves to the previous
+// working day; a day past the month's end (e.g. 31st in February) clamps to the last day.
+function paydayFor(year, month, kind = "last-working", day) {
+  if (kind === "last-calendar") return new Date(year, month + 1, 0);
+  if (kind === "last-friday") {
+    let d = new Date(year, month + 1, 0);
+    while (d.getDay() !== 5) d = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+    return d;
+  }
+  if (kind === "fixed") {
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    let d = new Date(year, month, Math.min(Math.max(day || 1, 1), daysInMonth));
+    while (isWeekend(d)) d = new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1);
+    return d;
+  }
+  return lastWorkingDay(year, month);
+}
+
 function addDays(d, n) {
   const r = new Date(d); r.setDate(r.getDate() + n); return r;
 }
@@ -64,10 +85,10 @@ function addDays(d, n) {
 // that month is the correct label. Needed because "today's calendar month" is not generally
 // the same as "the period label today belongs to" (e.g. payday itself already belongs to
 // next month's label, not the current one).
-function periodLabelFor(date) {
+function periodLabelFor(date, kind, day) {
   let y = date.getFullYear(), m = date.getMonth();
   for (let i = 0; i < 3; i++) {
-    const payday = lastWorkingDay(y, m);
+    const payday = paydayFor(y, m, kind, day);
     if (date < payday) return { year: y, month: m };
     m++;
     if (m > 11) { m = 0; y++; }
@@ -75,7 +96,7 @@ function periodLabelFor(date) {
   return { year: y, month: m };
 }
 
-function buildWeeks(payStart, payEnd, amexCutoff, lloydsCutoff) {
+function buildWeeks(payStart, payEnd) {
   // Weeks start from payStart (payday itself — the new period begins the day you're paid), run sun-sun
   const days = [];
   let cur = new Date(payStart);
@@ -103,12 +124,13 @@ function buildWeeks(payStart, payEnd, amexCutoff, lloydsCutoff) {
 
 // Period bounds for a labelled period (payYear/payMonth). A period labelled X starts on
 // (X-1)'s payday and ends the day before X's own payday. Extracted so archived months can
-// rebuild their own weeks (savings) with the same logic the live view uses.
-function periodBounds(payYear, payMonth) {
+// rebuild their own weeks (savings) with the same logic the live view uses. kind/day select
+// the payday rule; omitted they fall back to the original last-working-day behaviour.
+function periodBounds(payYear, payMonth, kind, day) {
   const prevMonth = payMonth - 1 < 0 ? 11 : payMonth - 1;
   const prevMonthYear = payMonth - 1 < 0 ? payYear - 1 : payYear;
-  const start = lastWorkingDay(prevMonthYear, prevMonth);
-  const end = addDays(lastWorkingDay(payYear, payMonth), -1);
+  const start = paydayFor(prevMonthYear, prevMonth, kind, day);
+  const end = addDays(paydayFor(payYear, payMonth, kind, day), -1);
   return { start, end };
 }
 
@@ -188,8 +210,8 @@ function defaultState() {
     payMonth: m,
     monthlyBudget: 1069.65,
     weeklyBudget: 260,
-    amexCutoff: 28,
-    lloydsCutoff: 3,
+    paydayKind: "last-working",
+    paydayDay: 25,
     lastMethod: "Amex",
     methods: DEFAULT_METHODS,
     helpHintSeen: false, // drives the one-time "take a tour" hint for brand-new accounts only
@@ -225,13 +247,13 @@ function reducer(s, a) {
         credits: s.credits || [],
         monthlyBudget: s.monthlyBudget,
         weeklyBudget: s.weeklyBudget,
-        amexCutoff: s.amexCutoff,
-        lloydsCutoff: s.lloydsCutoff,
+        paydayKind: s.paydayKind,
+        paydayDay: s.paydayDay,
       };
       const newHistory = [...(s.monthHistory||[]), archive].slice(-12);
       return { payYear: a.newYear, payMonth: a.newMonth, monthLabel: a.newLabel,
         monthlyBudget: s.monthlyBudget, weeklyBudget: s.weeklyBudget,
-        amexCutoff: s.amexCutoff, lloydsCutoff: s.lloydsCutoff, pins: s.pins, methods: s.methods,
+        paydayKind: s.paydayKind, paydayDay: s.paydayDay, pins: s.pins, methods: s.methods,
         lastMethod: s.lastMethod, monthHistory: newHistory,
         entries: [], credits: [] };
     }
@@ -263,7 +285,7 @@ function reducer(s, a) {
 
 // ─── Help content: plain-English explainers, shown in the Settings "How it works" card ──
 const HELP_TOPICS = [
-  ["The pay period", "SpendTracker follows your pay cycle, not the calendar month. A period runs from your last payday up to the day before your next one, and switches over automatically the moment payday arrives. The month label at the top names the period you're currently spending in."],
+  ["The pay period", "SpendTracker follows your pay cycle, not the calendar month. A period runs from your last payday up to the day before your next one, and switches over automatically the moment payday arrives. Set your payday rule in Settings — last working day, last Friday, last calendar day, or a fixed date. The month label at the top names the period you're currently spending in."],
   ["Weekly budgets & rollover", "Your monthly budget is split into weekly allowances. If you go over in a week, the difference is shared evenly across the weeks you have left, so a single big week doesn't all land on the next one. Overspend in the final week has nowhere left to spread, so it just shows as over."],
   ["The “per day” figures", "On the current week you'll see two per-day numbers: how much you can spend each remaining day to stay inside this week, and the same across the rest of the whole period. They turn red as they get tight."],
   ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. Tap any logged item to edit it."],
@@ -364,7 +386,7 @@ function App() {
     const checkMonth = () => {
       const now = londonNow();
       now.setHours(0,0,0,0);
-      const thisLabelPayday = lastWorkingDay(state.payYear, state.payMonth);
+      const thisLabelPayday = paydayFor(state.payYear, state.payMonth, state.paydayKind || "last-working", state.paydayDay);
       if (now >= thisLabelPayday) {
         const nextMonth = state.payMonth + 1 > 11 ? 0 : state.payMonth + 1;
         const nextYear = state.payMonth + 1 > 11 ? state.payYear + 1 : state.payYear;
@@ -375,25 +397,25 @@ function App() {
     checkMonth();
     const interval = setInterval(checkMonth, 60000);
     return () => clearInterval(interval);
-  }, [state.payYear, state.payMonth]);
+  }, [state.payYear, state.payMonth, state.paydayKind, state.paydayDay]);
 
   useEffect(() => { save(state); }, [state]);
 
-  // Build calendar from payday — uses effectiveData so a past period's own pay dates and
-  // cutoffs are used when viewing it, not today's live settings.
+  // Build calendar from payday — uses the viewed period's own pay dates and payday rule
+  // when looking at the past, not today's live settings.
   //
   // Period labelling: a period is named for the month its payday is paying you for. Since
-  // you get paid on the last working day of a month for that month's work, and that payday
+  // you get paid near the end of a month for that month's work (per the payday rule), and that payday
   // is when last month's card debt gets cleared and a fresh accounting period begins, the
   // period labelled "July" starts on JUNE's payday and runs up to (not including) JULY's
   // payday. payYear/payMonth store the label (X); periodStart/periodEnd are derived from it.
   const { payYear: y, payMonth: m } = periodData;
-  const { start: periodStart, end: periodEnd } = periodBounds(y, m);
+  const { start: periodStart, end: periodEnd } = periodBounds(y, m, periodData.paydayKind || "last-working", periodData.paydayDay);
   // Fractional weeks in this pay period, so Settings can convert monthly <-> weekly
   // the same way first-run setup does (crypto.js uses the identical days/7 basis).
   const periodDays = Math.round((periodEnd - periodStart) / 86400000) + 1;
   const weeksInPeriod = periodDays / 7;
-  const weeks = buildWeeks(periodStart, periodEnd, periodData.amexCutoff, periodData.lloydsCutoff);
+  const weeks = buildWeeks(periodStart, periodEnd);
 
   // Scheduled pins are expanded into read-only virtual entries and folded into the derived data
   // layer, so every downstream figure (week panels, totals, summary, export) treats them as
@@ -602,8 +624,9 @@ function App() {
         const monthSaved = (m) => {
           // Scheduled pins are counted as their per-occurrence week entries (so a weekly pin
           // counts once per week), matching how the live period and week log count them.
-          const { start, end } = periodBounds(m.payYear, m.payMonth);
-          const mWeeks = buildWeeks(start, end, m.amexCutoff, m.lloydsCutoff);
+          // Bounds use the payday rule the month was archived under, not today's setting.
+          const { start, end } = periodBounds(m.payYear, m.payMonth, m.paydayKind || "last-working", m.paydayDay);
+          const mWeeks = buildWeeks(start, end);
           const pinEntries = expandScheduledPins(m.pins, mWeeks);
           const spentEntries = [...m.entries, ...pinEntries].filter(e => e.type === "personal").reduce((s,e)=>s+e.amount,0);
           const spentPins = m.pins.filter(p => !isScheduledPin(p) && p.type !== "business" && p.type !== "excluded").reduce((s,p)=>s+(p.amount||0),0);
@@ -728,20 +751,31 @@ function App() {
           })()}
 
           <div style={S.settingsCard}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Card cutoff dates</div>
-            {[["Amex statement date","amexCutoff"],["Lloyds statement date","lloydsCutoff"]].map(([lbl,k])=>(
-              <div key={k} style={{ marginBottom:10 }}>
-                <label style={{ fontSize:12, color:"#64748b", display:"block", marginBottom:4 }}>{lbl}</label>
-                <input key={`${k}-${state[k]}`} style={S.input} type="number" min={1} max={31} defaultValue={state[k]} onBlur={e => { const v = parseInt(e.target.value); if (!isNaN(v) && v >= 1 && v <= 31) dispatch({ type:"SETTINGS", patch:{ [k]: v } }); }} />
-              </div>
-            ))}
-          </div>
-
-          <div style={S.settingsCard}>
             <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Pay period</div>
             <div style={{ fontSize:13, color:"#cbd5e1", marginBottom:10 }}>
               Currently tracking <strong style={{ color:"#f1f5f9" }}>{state.monthLabel}</strong>. A period starts on the previous month's payday and runs until this period's own payday — the tracker switches automatically the moment that payday arrives.
             </div>
+            {(() => {
+              const kind = state.paydayKind || "last-working";
+              const kindBtn = (on) => ({ background: on ? "#1e293b":"#0f172a", border:`1px solid ${on?"#334155":"#1e293b"}`, borderRadius:8, color: on ? "#f1f5f9" : "#475569", padding:"9px 4px", fontSize:12, fontWeight:600, cursor:"pointer" });
+              return (
+                <div style={{ marginBottom:12 }}>
+                  <label style={{ fontSize:12, color:"#64748b", display:"block", marginBottom:6 }}>Payday</label>
+                  <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:8 }}>
+                    {[["last-working","Last working day"],["last-friday","Last Friday"],["last-calendar","Last calendar day"],["fixed","Fixed date"]].map(([v,l]) => (
+                      <button key={v} style={kindBtn(kind === v)} onClick={() => dispatch({ type:"SETTINGS", patch:{ paydayKind: v } })}>{l}</button>
+                    ))}
+                  </div>
+                  {kind === "fixed" && (
+                    <div style={{ marginBottom:8 }}>
+                      <label style={{ fontSize:12, color:"#64748b", display:"block", marginBottom:4 }}>Day of the month</label>
+                      <input key={`payday-${state.paydayDay}`} style={{ ...S.input, marginBottom:0 }} type="number" inputMode="numeric" min={1} max={31} defaultValue={state.paydayDay || 25} onBlur={e => { const v = parseInt(e.target.value); if (!isNaN(v) && v >= 1 && v <= 31) dispatch({ type:"SETTINGS", patch:{ paydayDay: v } }); }} />
+                    </div>
+                  )}
+                  <div style={{ fontSize:11, color:"#475569", lineHeight:1.5 }}>Payday defines when a period starts and ends. Fixed dates falling on a weekend move to the working day before. Changing this redraws the current period's weeks — and if it moves the payday into the past, the tracker rolls into the next period, as it would on any payday.</div>
+                </div>
+              );
+            })()}
             {mostRecentArchiveIndex !== null ? (
               viewingPast ? (
                 <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", width:"100%" }} onClick={() => setViewingPastIndex(null)}>
