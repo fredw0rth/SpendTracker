@@ -410,7 +410,7 @@ function App() {
     const theme = state.theme === "light" ? "light" : "dark";
     document.documentElement.dataset.theme = theme;
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.content = theme === "light" ? "#f8fafc" : "#030712";
+    if (meta) meta.content = theme === "light" ? "#f5efdf" : "#030712";
   }, [state.theme]);
 
   // Build calendar from payday — uses the viewed period's own pay dates and payday rule
