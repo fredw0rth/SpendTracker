@@ -212,6 +212,7 @@ function defaultState() {
     weeklyBudget: 260,
     paydayKind: "last-working",
     paydayDay: 25,
+    theme: "dark",
     lastMethod: "Amex",
     methods: DEFAULT_METHODS,
     helpHintSeen: false, // drives the one-time "take a tour" hint for brand-new accounts only
@@ -253,7 +254,7 @@ function reducer(s, a) {
       const newHistory = [...(s.monthHistory||[]), archive].slice(-12);
       return { payYear: a.newYear, payMonth: a.newMonth, monthLabel: a.newLabel,
         monthlyBudget: s.monthlyBudget, weeklyBudget: s.weeklyBudget,
-        paydayKind: s.paydayKind, paydayDay: s.paydayDay, pins: s.pins, methods: s.methods,
+        paydayKind: s.paydayKind, paydayDay: s.paydayDay, theme: s.theme, pins: s.pins, methods: s.methods,
         lastMethod: s.lastMethod, monthHistory: newHistory,
         entries: [], credits: [] };
     }
@@ -316,18 +317,18 @@ function HelpCard({ focus }) {
   return (
     <div ref={ref} style={S.settingsCard}>
       <button style={{ background:"none", border:"none", width:"100%", padding:0, display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" }} onClick={() => setExpanded(e => !e)}>
-        <span style={{ fontSize:11, fontWeight:600, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.04em" }}>How it works</span>
-        <span style={{ color:"#64748b", fontSize:12 }}>{expanded ? "▾" : "▸"}</span>
+        <span style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", textTransform:"uppercase", letterSpacing:"0.04em" }}>How it works</span>
+        <span style={{ color:"var(--text-secondary)", fontSize:12 }}>{expanded ? "▾" : "▸"}</span>
       </button>
       {expanded && (
         <div style={{ marginTop:6 }}>
           {HELP_TOPICS.map(([q, a], i) => (
-            <div key={i} style={{ borderTop: i === 0 ? "none" : "1px solid #1e293b" }}>
+            <div key={i} style={{ borderTop: i === 0 ? "none" : "1px solid var(--border)" }}>
               <button style={{ background:"none", border:"none", width:"100%", padding:"10px 0", display:"flex", justifyContent:"space-between", alignItems:"center", gap:8, cursor:"pointer", textAlign:"left" }} onClick={() => setOpen(open === i ? null : i)}>
-                <span style={{ fontSize:13, fontWeight:600, color:"#cbd5e1" }}>{q}</span>
-                <span style={{ color:"#475569", fontSize:12, flexShrink:0 }}>{open === i ? "▾" : "▸"}</span>
+                <span style={{ fontSize:13, fontWeight:600, color:"var(--text-body)" }}>{q}</span>
+                <span style={{ color:"var(--text-muted)", fontSize:12, flexShrink:0 }}>{open === i ? "▾" : "▸"}</span>
               </button>
-              {open === i && <div style={{ fontSize:12, color:"#94a3b8", lineHeight:1.6, padding:"0 0 12px" }}>{a}</div>}
+              {open === i && <div style={{ fontSize:12, color:"var(--text-tertiary)", lineHeight:1.6, padding:"0 0 12px" }}>{a}</div>}
             </div>
           ))}
         </div>
@@ -400,6 +401,17 @@ function App() {
   }, [state.payYear, state.payMonth, state.paydayKind, state.paydayDay]);
 
   useEffect(() => { save(state); }, [state]);
+
+  // Applies the chosen theme to the whole document (the CSS variables driving every neutral
+  // colour live on :root, so this is the only DOM touch light mode needs) and tints the
+  // browser chrome to match. Runs post-unlock only — the lock screen and onboarding, which
+  // can't read encrypted state, stay on the dark theme they've always used.
+  useEffect(() => {
+    const theme = state.theme === "light" ? "light" : "dark";
+    document.documentElement.dataset.theme = theme;
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = theme === "light" ? "#f8fafc" : "#030712";
+  }, [state.theme]);
 
   // Build calendar from payday — uses the viewed period's own pay dates and payday rule
   // when looking at the past, not today's live settings.
@@ -589,7 +601,7 @@ function App() {
               </div>
               <div style={S.dailyCard}>
                 <div style={S.dailyLabel}>Per day · month</div>
-                <div style={{ fontSize:20, fontWeight:700, color: dailyFromMonth < 20 ? "#ef4444" : "#94a3b8" }}>{fmt(dailyFromMonth)}</div>
+                <div style={{ fontSize:20, fontWeight:700, color: dailyFromMonth < 20 ? "#ef4444" : "var(--text-tertiary)" }}>{fmt(dailyFromMonth)}</div>
                 <div style={S.dailySub}>{daysLeftInMonth}d left</div>
               </div>
             </div>
@@ -640,33 +652,33 @@ function App() {
         const signed = (n) => (n < 0 ? "-" : "+") + fmt(n);
         return (
         <div style={{ padding:"12px 16px" }}>
-          <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"20px", marginBottom:12 }}>
-            <div style={{ fontSize:11, color:"#64748b", marginBottom:4, textTransform:"uppercase" }}>Total saved</div>
+          <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"20px", marginBottom:12 }}>
+            <div style={{ fontSize:11, color:"var(--text-secondary)", marginBottom:4, textTransform:"uppercase" }}>Total saved</div>
             <div style={{ fontSize:36, fontWeight:800, color: totalSaved >= 0 ? "#4ade80" : "#f87171", marginBottom:8 }}>{totalSaved < 0 ? "-" : ""}{fmt(totalSaved)}</div>
-            <div style={{ fontSize:12, color:"#64748b", lineHeight:1.5 }}>Leftover budget carried over from completed months. {state.monthLabel}'s leftover is added to this once the month ends.</div>
+            <div style={{ fontSize:12, color:"var(--text-secondary)", lineHeight:1.5 }}>Leftover budget carried over from completed months. {state.monthLabel}'s leftover is added to this once the month ends.</div>
           </div>
 
           {/* Current month, in progress — deliberately NOT part of the total yet */}
           {!viewingPast && (
-            <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:12, padding:"12px 14px", marginBottom:12, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:12, padding:"12px 14px", marginBottom:12, display:"flex", justifyContent:"space-between", alignItems:"center" }}>
               <div>
-                <div style={{ fontSize:13, color:"#cbd5e1", fontWeight:600 }}>{state.monthLabel} <span style={{ color:"#64748b", fontWeight:400 }}>· in progress</span></div>
-                <div style={{ fontSize:11, color:"#64748b", marginTop:2 }}>Adds to savings when {state.monthLabel} ends</div>
+                <div style={{ fontSize:13, color:"var(--text-body)", fontWeight:600 }}>{state.monthLabel} <span style={{ color:"var(--text-secondary)", fontWeight:400 }}>· in progress</span></div>
+                <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:2 }}>Adds to savings when {state.monthLabel} ends</div>
               </div>
-              <div style={{ fontSize:18, fontWeight:700, color: remaining >= 0 ? "#94a3b8" : "#f87171" }}>{signed(remaining)}</div>
+              <div style={{ fontSize:18, fontWeight:700, color: remaining >= 0 ? "var(--text-tertiary)" : "#f87171" }}>{signed(remaining)}</div>
             </div>
           )}
 
           {/* Month-by-month history */}
-          <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px" }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Month by month</div>
+          <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px" }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Month by month</div>
             {rows.length === 0 ? (
-              <div style={{ color:"#475569", fontSize:13, padding:"4px 0", lineHeight:1.5 }}>No completed months yet. Your first month's leftover shows up here once {state.monthLabel} ends.</div>
+              <div style={{ color:"var(--text-muted)", fontSize:13, padding:"4px 0", lineHeight:1.5 }}>No completed months yet. Your first month's leftover shows up here once {state.monthLabel} ends.</div>
             ) : rows.map((r,i) => (
-              <div key={r.label} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 0", borderBottom: i < rows.length-1 ? "1px solid #1e293b" : "none" }}>
+              <div key={r.label} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"9px 0", borderBottom: i < rows.length-1 ? "1px solid var(--border)" : "none" }}>
                 <div>
-                  <div style={{ fontSize:13, color:"#e2e8f0", fontWeight:600 }}>{r.label}</div>
-                  <div style={{ fontSize:11, color:"#64748b", marginTop:1 }}>{fmt(r.spent)} spent of {fmt(r.budget)}</div>
+                  <div style={{ fontSize:13, color:"var(--text-primary)", fontWeight:600 }}>{r.label}</div>
+                  <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{fmt(r.spent)} spent of {fmt(r.budget)}</div>
                 </div>
                 <div style={{ fontSize:15, fontWeight:700, color: r.saved >= 0 ? "#4ade80" : "#f87171" }}>{signed(r.saved)}</div>
               </div>
@@ -696,19 +708,29 @@ function App() {
       {/* SETTINGS */}
       {tab === "settings" && (
         <div style={{ padding:"12px 16px" }}>
+          <div style={S.settingsCard}>
+            <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between" }}>
+              <div>
+                <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:2, textTransform:"uppercase" }}>Appearance</div>
+                <div style={{ fontSize:12, color:"var(--text-muted)" }}>{state.theme === "light" ? "Light" : "Dark"} mode</div>
+              </div>
+              <ThemeToggle theme={state.theme || "dark"} onToggle={() => dispatch({ type:"SETTINGS", patch:{ theme: state.theme === "light" ? "dark" : "light" } })} />
+            </div>
+          </div>
+
           <HelpCard focus={helpFocus} />
 
           <div style={S.settingsCard}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Budget</div>
+            <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Budget</div>
             <div style={{ marginBottom:10 }}>
-              <label style={{ fontSize:12, color:"#64748b", display:"block", marginBottom:4 }}>Monthly budget (£)</label>
+              <label style={{ fontSize:12, color:"var(--text-secondary)", display:"block", marginBottom:4 }}>Monthly budget (£)</label>
               <input key={`monthlyBudget-${state.monthlyBudget}`} style={S.input} type="number" defaultValue={state.monthlyBudget} onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) dispatch({ type:"SETTINGS", patch:{ monthlyBudget: v, weeklyBudget: Math.round((v / weeksInPeriod) * 100) / 100 } }); }} />
             </div>
             <div style={{ marginBottom:10 }}>
-              <label style={{ fontSize:12, color:"#64748b", display:"block", marginBottom:4 }}>Weekly budget (£)</label>
+              <label style={{ fontSize:12, color:"var(--text-secondary)", display:"block", marginBottom:4 }}>Weekly budget (£)</label>
               <input key={`weeklyBudget-${state.weeklyBudget}`} style={S.input} type="number" defaultValue={state.weeklyBudget} onBlur={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) dispatch({ type:"SETTINGS", patch:{ weeklyBudget: v, monthlyBudget: Math.round((v * weeksInPeriod) * 100) / 100 } }); }} />
             </div>
-            <div style={{ fontSize:11, color:"#475569" }}>Monthly and weekly are linked across this {periodDays}-day period — changing one recalculates the other.</div>
+            <div style={{ fontSize:11, color:"var(--text-muted)" }}>Monthly and weekly are linked across this {periodDays}-day period — changing one recalculates the other.</div>
           </div>
 
           {(() => {
@@ -725,25 +747,25 @@ function App() {
             const anyInUse = state.methods.some(m => used.has(m.id));
             return (
               <div style={S.settingsCard}>
-                <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Payment methods</div>
+                <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Payment methods</div>
                 {state.methods.map(m => {
                   const canDelete = !used.has(m.id) && state.methods.length > 1;
                   return (
                     <div key={m.id} style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
                       <input type="color" value={m.color} onChange={e => update(m.id, { color: e.target.value })} aria-label={`${m.name} colour`}
-                        style={{ width:34, height:34, padding:2, border:"1px solid #1e293b", borderRadius:8, background:"#0f172a", cursor:"pointer", flexShrink:0 }} />
+                        style={{ width:34, height:34, padding:2, border:"1px solid var(--border)", borderRadius:8, background:"var(--surface)", cursor:"pointer", flexShrink:0 }} />
                       <input key={`mname-${m.id}-${m.name}`} defaultValue={m.name} placeholder="Name"
                         onBlur={e => { const v = e.target.value.trim(); if (v && v !== m.name) update(m.id, { name: v }); else if (!v) e.target.value = m.name; }}
                         style={{ ...S.input, marginBottom:0, flex:1 }} />
                       <button onClick={() => { if (canDelete) remove(m.id); }} disabled={!canDelete}
                         title={used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove")}
-                        style={{ ...S.iconBtn, color: canDelete ? "#ef4444" : "#334155", cursor: canDelete ? "pointer" : "default", fontSize:16, flexShrink:0 }}>✕</button>
+                        style={{ ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize:16, flexShrink:0 }}>✕</button>
                     </div>
                   );
                 })}
-                {anyInUse && <div style={{ fontSize:11, color:"#475569", marginTop:2, marginBottom:8 }}>Types with logged transactions can't be removed.</div>}
+                {anyInUse && <div style={{ fontSize:11, color:"var(--text-muted)", marginTop:2, marginBottom:8 }}>Types with logged transactions can't be removed.</div>}
                 <button onClick={add} disabled={state.methods.length >= MAX_METHODS}
-                  style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", width:"100%", marginTop:4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" }}>
+                  style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", width:"100%", marginTop:4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" }}>
                   {state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type"}
                 </button>
               </div>
@@ -751,16 +773,16 @@ function App() {
           })()}
 
           <div style={S.settingsCard}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Pay period</div>
-            <div style={{ fontSize:13, color:"#cbd5e1", marginBottom:10 }}>
-              Currently tracking <strong style={{ color:"#f1f5f9" }}>{state.monthLabel}</strong>. A period starts on the previous month's payday and runs until this period's own payday — the tracker switches automatically the moment that payday arrives.
+            <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Pay period</div>
+            <div style={{ fontSize:13, color:"var(--text-body)", marginBottom:10 }}>
+              Currently tracking <strong style={{ color:"var(--text-heading)" }}>{state.monthLabel}</strong>. A period starts on the previous month's payday and runs until this period's own payday — the tracker switches automatically the moment that payday arrives.
             </div>
             {(() => {
               const kind = state.paydayKind || "last-working";
-              const kindBtn = (on) => ({ background: on ? "#1e293b":"#0f172a", border:`1px solid ${on?"#334155":"#1e293b"}`, borderRadius:8, color: on ? "#f1f5f9" : "#475569", padding:"9px 4px", fontSize:12, fontWeight:600, cursor:"pointer" });
+              const kindBtn = (on) => ({ background: on ? "var(--surface-2)":"var(--surface)", border:`1px solid ${on?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: on ? "var(--text-heading)" : "var(--text-muted)", padding:"9px 4px", fontSize:12, fontWeight:600, cursor:"pointer" });
               return (
                 <div style={{ marginBottom:12 }}>
-                  <label style={{ fontSize:12, color:"#64748b", display:"block", marginBottom:6 }}>Payday</label>
+                  <label style={{ fontSize:12, color:"var(--text-secondary)", display:"block", marginBottom:6 }}>Payday</label>
                   <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:8 }}>
                     {[["last-working","Last working day"],["last-friday","Last Friday"],["last-calendar","Last calendar day"],["fixed","Fixed date"]].map(([v,l]) => (
                       <button key={v} style={kindBtn(kind === v)} onClick={() => dispatch({ type:"SETTINGS", patch:{ paydayKind: v } })}>{l}</button>
@@ -768,46 +790,46 @@ function App() {
                   </div>
                   {kind === "fixed" && (
                     <div style={{ marginBottom:8 }}>
-                      <label style={{ fontSize:12, color:"#64748b", display:"block", marginBottom:4 }}>Day of the month</label>
+                      <label style={{ fontSize:12, color:"var(--text-secondary)", display:"block", marginBottom:4 }}>Day of the month</label>
                       <input key={`payday-${state.paydayDay}`} style={{ ...S.input, marginBottom:0 }} type="number" inputMode="numeric" min={1} max={31} defaultValue={state.paydayDay || 25} onBlur={e => { const v = parseInt(e.target.value); if (!isNaN(v) && v >= 1 && v <= 31) dispatch({ type:"SETTINGS", patch:{ paydayDay: v } }); }} />
                     </div>
                   )}
-                  <div style={{ fontSize:11, color:"#475569", lineHeight:1.5 }}>Payday defines when a period starts and ends. Fixed dates falling on a weekend move to the working day before. Changing this redraws the current period's weeks — and if it moves the payday into the past, the tracker rolls into the next period, as it would on any payday.</div>
+                  <div style={{ fontSize:11, color:"var(--text-muted)", lineHeight:1.5 }}>Payday defines when a period starts and ends. Fixed dates falling on a weekend move to the working day before. Changing this redraws the current period's weeks — and if it moves the payday into the past, the tracker rolls into the next period, as it would on any payday.</div>
                 </div>
               );
             })()}
             {mostRecentArchiveIndex !== null ? (
               viewingPast ? (
-                <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", width:"100%" }} onClick={() => setViewingPastIndex(null)}>
+                <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", width:"100%" }} onClick={() => setViewingPastIndex(null)}>
                   ← Return to current period ({state.monthLabel})
                 </button>
               ) : (
-                <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", width:"100%" }} onClick={() => setViewingPastIndex(mostRecentArchiveIndex)}>
+                <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", width:"100%" }} onClick={() => setViewingPastIndex(mostRecentArchiveIndex)}>
                   ← Go back to {state.monthHistory[mostRecentArchiveIndex].monthLabel}
                 </button>
               )
             ) : (
-              <div style={{ fontSize:12, color:"#475569" }}>No previous period to go back to yet.</div>
+              <div style={{ fontSize:12, color:"var(--text-muted)" }}>No previous period to go back to yet.</div>
             )}
           </div>
 
           <div style={S.settingsCard}>
-            <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Move to another device</div>
-            <div style={{ fontSize:13, color:"#cbd5e1", marginBottom:10, lineHeight:1.5 }}>Each browser keeps its own separate data — so Safari, Chrome and the home-screen app each start fresh. Export your account here, then import it in the other browser or on a new phone to carry everything across.</div>
+            <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Move to another device</div>
+            <div style={{ fontSize:13, color:"var(--text-body)", marginBottom:10, lineHeight:1.5 }}>Each browser keeps its own separate data — so Safari, Chrome and the home-screen app each start fresh. Export your account here, then import it in the other browser or on a new phone to carry everything across.</div>
             <div style={{ display:"flex", gap:8 }}>
               <button style={{ ...S.btn, background:"#0369a1", flex:1 }} onClick={() => setShowBackup(true)}>Export account</button>
-              <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", flex:1 }} onClick={() => setShowImportAcct(true)}>Import account</button>
+              <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", flex:1 }} onClick={() => setShowImportAcct(true)}>Import account</button>
             </div>
           </div>
 
           <div style={S.settingsCard}>
             <div style={{ fontSize:11, fontWeight:600, color:"#f87171", marginBottom:10, textTransform:"uppercase" }}>Reset</div>
-            <div style={{ fontSize:13, color:"#cbd5e1", marginBottom:10, lineHeight:1.5 }}>Erase everything on this device — budget, transactions, history and your passphrase — and start over from setup. This can't be undone.</div>
+            <div style={{ fontSize:13, color:"var(--text-body)", marginBottom:10, lineHeight:1.5 }}>Erase everything on this device — budget, transactions, history and your passphrase — and start over from setup. This can't be undone.</div>
             {!confirmWipe ? (
               <button style={{ ...S.btn, background:"#7f1d1d", border:"1px solid #b91c1c", width:"100%" }} onClick={() => setConfirmWipe(true)}>Reset app &amp; erase all data</button>
             ) : (
               <div style={{ display:"flex", gap:8 }}>
-                <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", flex:1 }} onClick={() => setConfirmWipe(false)}>Cancel</button>
+                <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", flex:1 }} onClick={() => setConfirmWipe(false)}>Cancel</button>
                 <button style={{ ...S.btn, background:"#dc2626", flex:1 }} onClick={() => { if (window.SpendVault && window.SpendVault.wipe) window.SpendVault.wipe(); }}>Erase everything</button>
               </div>
             )}
@@ -975,11 +997,11 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
   return (
     <div>
       <div style={S.weekHeader}>
-        <span style={{ fontWeight:600, color:"#f1f5f9", fontSize:14 }}>{dateStr(week.start)} — {dateStr(week.end)}</span>
+        <span style={{ fontWeight:600, color:"var(--text-heading)", fontSize:14 }}>{dateStr(week.start)} — {dateStr(week.end)}</span>
       </div>
       <div style={S.budgetCard}>
         <div style={S.bar}><div style={{ ...S.barFill, width: pct + "%", background: over > 0 ? "#ef4444" : "#06b6d4" }} /></div>
-        <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginTop:6, color:"#94a3b8" }}>
+        <div style={{ display:"flex", justifyContent:"space-between", fontSize:12, marginTop:6, color:"var(--text-tertiary)" }}>
           <span>{fmt(spent)}</span>
           <span>{fmt(Math.max(weeklyBudget - spent, 0))} left of {fmt(weeklyBudget)}{isLastWeek ? " (final)" : ""}</span>
         </div>
@@ -1001,7 +1023,7 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
             )}
           </div>
         ))}
-        {units.length === 0 && <div style={{ color:"#64748b", fontSize:13, padding:"12px 0" }}>Nothing logged</div>}
+        {units.length === 0 && <div style={{ color:"var(--text-secondary)", fontSize:13, padding:"12px 0" }}>Nothing logged</div>}
       </div>
       {!editMode ? (
         <div style={{ display:"flex", gap:8, marginTop:12 }}>
@@ -1011,7 +1033,7 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
       ) : (
         <div style={S.bulkDelBar}>
           <button style={S.editToggle} onClick={exitEdit}>Done</button>
-          <div style={{ flex:1, fontSize:12, color:"#64748b", textAlign:"center" }}>Drag ≡ to reorder</div>
+          <div style={{ flex:1, fontSize:12, color:"var(--text-secondary)", textAlign:"center" }}>Drag ≡ to reorder</div>
           {selected.size > 0 && (confirmBulk
             ? <button style={{ ...S.btn, background:"#dc2626", padding:"10px 14px", fontSize:13 }} onClick={bulkDelete}>Delete {selected.size}?</button>
             : <button style={{ ...S.btn, background:"#7f1d1d", border:"1px solid #b91c1c", padding:"10px 14px", fontSize:13 }} onClick={() => setConfirmBulk(true)}>Delete {selected.size}</button>
@@ -1019,6 +1041,19 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Theme Toggle ─────────────────────────────────────────────────────────────
+// A classic sun/moon switch: a single thumb carries whichever glyph is active and slides
+// between the two ends of the track (moon/dark on the left, sun/light on the right).
+function ThemeToggle({ theme, onToggle }) {
+  const isLight = theme === "light";
+  return (
+    <button role="switch" aria-checked={isLight} aria-label={isLight ? "Switch to dark mode" : "Switch to light mode"} onClick={onToggle}
+      style={{ position:"relative", width:56, height:30, borderRadius:15, border:"1px solid var(--border-strong)", background:"var(--surface-2)", cursor:"pointer", padding:0, flexShrink:0 }}>
+      <span aria-hidden="true" style={{ position:"absolute", top:2, left: isLight ? 28 : 2, width:24, height:24, borderRadius:"50%", background:"var(--surface)", border:"1px solid var(--border-strong)", boxShadow:"0 1px 3px rgba(0,0,0,0.4)", display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, lineHeight:1, transition:"left 0.2s ease" }}>{isLight ? "☀️" : "🌙"}</span>
+    </button>
   );
 }
 
@@ -1058,16 +1093,16 @@ function ConfirmDeleteButton({ onConfirm, style }) {
 
 // ─── Entry Line ───────────────────────────────────────────────────────────────
 function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
-  const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "#e2e8f0";
+  const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "var(--text-primary)";
   return (
     <div onClick={onEdit} style={{ ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom:"none" } : {}), cursor: onEdit ? "pointer" : "default" }}>
-      <span style={{ ...S.dot, background: METHOD_COLOR[entry.method] || "#64748b" }} />
+      <span style={{ ...S.dot, background: METHOD_COLOR[entry.method] || "var(--text-secondary)" }} />
       <span style={{ flex:1, color:col, fontSize:13 }}>
         {entry.label || METHOD_NAME[entry.method] || entry.method}
         {entry.pinned && <span style={{ ...S.badge, background:"#0c4a6e", color:"#7dd3fc" }}> 📌 fixed</span>}
         {entry.type === "business" && <span style={S.badge}> work</span>}
         {entry.type === "excluded" && <span style={{ ...S.badge, background:"#3b0764", color:"#d8b4fe" }}> reimbursable</span>}
-        {entry.splitGroupId && entry.type === "personal" && <span style={{ ...S.badge, background:"#1e293b", color:"#94a3b8" }}> split</span>}
+        {entry.splitGroupId && entry.type === "personal" && <span style={{ ...S.badge, background:"var(--surface-2)", color:"var(--text-tertiary)" }}> split</span>}
       </span>
       <span style={{ color:col, fontWeight:600, fontSize:13 }}>{fmt(entry.amount)}</span>
       {!hideDelete && <ConfirmDeleteButton onConfirm={onDel} style={S.delBtn} />}
@@ -1080,7 +1115,7 @@ function CreditLine({ credit, onDel, onEdit, hideDelete }) {
   return (
     <div onClick={onEdit} style={{ ...S.entryRow, cursor: onEdit ? "pointer" : "default" }}>
       <span style={{ ...S.dot, background:"#22c55e" }} />
-      <span style={{ flex:1, color:"#22c55e", fontSize:13 }}>{credit.label || "Credit"}{credit.from && <span style={{ color:"#64748b" }}> from {credit.from}</span>}</span>
+      <span style={{ flex:1, color:"#22c55e", fontSize:13 }}>{credit.label || "Credit"}{credit.from && <span style={{ color:"var(--text-secondary)" }}> from {credit.from}</span>}</span>
       <span style={{ color:"#22c55e", fontWeight:600, fontSize:13 }}>+{fmt(credit.amount)}</span>
       {!hideDelete && <ConfirmDeleteButton onConfirm={onDel} style={S.delBtn} />}
     </div>
@@ -1091,11 +1126,11 @@ function CreditLine({ credit, onDel, onEdit, hideDelete }) {
 function PinCard({ pin, onEdit, onDelete }) {
   const isB = pin.type === "business";
   const isX = pin.type === "excluded";
-  const col = isB ? "#f59e0b" : isX ? "#a78bfa" : "#f1f5f9";
+  const col = isB ? "#f59e0b" : isX ? "#a78bfa" : "var(--text-heading)";
   return (
     <div style={S.pinCard}>
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
-        <span style={{ ...S.dot, background: METHOD_COLOR[pin.method] || "#64748b" }} />
+        <span style={{ ...S.dot, background: METHOD_COLOR[pin.method] || "var(--text-secondary)" }} />
         <span style={{ flex:1, fontWeight:600, fontSize:14, color:col }}>
           {pin.label}
           {isB && <span style={S.badge}> work</span>}
@@ -1104,9 +1139,9 @@ function PinCard({ pin, onEdit, onDelete }) {
         <button style={S.iconBtn} onClick={onEdit}>✎</button>
         <ConfirmDeleteButton onConfirm={onDelete} style={{ ...S.iconBtn, color:"#ef4444" }} />
       </div>
-      <div style={{ fontSize:22, fontWeight:800, letterSpacing:"-1px", color: isB ? "#f59e0b" : isX ? "#a78bfa" : METHOD_COLOR[pin.method] || "#e2e8f0", marginBottom:4 }}>{pin.amount ? fmt(pin.amount) : "—"}</div>
+      <div style={{ fontSize:22, fontWeight:800, letterSpacing:"-1px", color: isB ? "#f59e0b" : isX ? "#a78bfa" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom:4 }}>{pin.amount ? fmt(pin.amount) : "—"}</div>
       {isScheduledPin(pin) && <div style={{ fontSize:11, color:"#7dd3fc", marginTop:2 }}>📌 {pin.freq === "weekly" ? `Every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][pin.day]}` : `Monthly · day ${pin.day}`} · in week log</div>}
-      {pin.note && <div style={{ fontSize:11, color:"#64748b", marginTop:4 }}>{pin.note}</div>}
+      {pin.note && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:4 }}>{pin.note}</div>}
     </div>
   );
 }
@@ -1129,10 +1164,10 @@ function MethodSelector({ value, onChange, dimmed }) {
           const on = value === m.id;
           const c = chipColors(m.color);
           return <button key={m.id} onClick={() => onChange(m.id)} title={m.name}
-            style={{ flex:"0 0 calc((100% - 18px) / 4)", background: on ? c.bg : "#0f172a", border:`1px solid ${on ? c.border : "#1e293b"}`, borderRadius:8, color: on ? c.text : "#475569", padding:"10px 2px", fontSize:12, fontWeight: on?700:500, cursor:"pointer", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.name}</button>;
+            style={{ flex:"0 0 calc((100% - 18px) / 4)", background: on ? c.bg : "var(--surface)", border:`1px solid ${on ? c.border : "var(--border)"}`, borderRadius:8, color: on ? c.text : "var(--text-muted)", padding:"10px 2px", fontSize:12, fontWeight: on?700:500, cursor:"pointer", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.name}</button>;
         })}
       </div>
-      {moreRight && <div aria-hidden="true" style={{ position:"absolute", top:0, bottom:0, right:0, width:24, display:"flex", alignItems:"center", justifyContent:"flex-end", paddingRight:2, pointerEvents:"none", color:"#94a3b8", fontSize:12, background:"linear-gradient(to right, rgba(15,23,42,0), #0f172a 70%)" }}>▸</div>}
+      {moreRight && <div aria-hidden="true" style={{ position:"absolute", top:0, bottom:0, right:0, width:24, display:"flex", alignItems:"center", justifyContent:"flex-end", paddingRight:2, pointerEvents:"none", color:"var(--text-tertiary)", fontSize:12, background:"linear-gradient(to right, rgba(15,23,42,0), var(--surface) 70%)" }}>▸</div>}
     </div>
   );
 }
@@ -1257,7 +1292,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
   }
 
   const digits = [[7,8,9],[4,5,6],[1,2,3],["00",0,"⌫"]];
-  const subheading = { fontSize:12, color:"#64748b", marginBottom:6, fontWeight:500 };
+  const subheading = { fontSize:12, color:"var(--text-secondary)", marginBottom:6, fontWeight:500 };
 
   // In edit mode, only offer the classifications it makes sense to switch between: a normal entry
   // can flip personal↔work; a split half or a credit keeps its kind (so its bucket stays coherent).
@@ -1286,9 +1321,9 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
 
   return (
     <Modal onClose={onClose} title={title}>
-      <div style={{ background:"#1e293b", borderRadius:12, padding:"14px 20px", marginBottom:12, textAlign:"center", border:`1px solid ${flash ? mc.border : "#334155"}`, opacity: isSplitEdit ? 0.7 : 1 }}>
+      <div style={{ background:"var(--surface-2)", borderRadius:12, padding:"14px 20px", marginBottom:12, textAlign:"center", border:`1px solid ${flash ? mc.border : "var(--border-strong)"}`, opacity: isSplitEdit ? 0.7 : 1 }}>
         {displayCaption && <div style={{ fontSize:11, color:"#a78bfa", fontWeight:600, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.04em" }}>{displayCaption}</div>}
-        <div style={{ fontSize: displayStr.length > 7 ? 30 : 42, fontWeight:800, color: flash ? "#4ade80" : "#f1f5f9" }}>
+        <div style={{ fontSize: displayStr.length > 7 ? 30 : 42, fontWeight:800, color: flash ? "#4ade80" : "var(--text-heading)" }}>
           {flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`}
         </div>
       </div>
@@ -1301,7 +1336,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
       {classOptions.length > 0 && <>
         <div style={subheading}>Classification</div>
         <div style={{ display:"flex", gap:6, marginBottom:10 }}>
-          {classOptions.map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "#1e293b":"#0f172a", border:`1px solid ${type===v?"#334155":"#1e293b"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="credit"?"#4ade80":v==="split"?"#d8b4fe":"#f1f5f9") : "#475569", padding:"8px 4px", fontSize:12, fontWeight:type===v?600:400, cursor:"pointer" }} onClick={() => selectType(v)}>{l}</button>)}
+          {classOptions.map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "var(--surface-2)":"var(--surface)", border:`1px solid ${type===v?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="credit"?"#4ade80":v==="split"?"#d8b4fe":"var(--text-heading)") : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:type===v?600:400, cursor:"pointer" }} onClick={() => selectType(v)}>{l}</button>)}
         </div>
       </>}
 
@@ -1313,11 +1348,11 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
         </div>
       )}
 
-      <button style={{ background:"none", border:"none", color: showNote?"#60a5fa":"#64748b", fontSize:12, cursor:"pointer", padding:"0 0 8px", textAlign:"left", width:"100%" }} onClick={() => setShowNote(p=>!p)}>{showNote ? "▾ Hide note" : "▸ Add a note"}</button>
-      {showNote && <input style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:8, color:"#f1f5f9", padding:"8px 12px", marginBottom:10, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" }} placeholder="e.g. golf, birthday" value={note} onChange={e=>setNote(e.target.value)} autoFocus />}
+      <button style={{ background:"none", border:"none", color: showNote?"#60a5fa":"var(--text-secondary)", fontSize:12, cursor:"pointer", padding:"0 0 8px", textAlign:"left", width:"100%" }} onClick={() => setShowNote(p=>!p)}>{showNote ? "▾ Hide note" : "▸ Add a note"}</button>
+      {showNote && <input style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text-heading)", padding:"8px 12px", marginBottom:10, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" }} placeholder="e.g. golf, birthday" value={note} onChange={e=>setNote(e.target.value)} autoFocus />}
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6 }}>
-        {digits.map((row, ri) => (<>{row.map((d, i) => <button key={`${ri}-${i}`} style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:8, color: d==="⌫" ? "#ef4444" : "#cbd5e1", fontSize: d==="⌫" ? 18 : 20, fontWeight:600, padding:"14px 0", cursor:"pointer", opacity: isSplitEdit ? 0.4 : 1 }} onClick={() => d === "⌫" ? pressDelete() : pressDigit(d)}>{d}</button>)}{ri === 0 && <button style={{ gridRow: "span 4", background: amount>0 ? mc.bg : "#0f172a", border:`1px solid ${amount>0 ? mc.border : "#1e293b"}`, borderRadius:8, color: amount>0 ? mc.text : "#475569", fontSize:18, fontWeight:800, cursor: amount>0?"pointer":"default", display:"flex", alignItems:"center", justifyContent:"center" }} onClick={pressEnter}>{enterGlyph}</button>}</> ))}
+        {digits.map((row, ri) => (<>{row.map((d, i) => <button key={`${ri}-${i}`} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, color: d==="⌫" ? "#ef4444" : "var(--text-body)", fontSize: d==="⌫" ? 18 : 20, fontWeight:600, padding:"14px 0", cursor:"pointer", opacity: isSplitEdit ? 0.4 : 1 }} onClick={() => d === "⌫" ? pressDelete() : pressDigit(d)}>{d}</button>)}{ri === 0 && <button style={{ gridRow: "span 4", background: amount>0 ? mc.bg : "var(--surface)", border:`1px solid ${amount>0 ? mc.border : "var(--border)"}`, borderRadius:8, color: amount>0 ? mc.text : "var(--text-muted)", fontSize:18, fontWeight:800, cursor: amount>0?"pointer":"default", display:"flex", alignItems:"center", justifyContent:"center" }} onClick={pressEnter}>{enterGlyph}</button>}</> ))}
       </div>
     </Modal>
   );
@@ -1337,9 +1372,9 @@ function PinModal({ pin, onSave, onClose }) {
   const [dom, setDom] = useState(pin?.freq === "monthly" ? (pin?.day ?? 1) : 1);
   const [dow, setDow] = useState(pin?.freq === "weekly" ? (pin?.day ?? 1) : 1);
 
-  const segBtn = (on) => ({ flex:1, background: on ? "#1e293b":"#0f172a", border:`1px solid ${on?"#334155":"#1e293b"}`, borderRadius:8, color: on ? "#f1f5f9" : "#475569", padding:"8px 4px", fontSize:12, fontWeight:600, cursor:"pointer" });
-  const dayBtn = (on) => ({ flex:1, background: on ? "#0c4a6e":"#0f172a", border:`1px solid ${on?"#0369a1":"#1e293b"}`, borderRadius:8, color: on ? "#7dd3fc" : "#475569", padding:"7px 2px", fontSize:11, fontWeight:600, cursor:"pointer" });
-  const hint = { fontSize:11, color:"#64748b", marginBottom:6 };
+  const segBtn = (on) => ({ flex:1, background: on ? "var(--surface-2)":"var(--surface)", border:`1px solid ${on?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: on ? "var(--text-heading)" : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:600, cursor:"pointer" });
+  const dayBtn = (on) => ({ flex:1, background: on ? "#0c4a6e":"var(--surface)", border:`1px solid ${on?"#0369a1":"var(--border)"}`, borderRadius:8, color: on ? "#7dd3fc" : "var(--text-muted)", padding:"7px 2px", fontSize:11, fontWeight:600, cursor:"pointer" });
+  const hint = { fontSize:11, color:"var(--text-secondary)", marginBottom:6 };
 
   return (
     <Modal onClose={onClose} title={pin ? "Edit" : "New pin"}>
@@ -1347,7 +1382,7 @@ function PinModal({ pin, onSave, onClose }) {
       <input style={{ ...S.input, marginBottom:10 }} type="number" inputMode="decimal" placeholder="Amount" value={amount} onChange={e => setAmount(e.target.value)} />
       <MethodSelector value={method} onChange={setMethod} />
       <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-        {[["personal","Personal"],["business","Work"],["excluded","Split"]].map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "#1e293b":"#0f172a", border:`1px solid ${type===v?"#334155":"#1e293b"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="excluded"?"#a78bfa":"#f1f5f9") : "#475569", padding:"8px 4px", fontSize:12, fontWeight:600, cursor:"pointer" }} onClick={() => setType(v)}>{l}</button>)}
+        {[["personal","Personal"],["business","Work"],["excluded","Split"]].map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "var(--surface-2)":"var(--surface)", border:`1px solid ${type===v?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="excluded"?"#a78bfa":"var(--text-heading)") : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:600, cursor:"pointer" }} onClick={() => setType(v)}>{l}</button>)}
       </div>
 
       <div style={hint}>Populate into the week log</div>
@@ -1440,21 +1475,21 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
   return (
     <div style={{ padding:"12px 16px" }}>
       <div style={{ display:"flex", justifyContent:"flex-end", marginBottom:10 }}>
-        <button style={{ background:"#1e293b", border:"1px solid #334155", borderRadius:8, color:"#94a3b8", padding:"6px 12px", fontSize:12, cursor:"pointer", fontWeight:500 }} onClick={onExport}>↗ Export</button>
+        <button style={{ background:"var(--surface-2)", border:"1px solid var(--border-strong)", borderRadius:8, color:"var(--text-tertiary)", padding:"6px 12px", fontSize:12, cursor:"pointer", fontWeight:500 }} onClick={onExport}>↗ Export</button>
       </div>
 
       {/* Hero: remaining */}
-      <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"18px", marginBottom:12 }}>
-        <div style={{ fontSize:11, color:"#64748b", marginBottom:6, textTransform:"uppercase" }}>Month overview</div>
+      <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"18px", marginBottom:12 }}>
+        <div style={{ fontSize:11, color:"var(--text-secondary)", marginBottom:6, textTransform:"uppercase" }}>Month overview</div>
         <div style={{ fontSize:32, fontWeight:800, color: remaining<0?"#ef4444":remaining<state.monthlyBudget*0.15?"#f97316":"#22c55e", marginBottom:12 }}>{fmt(remaining)}</div>
-        <div style={{ fontSize:12, color:"#cbd5e1" }}>{fmt(totalSpent)} spent of {fmt(state.monthlyBudget)}</div>
+        <div style={{ fontSize:12, color:"var(--text-body)" }}>{fmt(totalSpent)} spent of {fmt(state.monthlyBudget)}</div>
       </div>
 
       {/* Gross vs net — waterfall from what hit your cards down to what's actually yours. Shown
           only when there's reimbursable (business or split) spend to make the distinction. */}
       {reimbursableTotal > 0 && (
-        <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
-          <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Gross vs net</div>
+        <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Gross vs net</div>
           {businessTotal > 0 && (
             <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
               <span style={{ color:"#f59e0b" }}>Business spend</span>
@@ -1467,54 +1502,54 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
               <span style={{ color:"#a78bfa", fontWeight:600 }}>{fmt(splitTotal)}</span>
             </div>
           )}
-          <div style={{ borderTop:"1px solid #1e293b", marginTop:6, display:"flex", justifyContent:"space-between", padding:"6px 0 5px" }}>
-            <span style={{ color:"#cbd5e1", fontSize:13, fontWeight:600 }}>Gross spend across all cards</span>
-            <span style={{ color:"#f1f5f9", fontWeight:700, fontSize:13 }}>{fmt(grossSpend)}</span>
+          <div style={{ borderTop:"1px solid var(--border)", marginTop:6, display:"flex", justifyContent:"space-between", padding:"6px 0 5px" }}>
+            <span style={{ color:"var(--text-body)", fontSize:13, fontWeight:600 }}>Gross spend across all cards</span>
+            <span style={{ color:"var(--text-heading)", fontWeight:700, fontSize:13 }}>{fmt(grossSpend)}</span>
           </div>
           <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
-            <span style={{ color:"#94a3b8" }}>Reimbursable spend</span>
-            <span style={{ color:"#94a3b8", fontWeight:600 }}>− {fmt(reimbursableTotal)}</span>
+            <span style={{ color:"var(--text-tertiary)" }}>Reimbursable spend</span>
+            <span style={{ color:"var(--text-tertiary)", fontWeight:600 }}>− {fmt(reimbursableTotal)}</span>
           </div>
-          <div style={{ borderTop:"1px solid #1e293b", marginTop:6, paddingTop:8, display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
-            <span style={{ color:"#f1f5f9", fontSize:13, fontWeight:700 }}>Net spend</span>
-            <span style={{ color:"#f1f5f9", fontWeight:800, fontSize:15 }}>{fmt(netTotal)}</span>
+          <div style={{ borderTop:"1px solid var(--border)", marginTop:6, paddingTop:8, display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
+            <span style={{ color:"var(--text-heading)", fontSize:13, fontWeight:700 }}>Net spend</span>
+            <span style={{ color:"var(--text-heading)", fontWeight:800, fontSize:15 }}>{fmt(netTotal)}</span>
           </div>
         </div>
       )}
 
       {/* By card · as charged — gross per card, matching each card's own statement. Tappable for
           a per-card gross/net breakdown + the transactions that make it up. */}
-      <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
-        <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:2, textTransform:"uppercase" }}>By card · as charged</div>
-        <div style={{ fontSize:11, color:"#475569", marginBottom:10 }}>Matches your card statement</div>
+      <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
+        <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:2, textTransform:"uppercase" }}>By card · as charged</div>
+        <div style={{ fontSize:11, color:"var(--text-muted)", marginBottom:10 }}>Matches your card statement</div>
         {METHODS.filter(m => grossByMethod[m.id] > 0).map(m => (
-          <button key={m.id} onClick={() => setMethodDetail(m.id)} style={{ width:"100%", display:"flex", alignItems:"center", gap:10, padding:"9px 0", background:"none", border:"none", borderBottom:"1px solid #1e293b", cursor:"pointer", textAlign:"left" }}>
+          <button key={m.id} onClick={() => setMethodDetail(m.id)} style={{ width:"100%", display:"flex", alignItems:"center", gap:10, padding:"9px 0", background:"none", border:"none", borderBottom:"1px solid var(--border)", cursor:"pointer", textAlign:"left" }}>
             <span style={{ ...S.dot, background: m.color }} />
-            <span style={{ flex:1, fontSize:13, color:"#cbd5e1" }}>{m.name}</span>
+            <span style={{ flex:1, fontSize:13, color:"var(--text-body)" }}>{m.name}</span>
             <span style={{ fontWeight:600, color: m.color, fontSize:13 }}>{fmt(grossByMethod[m.id])}</span>
-            <span style={{ color:"#94a3b8", fontSize:20, fontWeight:700, lineHeight:1 }}>›</span>
+            <span style={{ color:"var(--text-tertiary)", fontSize:20, fontWeight:700, lineHeight:1 }}>›</span>
           </button>
         ))}
-        {METHODS.every(m => grossByMethod[m.id] === 0) && <div style={{ color:"#475569", fontSize:13, padding:"4px 0" }}>No spend logged yet</div>}
+        {METHODS.every(m => grossByMethod[m.id] === 0) && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"4px 0" }}>No spend logged yet</div>}
       </div>
 
       {/* Weekly breakdown */}
-      <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
-        <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Weekly breakdown</div>
+      <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
+        <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Weekly breakdown</div>
         {weekRows.map(({ week, total, byMethod, budget }) => (
-          <div key={week.index} style={{ marginBottom: week.index < weeks.length ? 12 : 0, paddingBottom: week.index < weeks.length ? 12 : 0, borderBottom: week.index < weeks.length ? "1px solid #1e293b" : "none" }}>
+          <div key={week.index} style={{ marginBottom: week.index < weeks.length ? 12 : 0, paddingBottom: week.index < weeks.length ? 12 : 0, borderBottom: week.index < weeks.length ? "1px solid var(--border)" : "none" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:6 }}>
-              <span style={{ fontSize:13, fontWeight:700, color:"#f1f5f9" }}>Week {week.index}</span>
-              <span style={{ fontSize:13, fontWeight:700, color: total > budget ? "#ef4444" : "#cbd5e1" }}>{fmt(total)} <span style={{ color:"#64748b", fontWeight:400 }}>/ {fmt(budget)}</span></span>
+              <span style={{ fontSize:13, fontWeight:700, color:"var(--text-heading)" }}>Week {week.index}</span>
+              <span style={{ fontSize:13, fontWeight:700, color: total > budget ? "#ef4444" : "var(--text-body)" }}>{fmt(total)} <span style={{ color:"var(--text-secondary)", fontWeight:400 }}>/ {fmt(budget)}</span></span>
             </div>
             <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
               {METHODS.filter(m => byMethod[m.id] > 0).map(m => (
-                <div key={m.id} style={{ display:"flex", alignItems:"center", gap:5, fontSize:11, color:"#94a3b8" }}>
+                <div key={m.id} style={{ display:"flex", alignItems:"center", gap:5, fontSize:11, color:"var(--text-tertiary)" }}>
                   <span style={{ ...S.dot, background: m.color }} />
                   {m.name} {fmt(byMethod[m.id])}
                 </div>
               ))}
-              {METHODS.every(m => byMethod[m.id] === 0) && <span style={{ fontSize:11, color:"#475569" }}>Nothing logged</span>}
+              {METHODS.every(m => byMethod[m.id] === 0) && <span style={{ fontSize:11, color:"var(--text-muted)" }}>Nothing logged</span>}
             </div>
           </div>
         ))}
@@ -1523,13 +1558,13 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 
       {/* Largest spends */}
       {allSpendItems.length > 0 && (
-        <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
-          <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Largest spends</div>
+        <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Largest spends</div>
           {allSpendItems.map((item, i) => (
-            <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid #1e293b" : "none" }}>
-              <span style={{ ...S.dot, background: METHOD_COLOR[item.method] || "#64748b" }} />
-              <span style={{ flex:1, fontSize:13, color: item.type === "business" ? "#f59e0b" : "#cbd5e1" }}>{item.desc}{item.type === "business" && <span style={S.badge}> work</span>}</span>
-              <span style={{ fontWeight:600, fontSize:13, color: item.type === "business" ? "#f59e0b" : "#e2e8f0" }}>{fmt(item.amount)}</span>
+            <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid var(--border)" : "none" }}>
+              <span style={{ ...S.dot, background: METHOD_COLOR[item.method] || "var(--text-secondary)" }} />
+              <span style={{ flex:1, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" }}>{item.desc}{item.type === "business" && <span style={S.badge}> work</span>}</span>
+              <span style={{ fontWeight:600, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-primary)" }}>{fmt(item.amount)}</span>
             </div>
           ))}
         </div>
@@ -1537,9 +1572,9 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 
       {/* Source split */}
       {totalSpent > 0 && totalPinned > 0 && totalEntries > 0 && (
-        <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px", marginBottom:12 }}>
-          <div style={{ fontSize:11, fontWeight:600, color:"#64748b", marginBottom:10, textTransform:"uppercase" }}>Spend source</div>
-          <div style={{ height:6, background:"#1e293b", borderRadius:3, overflow:"hidden", marginBottom:8, display:"flex" }}>
+        <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
+          <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Spend source</div>
+          <div style={{ height:6, background:"var(--surface-2)", borderRadius:3, overflow:"hidden", marginBottom:8, display:"flex" }}>
             <div style={{ height:"100%", width: sourcePct+"%", background:"#0369a1" }} />
             <div style={{ height:"100%", width: (100-sourcePct)+"%", background:"#06b6d4" }} />
           </div>
@@ -1552,7 +1587,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 
       {/* Credits */}
       {totalCredits > 0 && (
-        <div style={{ background:"#0f172a", border:"1px solid #1e293b", borderRadius:14, padding:"14px" }}>
+        <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px" }}>
           <div style={{ fontSize:11, fontWeight:600, color:"#22c55e", marginBottom:8, textTransform:"uppercase" }}>Credits</div>
           <div style={{ fontSize:20, fontWeight:800, color:"#4ade80" }}>+{fmt(totalCredits)}</div>
         </div>
@@ -1573,30 +1608,30 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
     <Modal onClose={onClose} title={`${METHOD_NAME[method] || method} transactions`}>
       {/* Gross (what hit the card / matches the statement) reconciled down to your net share */}
       <div style={{ display:"flex", gap:8, marginBottom:14 }}>
-        <div style={{ flex:1, background:"#1e293b", borderRadius:8, padding:"8px 10px" }}>
-          <div style={{ fontSize:10, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.03em" }}>Gross · as charged</div>
+        <div style={{ flex:1, background:"var(--surface-2)", borderRadius:8, padding:"8px 10px" }}>
+          <div style={{ fontSize:10, color:"var(--text-secondary)", textTransform:"uppercase", letterSpacing:"0.03em" }}>Gross · as charged</div>
           <div style={{ fontSize:17, fontWeight:800, color: col }}>{fmt(gross)}</div>
         </div>
-        <div style={{ flex:1, background:"#1e293b", borderRadius:8, padding:"8px 10px" }}>
-          <div style={{ fontSize:10, color:"#64748b", textTransform:"uppercase", letterSpacing:"0.03em" }}>Net · your share</div>
-          <div style={{ fontSize:17, fontWeight:800, color:"#f1f5f9" }}>{fmt(net)}</div>
+        <div style={{ flex:1, background:"var(--surface-2)", borderRadius:8, padding:"8px 10px" }}>
+          <div style={{ fontSize:10, color:"var(--text-secondary)", textTransform:"uppercase", letterSpacing:"0.03em" }}>Net · your share</div>
+          <div style={{ fontSize:17, fontWeight:800, color:"var(--text-heading)" }}>{fmt(net)}</div>
         </div>
       </div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:12, padding:"0 2px" }}>
-        <span style={{ fontSize:12, color:"#64748b" }}>{transactions.length} transaction{transactions.length === 1 ? "" : "s"}</span>
-        {reimbursable > 0.005 && <span style={{ fontSize:11, color:"#94a3b8" }}>{fmt(reimbursable)} reimbursable</span>}
+        <span style={{ fontSize:12, color:"var(--text-secondary)" }}>{transactions.length} transaction{transactions.length === 1 ? "" : "s"}</span>
+        {reimbursable > 0.005 && <span style={{ fontSize:11, color:"var(--text-tertiary)" }}>{fmt(reimbursable)} reimbursable</span>}
       </div>
       <div style={{ maxHeight:360, overflowY:"auto" }}>
-        {transactions.length === 0 && <div style={{ color:"#475569", fontSize:13, padding:"12px 0", textAlign:"center" }}>No transactions yet</div>}
+        {transactions.length === 0 && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>No transactions yet</div>}
         {transactions.map((t, i) => (
-          <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid #1e293b" : "none" }}>
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none" }}>
             <div style={{ flex:1 }}>
-              <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : "#e2e8f0" }}>
+              <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : "var(--text-primary)" }}>
                 {t.desc}
                 {t.type === "business" && <span style={S.badge}> work</span>}
                 {t.type === "excluded" && <span style={{ ...S.badge, background:"#3b0764", color:"#d8b4fe" }}> reimbursable</span>}
               </div>
-              {t.date && <div style={{ fontSize:11, color:"#64748b", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
+              {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
             </div>
             <span style={{ fontWeight:600, fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : col }}>{fmt(t.amount)}</span>
           </div>
@@ -1667,7 +1702,7 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
 
   return (
     <Modal onClose={onClose} title="Export">
-      <div style={{ background:"#030712", border:"1px solid #1e293b", borderRadius:8, padding:"12px", fontFamily:"monospace", fontSize:11, color:"#94a3b8", whiteSpace:"pre-wrap", maxHeight:360, overflowY:"auto", marginBottom:12, lineHeight:1.6 }}>
+      <div style={{ background:"var(--bg)", border:"1px solid var(--border)", borderRadius:8, padding:"12px", fontFamily:"monospace", fontSize:11, color:"var(--text-tertiary)", whiteSpace:"pre-wrap", maxHeight:360, overflowY:"auto", marginBottom:12, lineHeight:1.6 }}>
         {text}
       </div>
       <button style={{ ...S.btn, background:copied?"#16a34a":"#0369a1", width:"100%" }} onClick={copy}>{copied ? "✓ Copied" : "Copy to clipboard"}</button>
@@ -1707,12 +1742,12 @@ function BackupModal({ onClose }) {
 
   return (
     <Modal onClose={onClose} title="Export account">
-      <div style={{ fontSize:13, color:"#cbd5e1", lineHeight:1.5, marginBottom:12 }}>This is your <strong>encrypted</strong> account — it can only be opened with your passphrase or recovery code, so it's safe to save or send to yourself. Import it in another browser or on a new phone to carry everything across.</div>
+      <div style={{ fontSize:13, color:"var(--text-body)", lineHeight:1.5, marginBottom:12 }}>This is your <strong>encrypted</strong> account — it can only be opened with your passphrase or recovery code, so it's safe to save or send to yourself. Import it in another browser or on a new phone to carry everything across.</div>
       {err && <div style={{ color:"#f87171", fontSize:13, marginBottom:10 }}>{err}</div>}
-      <div style={{ background:"#030712", border:"1px solid #1e293b", borderRadius:8, padding:"12px", fontFamily:"monospace", fontSize:10, color:"#64748b", whiteSpace:"pre-wrap", wordBreak:"break-all", maxHeight:150, overflowY:"auto", marginBottom:12, lineHeight:1.5 }}>{text ? (text.length > 500 ? text.slice(0, 500) + "\n…" : text) : "Preparing…"}</div>
+      <div style={{ background:"var(--bg)", border:"1px solid var(--border)", borderRadius:8, padding:"12px", fontFamily:"monospace", fontSize:10, color:"var(--text-secondary)", whiteSpace:"pre-wrap", wordBreak:"break-all", maxHeight:150, overflowY:"auto", marginBottom:12, lineHeight:1.5 }}>{text ? (text.length > 500 ? text.slice(0, 500) + "\n…" : text) : "Preparing…"}</div>
       <div style={{ display:"flex", gap:8 }}>
         <button style={{ ...S.btn, background:copied?"#16a34a":"#0369a1", flex:1, ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={copy}>{copied ? "✓ Copied" : "Copy backup"}</button>
-        <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", flex:1, ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={download}>Download file</button>
+        <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", flex:1, ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={download}>Download file</button>
       </div>
     </Modal>
   );
@@ -1742,13 +1777,13 @@ function ImportBackupModal({ onClose }) {
         Importing <strong>replaces everything on this device</strong> with the imported account — the data here is wiped. Export your current account first if you might want it back.
       </div>
       <textarea style={{ ...S.input, height:90, resize:"none", fontFamily:"monospace", fontSize:11 }} placeholder="Paste a backup here…" value={text} onChange={e => setText(e.target.value)} />
-      <input type="file" accept=".json,application/json" onChange={onFile} style={{ fontSize:12, color:"#64748b", marginBottom:12, width:"100%" }} />
+      <input type="file" accept=".json,application/json" onChange={onFile} style={{ fontSize:12, color:"var(--text-secondary)", marginBottom:12, width:"100%" }} />
       {err && <div style={{ color:"#f87171", fontSize:13, marginBottom:10 }}>{err}</div>}
       {!confirm ? (
-        <button style={{ ...S.btn, background: text?"#b45309":"#1e293b", width:"100%", ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={() => setConfirm(true)}>Continue…</button>
+        <button style={{ ...S.btn, background: text?"#b45309":"var(--surface-2)", color: text?"var(--on-accent)":"var(--text-heading)", width:"100%", ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={() => setConfirm(true)}>Continue…</button>
       ) : (
         <div style={{ display:"flex", gap:8 }}>
-          <button style={{ ...S.btn, background:"#1e293b", border:"1px solid #334155", flex:1 }} onClick={() => setConfirm(false)}>Cancel</button>
+          <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", flex:1 }} onClick={() => setConfirm(false)}>Cancel</button>
           <button style={{ ...S.btn, background:"#dc2626", flex:1 }} disabled={busy} onClick={doImport}>{busy ? "Importing…" : "Wipe & import"}</button>
         </div>
       )}
@@ -1763,57 +1798,57 @@ function Modal({ children, onClose, title }) {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
-  root: { fontFamily: "'Inter', system-ui, sans-serif", background:"#030712", minHeight:"100vh", color:"#e2e8f0", maxWidth:480, margin:"0 auto", paddingBottom:40 },
-  header: { display:"flex", justifyContent:"space-between", alignItems:"flex-start", padding:"20px 16px 12px", borderBottom:"1px solid #1e293b" },
-  appTitle: { fontSize:24, fontWeight:800, letterSpacing:"-1px", color:"#f1f5f9" },
-  appSub: { fontSize:12, color:"#64748b", marginTop:2 },
+  root: { fontFamily: "'Inter', system-ui, sans-serif", background:"var(--bg)", minHeight:"100vh", color:"var(--text-primary)", maxWidth:480, margin:"0 auto", paddingBottom:40 },
+  header: { display:"flex", justifyContent:"space-between", alignItems:"flex-start", padding:"20px 16px 12px", borderBottom:"1px solid var(--border)" },
+  appTitle: { fontSize:24, fontWeight:800, letterSpacing:"-1px", color:"var(--text-heading)" },
+  appSub: { fontSize:12, color:"var(--text-secondary)", marginTop:2 },
   headerRight: { textAlign:"right" },
   remaining: { fontSize:28, fontWeight:800, letterSpacing:"-1px", lineHeight:1 },
-  remainLabel: { fontSize:10, color:"#64748b", textTransform:"uppercase" },
+  remainLabel: { fontSize:10, color:"var(--text-secondary)", textTransform:"uppercase" },
   pastBanner: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, background:"#451a03", borderBottom:"1px solid #92400e", padding:"8px 16px", fontSize:11, color:"#fcd34d" },
   pastBannerBtn: { background:"#78350f", border:"1px solid #b45309", borderRadius:6, color:"#fde68a", padding:"4px 10px", fontSize:11, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" },
-  tabs: { display:"flex", borderBottom:"1px solid #1e293b", padding:"0 16px" },
-  tab: { flex:1, background:"none", border:"none", borderBottom:"2px solid transparent", color:"#64748b", padding:"10px 4px", fontSize:13, fontWeight:500, cursor:"pointer" },
-  tabActive: { color:"#f1f5f9", borderBottom:"2px solid #0369a1" },
+  tabs: { display:"flex", borderBottom:"1px solid var(--border)", padding:"0 16px" },
+  tab: { flex:1, background:"none", border:"none", borderBottom:"2px solid transparent", color:"var(--text-secondary)", padding:"10px 4px", fontSize:13, fontWeight:500, cursor:"pointer" },
+  tabActive: { color:"var(--text-heading)", borderBottom:"2px solid #0369a1" },
   weekNav: { display:"flex", gap:6, marginBottom:12, overflowX:"auto" },
-  weekPill: { background:"#0f172a", border:"1px solid #1e293b", borderRadius:20, color:"#64748b", padding:"6px 12px", fontSize:13, fontWeight:500, cursor:"pointer", flexShrink:0 },
-  weekPillActive: { background:"#0369a1", borderColor:"#0369a1", color:"#f1f5f9" },
-  dailyCard: { flex:1, background:"#0f172a", border:"1px solid #1e293b", borderRadius:10, padding:"10px 12px" },
-  dailyLabel: { fontSize:10, color:"#64748b", textTransform:"uppercase", marginBottom:3 },
-  dailySub: { fontSize:10, color:"#64748b", marginTop:2 },
-  weekHeader: { padding:"10px 0 8px", borderBottom:"1px solid #1e293b", marginBottom:10 },
-  budgetCard: { background:"#0f172a", border:"1px solid #1e293b", borderRadius:10, padding:"12px" },
-  bar: { height:6, background:"#1e293b", borderRadius:3, overflow:"hidden" },
+  weekPill: { background:"var(--surface)", border:"1px solid var(--border)", borderRadius:20, color:"var(--text-secondary)", padding:"6px 12px", fontSize:13, fontWeight:500, cursor:"pointer", flexShrink:0 },
+  weekPillActive: { background:"#0369a1", borderColor:"#0369a1", color:"var(--on-accent)" },
+  dailyCard: { flex:1, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 12px" },
+  dailyLabel: { fontSize:10, color:"var(--text-secondary)", textTransform:"uppercase", marginBottom:3 },
+  dailySub: { fontSize:10, color:"var(--text-secondary)", marginTop:2 },
+  weekHeader: { padding:"10px 0 8px", borderBottom:"1px solid var(--border)", marginBottom:10 },
+  budgetCard: { background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"12px" },
+  bar: { height:6, background:"var(--surface-2)", borderRadius:3, overflow:"hidden" },
   barFill: { height:"100%", borderRadius:3 },
-  entryRow: { display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid #0f172a" },
+  entryRow: { display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid var(--surface)" },
   splitGroup: { background:"#0c0a1a", border:"1px solid #2e1065", borderRadius:8, padding:"2px 10px", marginBottom:8 },
   entryRowGrouped: { borderBottom:"1px solid #1e1338" },
   dot: { width:7, height:7, borderRadius:"50%", flexShrink:0 },
   badge: { fontSize:10, background:"#451a03", color:"#f59e0b", borderRadius:3, padding:"1px 4px", marginLeft:4 },
-  delBtn: { background:"none", border:"none", color:"#64748b", cursor:"pointer", fontSize:16, padding:"0 2px" },
-  actionBtn: { background:"#0f172a", border:"1px dashed #334155", borderRadius:8, color:"#94a3b8", padding:"10px", fontSize:13, fontWeight:500, cursor:"pointer" },
-  editToggle: { background:"#0f172a", border:"1px solid #334155", borderRadius:8, color:"#94a3b8", padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer", flexShrink:0 },
+  delBtn: { background:"none", border:"none", color:"var(--text-secondary)", cursor:"pointer", fontSize:16, padding:"0 2px" },
+  actionBtn: { background:"var(--surface)", border:"1px dashed var(--border-strong)", borderRadius:8, color:"var(--text-tertiary)", padding:"10px", fontSize:13, fontWeight:500, cursor:"pointer" },
+  editToggle: { background:"var(--surface)", border:"1px solid var(--border-strong)", borderRadius:8, color:"var(--text-tertiary)", padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer", flexShrink:0 },
   bulkDelBar: { display:"flex", alignItems:"center", gap:8, marginTop:12 },
-  checkbox: { width:22, height:22, flexShrink:0, borderRadius:6, border:"1px solid #334155", background:"#0f172a", color:"#4ade80", fontSize:13, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0 },
+  checkbox: { width:22, height:22, flexShrink:0, borderRadius:6, border:"1px solid var(--border-strong)", background:"var(--surface)", color:"#4ade80", fontSize:13, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0 },
   checkboxOn: { background:"#064e3b", borderColor:"#22c55e" },
-  dragHandle: { flexShrink:0, background:"none", border:"none", color:"#475569", fontSize:20, lineHeight:1, cursor:"grab", padding:"6px 4px", touchAction:"none", userSelect:"none" },
-  rowDragging: { opacity:0.55, background:"#0f172a", borderRadius:8 },
-  sectionTitle: { fontSize:13, fontWeight:700, color:"#cbd5e1", textTransform:"uppercase", letterSpacing:"0.08em" },
-  addBtn: { background:"#0369a1", border:"none", borderRadius:6, color:"#f1f5f9", padding:"5px 12px", fontSize:12, fontWeight:600, cursor:"pointer" },
+  dragHandle: { flexShrink:0, background:"none", border:"none", color:"var(--text-muted)", fontSize:20, lineHeight:1, cursor:"grab", padding:"6px 4px", touchAction:"none", userSelect:"none" },
+  rowDragging: { opacity:0.55, background:"var(--surface)", borderRadius:8 },
+  sectionTitle: { fontSize:13, fontWeight:700, color:"var(--text-body)", textTransform:"uppercase", letterSpacing:"0.08em" },
+  addBtn: { background:"#0369a1", border:"none", borderRadius:6, color:"var(--on-accent)", padding:"5px 12px", fontSize:12, fontWeight:600, cursor:"pointer" },
   pinGrid: { display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 },
-  pinCard: { background:"#0f172a", border:"1px solid #1e293b", borderRadius:10, padding:"12px" },
-  empty: { color:"#475569", fontSize:13, padding:"12px 0" },
-  iconBtn: { background:"none", border:"none", color:"#64748b", cursor:"pointer", fontSize:13, padding:"0 2px" },
-  input: { width:"100%", background:"#0f172a", border:"1px solid #1e293b", borderRadius:8, color:"#f1f5f9", padding:"10px 12px", marginBottom:10, fontSize:14, outline:"none", boxSizing:"border-box" },
-  btn: { border:"none", borderRadius:8, padding:"12px", fontSize:14, fontWeight:600, cursor:"pointer", color:"#f1f5f9" },
-  settingsCard: { background:"#0f172a", border:"1px solid #1e293b", borderRadius:10, padding:"14px", marginBottom:12 },
+  pinCard: { background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"12px" },
+  empty: { color:"var(--text-muted)", fontSize:13, padding:"12px 0" },
+  iconBtn: { background:"none", border:"none", color:"var(--text-secondary)", cursor:"pointer", fontSize:13, padding:"0 2px" },
+  input: { width:"100%", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text-heading)", padding:"10px 12px", marginBottom:10, fontSize:14, outline:"none", boxSizing:"border-box" },
+  btn: { border:"none", borderRadius:8, padding:"12px", fontSize:14, fontWeight:600, cursor:"pointer", color:"var(--on-accent)" },
+  settingsCard: { background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"14px", marginBottom:12 },
   modalOverlay: { position:"fixed", inset:0, background:"rgba(0,0,0,0.6)", display:"flex", alignItems:"flex-end", zIndex:100 },
-  modalSheet: { background:"#0f172a", borderRadius:"16px 16px 0 0", padding:"20px 16px 32px", width:"100%", maxWidth:480, margin:"0 auto", border:"1px solid #1e293b" },
+  modalSheet: { background:"var(--surface)", borderRadius:"16px 16px 0 0", padding:"20px 16px 32px", width:"100%", maxWidth:480, margin:"0 auto", border:"1px solid var(--border)" },
   modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 },
-  modalTitle: { fontSize:15, fontWeight:700, color:"#f1f5f9" },
-  weekSelect: { background:"#1e293b", border:"1px solid #334155", borderRadius:6, color:"#f1f5f9", fontSize:14, fontWeight:700, padding:"3px 6px", cursor:"pointer", outline:"none", fontFamily:"inherit" },
-  quickAdd: { position:"fixed", left:"calc(14px + env(safe-area-inset-left))", bottom:"calc(14px + env(safe-area-inset-bottom))", width:52, height:52, borderRadius:"50%", background:"#0369a1", border:"none", color:"#f1f5f9", fontSize:30, fontWeight:400, lineHeight:1, cursor:"pointer", zIndex:50, boxShadow:"0 4px 14px rgba(3,105,161,0.5)", display:"flex", alignItems:"center", justifyContent:"center", paddingBottom:4 },
+  modalTitle: { fontSize:15, fontWeight:700, color:"var(--text-heading)" },
+  weekSelect: { background:"var(--surface-2)", border:"1px solid var(--border-strong)", borderRadius:6, color:"var(--text-heading)", fontSize:14, fontWeight:700, padding:"3px 6px", cursor:"pointer", outline:"none", fontFamily:"inherit" },
+  quickAdd: { position:"fixed", left:"calc(14px + env(safe-area-inset-left))", bottom:"calc(14px + env(safe-area-inset-bottom))", width:52, height:52, borderRadius:"50%", background:"#0369a1", border:"none", color:"var(--on-accent)", fontSize:30, fontWeight:400, lineHeight:1, cursor:"pointer", zIndex:50, boxShadow:"0 4px 14px rgba(3,105,161,0.5)", display:"flex", alignItems:"center", justifyContent:"center", paddingBottom:4 },
   hintBanner: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, background:"#0c2a4a", borderBottom:"1px solid #0369a1", padding:"8px 16px", fontSize:12, color:"#bfdbfe", lineHeight:1.4 },
-  hintBtn: { background:"#0369a1", border:"none", borderRadius:6, color:"#f1f5f9", padding:"4px 10px", fontSize:12, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" },
+  hintBtn: { background:"#0369a1", border:"none", borderRadius:6, color:"var(--on-accent)", padding:"4px 10px", fontSize:12, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" },
   hintDismiss: { background:"none", border:"none", color:"#7dd3fc", fontSize:14, cursor:"pointer", padding:"2px 4px", lineHeight:1 },
 };
