@@ -568,7 +568,7 @@ function App() {
                 React.createElement("button", { style: S.hintDismiss, "aria-label": "Dismiss", onClick: () => dispatch({ type: "SETTINGS", patch: { helpHintSeen: true } }) }, "\u2715")))),
         React.createElement("div", { style: S.tabs }, [["week", "Week"], ["pins", "Pinned"], ["savings", "Savings"], ["summary", "Summary"], ["settings", "⚙"]].map(([k, l]) => (React.createElement("button", { key: k, style: { ...S.tab, ...(tab === k ? S.tabActive : {}) }, onClick: () => setTab(k) }, l)))),
         tab === "week" && (React.createElement("div", { style: { padding: "12px 16px 80px" } },
-            React.createElement("div", { style: S.weekNav }, weeks.map(w => (React.createElement("button", { key: w.index, style: { ...S.weekPill, ...(activeWeek === w.index ? S.weekPillActive : {}) }, onClick: () => setActiveWeek(w.index) },
+            React.createElement("div", { style: S.weekNav }, weeks.map(w => (React.createElement("button", { key: w.index, style: { ...S.weekPill, ...(currentWeekObj && w.index === currentWeekObj.index ? S.weekPillCurrent : {}), ...(activeWeek === w.index ? S.weekPillActive : {}) }, onClick: () => setActiveWeek(w.index) },
                 "W",
                 w.index)))),
             !viewingPast && currentWeekObj && activeWeek === currentWeekObj.index && !isNaN(dailyFromWeek) && (React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 14 } },
@@ -1585,7 +1585,10 @@ const S = {
     tabActive: { color: "var(--text-heading)", borderBottom: "2px solid #0369a1" },
     weekNav: { display: "flex", gap: 6, marginBottom: 12, overflowX: "auto" },
     weekPill: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 20, color: "var(--text-secondary)", padding: "6px 12px", fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 },
-    weekPillActive: { background: "#0369a1", borderColor: "#0369a1", color: "var(--on-accent)" },
+    // Both variants set the full `border` shorthand: mixing shorthand + borderColor longhand
+    // makes React clear the colour to currentColor when a pill deactivates (white rings).
+    weekPillActive: { background: "#0369a1", border: "1px solid #0369a1", color: "var(--on-accent)" },
+    weekPillCurrent: { border: "1px solid var(--text-heading)" },
     dailyCard: { flex: 1, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" },
     dailyLabel: { fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 3 },
     dailySub: { fontSize: 10, color: "var(--text-secondary)", marginTop: 2 },
