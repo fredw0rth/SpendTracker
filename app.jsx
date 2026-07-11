@@ -587,8 +587,10 @@ function App() {
       {tab === "week" && (
         <div style={{ padding:"12px 16px 80px" }}>
           <div style={S.weekNav}>
+            {/* The current calendar week keeps a light outline so it's identifiable even when
+                another week is selected; the selected pill's solid fill takes precedence. */}
             {weeks.map(w => (
-              <button key={w.index} style={{ ...S.weekPill, ...(activeWeek===w.index ? S.weekPillActive : {}) }} onClick={() => setActiveWeek(w.index)}>W{w.index}</button>
+              <button key={w.index} style={{ ...S.weekPill, ...(currentWeekObj && w.index === currentWeekObj.index ? S.weekPillCurrent : {}), ...(activeWeek===w.index ? S.weekPillActive : {}) }} onClick={() => setActiveWeek(w.index)}>W{w.index}</button>
             ))}
           </div>
 
@@ -1812,7 +1814,10 @@ const S = {
   tabActive: { color:"var(--text-heading)", borderBottom:"2px solid #0369a1" },
   weekNav: { display:"flex", gap:6, marginBottom:12, overflowX:"auto" },
   weekPill: { background:"var(--surface)", border:"1px solid var(--border)", borderRadius:20, color:"var(--text-secondary)", padding:"6px 12px", fontSize:13, fontWeight:500, cursor:"pointer", flexShrink:0 },
-  weekPillActive: { background:"#0369a1", borderColor:"#0369a1", color:"var(--on-accent)" },
+  // Both variants set the full `border` shorthand: mixing shorthand + borderColor longhand
+  // makes React clear the colour to currentColor when a pill deactivates (white rings).
+  weekPillActive: { background:"#0369a1", border:"1px solid #0369a1", color:"var(--on-accent)" },
+  weekPillCurrent: { border:"1px solid var(--text-heading)" },
   dailyCard: { flex:1, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 12px" },
   dailyLabel: { fontSize:10, color:"var(--text-secondary)", textTransform:"uppercase", marginBottom:3 },
   dailySub: { fontSize:10, color:"var(--text-secondary)", marginTop:2 },
