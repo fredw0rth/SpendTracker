@@ -446,26 +446,30 @@ function App() {
     setActiveWeek(idx);
   }, [state.payMonth, state.payYear, viewingPastIndex]);
 
-  // Weekly budget rebalancing. Each week starts from the base weekly budget; a week's overspend —
-  // measured against its own (already-reduced) budget — is spread EQUALLY across every week that
-  // comes after it, so going over isn't a cliff on the immediately following week. This cascades:
-  // a later week's overspend spreads across the weeks still after it. The final week has nowhere
-  // left to spread to, so an overspend there just shows as "over" (the period's last absorber).
-  // Lapsed earlier weeks are never touched. Underspend does not roll forward (month-level
+  // Weekly budget rebalancing. weeklyBudget is a per-7-day RATE (monthlyBudget / (periodDays/7)),
+  // so each week's base budget is that rate scaled by the week's own day count — the payday week
+  // and the final stub week are partial, and pro-rating this way makes the per-week budgets sum to
+  // the monthly budget instead of over-allocating the short weeks. A week's overspend — measured
+  // against its own (already-reduced) budget — is then spread across the DAYS of every week that
+  // comes after it, so every later week keeps the same reduced daily allowance (a short week gives
+  // up proportionally less than a full one) and going over isn't a cliff on the next week alone.
+  // This cascades: a later week's overspend spreads across the days still after it. The final week
+  // has nowhere left to spread to, so an overspend there just shows as "over" (the period's last
+  // absorber). Lapsed earlier weeks are never touched. Underspend does not roll forward (month-level
   // "remaining" and the per-day-of-month figure already reflect it).
   function getRebalancedBudgets(weeks, entries, weeklyBudget) {
     const N = weeks.length;
+    const dailyRate = weeklyBudget / 7;
     const spend = weeks.map(w => entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s,e)=>s+e.amount,0));
     const reduction = new Array(N).fill(0); // budget cut carried into each week from earlier overspends
     const budgets = {};
     weeks.forEach((w, i) => {
-      const eff = Math.max(weeklyBudget - reduction[i], 0);
+      const eff = Math.max(dailyRate * w.days.length - reduction[i], 0);
       budgets[w.index] = eff;
       const over = Math.max(spend[i] - eff, 0);
-      const weeksLeft = N - 1 - i;
-      if (over > 0 && weeksLeft > 0) {
-        const share = over / weeksLeft;
-        for (let j = i + 1; j < N; j++) reduction[j] += share;
+      const daysLeft = weeks.slice(i + 1).reduce((s, x) => s + x.days.length, 0);
+      if (over > 0 && daysLeft > 0) {
+        for (let j = i + 1; j < N; j++) reduction[j] += over * (weeks[j].days.length / daysLeft);
       }
     });
     return budgets;
