@@ -17,16 +17,22 @@ const genId = () => Math.random().toString(36).slice(2);
 // chosen category's id in `.category`; an absent/null `.category` means uncategorised ("None"),
 // which is never stored as a category row.
 const DEFAULT_CATEGORIES = [
-    { id: "groceries", name: "Groceries", emoji: "🛒", color: "#f59e0b" },
-    { id: "eatingout", name: "Eating out", emoji: "🍽️", color: "#84cc16" },
-    { id: "transport", name: "Transport", emoji: "🚆", color: "#14b8a6" },
-    { id: "shopping", name: "Shopping", emoji: "🛍️", color: "#d946ef" },
-    { id: "bills", name: "Bills", emoji: "💡", color: "#3b82f6" },
-    { id: "entertain", name: "Entertainment", emoji: "🎬", color: "#10b981" },
-    { id: "personal", name: "Personal care", emoji: "❤️", color: "#ef4444" },
-    { id: "general", name: "General", emoji: "📦", color: "#6b7280" },
+    { id: "groceries", name: "Groceries", icon: "cart", color: "#f59e0b" },
+    { id: "eatingout", name: "Eating out", icon: "utensils", color: "#84cc16" },
+    { id: "transport", name: "Transport", icon: "train", color: "#14b8a6" },
+    { id: "shopping", name: "Shopping", icon: "bag", color: "#d946ef" },
+    { id: "bills", name: "Bills", icon: "bulb", color: "#3b82f6" },
+    { id: "entertain", name: "Entertainment", icon: "film", color: "#10b981" },
+    { id: "personal", name: "Personal care", icon: "heart", color: "#ef4444" },
+    { id: "general", name: "General", icon: "shapes", color: "#6b7280" },
 ];
+// Map default ids → icons, used to upgrade accounts saved with the earlier emoji-based defaults.
+const DEFAULT_CATEGORY_ICON = Object.fromEntries(DEFAULT_CATEGORIES.map(c => [c.id, c.icon]));
 const MAX_CATEGORIES = 24;
+// Monochrome line icons (Lucide, ISC) inlined as SVG inner-markup, keyed by a short name.
+// Rendered white on a category's coloured circle (Monzo-style) via <CategoryIcon>.
+const ICONS = { "cart": "<circle cx=\"8\" cy=\"21\" r=\"1\" /><circle cx=\"19\" cy=\"21\" r=\"1\" /><path d=\"M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12\" />", "utensils": "<path d=\"M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2\" /><path d=\"M7 2v20\" /><path d=\"M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7\" />", "train": "<path d=\"M8 3.1V7a4 4 0 0 0 8 0V3.1\" /><path d=\"m9 15-1-1\" /><path d=\"m15 15 1-1\" /><path d=\"M9 19c-2.8 0-5-2.2-5-5v-4a8 8 0 0 1 16 0v4c0 2.8-2.2 5-5 5Z\" /><path d=\"m8 19-2 3\" /><path d=\"m16 19 2 3\" />", "bag": "<path d=\"M16 10a4 4 0 0 1-8 0\" /><path d=\"M3.103 6.034h17.794\" /><path d=\"M3.4 5.467a2 2 0 0 0-.4 1.2V20a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6.667a2 2 0 0 0-.4-1.2l-2-2.667A2 2 0 0 0 17 2H7a2 2 0 0 0-1.6.8z\" />", "bulb": "<path d=\"M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5\" /><path d=\"M9 18h6\" /><path d=\"M10 22h4\" />", "film": "<path d=\"m12.296 3.464 3.02 3.956\" /><path d=\"M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z\" /><path d=\"M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" /><path d=\"m6.18 5.276 3.1 3.899\" />", "heart": "<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" />", "shapes": "<path d=\"M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z\" /><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\" rx=\"1\" /><circle cx=\"17.5\" cy=\"17.5\" r=\"3.5\" />", "home": "<path d=\"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8\" /><path d=\"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" />", "dumbbell": "<path d=\"M17.596 12.768a2 2 0 1 0 2.829-2.829l-1.768-1.767a2 2 0 0 0 2.828-2.829l-2.828-2.828a2 2 0 0 0-2.829 2.828l-1.767-1.768a2 2 0 1 0-2.829 2.829z\" /><path d=\"m2.5 21.5 1.4-1.4\" /><path d=\"m20.1 3.9 1.4-1.4\" /><path d=\"M5.343 21.485a2 2 0 1 0 2.829-2.828l1.767 1.768a2 2 0 1 0 2.829-2.829l-6.364-6.364a2 2 0 1 0-2.829 2.829l1.768 1.767a2 2 0 0 0-2.828 2.829z\" /><path d=\"m9.6 14.4 4.8-4.8\" />", "coffee": "<path d=\"M10 2v2\" /><path d=\"M14 2v2\" /><path d=\"M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1\" /><path d=\"M6 2v2\" />", "car": "<path d=\"M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2\" /><circle cx=\"7\" cy=\"17\" r=\"2\" /><path d=\"M9 17h6\" /><circle cx=\"17\" cy=\"17\" r=\"2\" />", "gift": "<path d=\"M12 7v14\" /><path d=\"M20 11v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8\" /><path d=\"M7.5 7a1 1 0 0 1 0-5A4.8 8 0 0 1 12 7a4.8 8 0 0 1 4.5-5 1 1 0 0 1 0 5\" /><rect x=\"3\" y=\"7\" width=\"18\" height=\"4\" rx=\"1\" />", "plane": "<path d=\"M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z\" />", "health": "<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" /><path d=\"M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27\" />", "piggy": "<path d=\"M11 17h3v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-3a3.16 3.16 0 0 0 2-2h1a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1h-1a5 5 0 0 0-2-4V3a4 4 0 0 0-3.2 1.6l-.3.4H11a6 6 0 0 0-6 6v1a5 5 0 0 0 2 4v3a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1z\" /><path d=\"M16 10h.01\" /><path d=\"M2 8v1a2 2 0 0 0 2 2h1\" />", "sprout": "<path d=\"M14 9.536V7a4 4 0 0 1 4-4h1.5a.5.5 0 0 1 .5.5V5a4 4 0 0 1-4 4 4 4 0 0 0-4 4c0 2 1 3 1 5a5 5 0 0 1-1 3\" /><path d=\"M4 9a5 5 0 0 1 8 4 5 5 0 0 1-8-4\" /><path d=\"M5 21h14\" />", "phone": "<rect width=\"14\" height=\"20\" x=\"5\" y=\"2\" rx=\"2\" ry=\"2\" /><path d=\"M12 18h.01\" />", "book": "<path d=\"M12 7v14\" /><path d=\"M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z\" />", "pet": "<path d=\"M11.25 16.25h1.5L12 17z\" /><path d=\"M16 14v.5\" /><path d=\"M4.42 11.247A13.152 13.152 0 0 0 4 14.556C4 18.728 7.582 21 12 21s8-2.272 8-6.444a11.702 11.702 0 0 0-.493-3.309\" /><path d=\"M8 14v.5\" /><path d=\"M8.5 8.5c-.384 1.05-1.083 2.028-2.344 2.5-1.931.722-3.576-.297-3.656-1-.113-.994 1.177-6.53 4-7 1.923-.321 3.651.845 3.651 2.235A7.497 7.497 0 0 1 14 5.277c0-1.39 1.844-2.598 3.767-2.277 2.823.47 4.113 6.006 4 7-.08.703-1.725 1.722-3.656 1-1.261-.472-1.855-1.45-2.239-2.5\" />", "fuel": "<path d=\"M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 4 0v-6.998a2 2 0 0 0-.59-1.42L18 5\" /><path d=\"M14 21V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v16\" /><path d=\"M2 21h13\" /><path d=\"M3 9h11\" />", "work": "<path d=\"M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16\" /><rect width=\"20\" height=\"14\" x=\"2\" y=\"6\" rx=\"2\" />", "edu": "<path d=\"M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z\" /><path d=\"M22 10v6\" /><path d=\"M6 12.5V16a6 3 0 0 0 12 0v-3.5\" />", "music": "<path d=\"M9 18V5l12-2v13\" /><circle cx=\"6\" cy=\"18\" r=\"3\" /><circle cx=\"18\" cy=\"16\" r=\"3\" />", "wine": "<path d=\"M8 22h8\" /><path d=\"M7 10h10\" /><path d=\"M12 15v7\" /><path d=\"M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5Z\" />", "shirt": "<path d=\"M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z\" />", "baby": "<path d=\"M10 16c.5.3 1.2.5 2 .5s1.5-.2 2-.5\" /><path d=\"M15 12h.01\" /><path d=\"M19.38 6.813A9 9 0 0 1 20.8 10.2a2 2 0 0 1 0 3.6 9 9 0 0 1-17.6 0 2 2 0 0 1 0-3.6A9 9 0 0 1 12 3c2 0 3.5 1.1 3.5 2.5s-.9 2.5-2 2.5c-.8 0-1.5-.4-1.5-1\" /><path d=\"M9 12h.01\" />", "tools": "<path d=\"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z\" />", "card": "<rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\" /><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\" />", "cash": "<rect width=\"20\" height=\"12\" x=\"2\" y=\"6\" rx=\"2\" /><circle cx=\"12\" cy=\"12\" r=\"2\" /><path d=\"M6 12h.01M18 12h.01\" />", "ticket": "<path d=\"M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z\" /><path d=\"M13 5v2\" /><path d=\"M13 17v2\" /><path d=\"M13 11v2\" />", "game": "<line x1=\"6\" x2=\"10\" y1=\"11\" y2=\"11\" /><line x1=\"8\" x2=\"8\" y1=\"9\" y2=\"13\" /><line x1=\"15\" x2=\"15.01\" y1=\"12\" y2=\"12\" /><line x1=\"18\" x2=\"18.01\" y1=\"10\" y2=\"10\" /><path d=\"M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z\" />", "pizza": "<path d=\"m12 14-1 1\" /><path d=\"m13.75 18.25-1.25 1.42\" /><path d=\"M17.775 5.654a15.68 15.68 0 0 0-12.121 12.12\" /><path d=\"M18.8 9.3a1 1 0 0 0 2.1 7.7\" /><path d=\"M21.964 20.732a1 1 0 0 1-1.232 1.232l-18-5a1 1 0 0 1-.695-1.232A19.68 19.68 0 0 1 15.732 2.037a1 1 0 0 1 1.232.695z\" />", "bus": "<path d=\"M8 6v6\" /><path d=\"M15 6v6\" /><path d=\"M2 12h19.6\" /><path d=\"M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3\" /><circle cx=\"7\" cy=\"18\" r=\"2\" /><path d=\"M9 18h5\" /><circle cx=\"16\" cy=\"18\" r=\"2\" />", "bike": "<circle cx=\"18.5\" cy=\"17.5\" r=\"3.5\" /><circle cx=\"5.5\" cy=\"17.5\" r=\"3.5\" /><circle cx=\"15\" cy=\"5\" r=\"1\" /><path d=\"M12 17.5V14l-3-3 4-3 2 3h2\" />", "star": "<path d=\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z\" />", "tag": "<path d=\"M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z\" /><circle cx=\"7.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />" };
+const ICON_KEYS = Object.keys(ICONS);
 // These module-level views are refreshed from state.methods at the top of App() each render, so
 // the ~30 existing `METHODS` / `METHOD_COLOR[id]` call-sites keep working without prop-threading.
 // (Single synchronous root render, no StrictMode → children read the fresh values in the same pass.)
@@ -370,7 +376,11 @@ function App() {
         return {
             ...s,
             methods: (s.methods && s.methods.length) ? s.methods : DEFAULT_METHODS,
-            categories: (s.categories && s.categories.length) ? s.categories : DEFAULT_CATEGORIES,
+            // Ensure every category has an `icon` (accounts from the emoji-based build won't): reuse the
+            // default id→icon map, else fall back to a generic tag.
+            categories: (s.categories && s.categories.length)
+                ? s.categories.map(c => c.icon ? c : { ...c, icon: DEFAULT_CATEGORY_ICON[c.id] || "tag" })
+                : DEFAULT_CATEGORIES,
             categoryPrompt: s.categoryPrompt === undefined ? true : s.categoryPrompt,
         };
     });
@@ -747,7 +757,7 @@ function App() {
                 const setCats = (cs) => dispatch({ type: "SETTINGS", patch: { categories: cs } });
                 const update = (id, patch) => setCats(state.categories.map(c => c.id === id ? { ...c, ...patch } : c));
                 const remove = (id) => setCats(state.categories.filter(c => c.id !== id));
-                const add = () => setCats([...state.categories, { id: genId(), name: "New category", emoji: "🏷️", color: "#60a5fa" }]);
+                const add = () => setCats([...state.categories, { id: genId(), name: "New category", icon: "tag", color: "#60a5fa" }]);
                 const anyInUse = state.categories.some(c => used.has(c.id));
                 return (React.createElement("div", { style: S.settingsCard },
                     React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8 } },
@@ -755,21 +765,7 @@ function App() {
                             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" } }, "Spending categories"),
                             React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginTop: 2 } }, "Ask for a category after logging a spend")),
                         React.createElement(ToggleSwitch, { on: state.categoryPrompt, onToggle: () => dispatch({ type: "SETTINGS", patch: { categoryPrompt: !state.categoryPrompt } }), ariaLabel: "Toggle category prompt", thumbOn: "\uD83C\uDFF7\uFE0F", thumbOff: "\u2715" })),
-                    state.categories.map(c => {
-                        const canDelete = !used.has(c.id) && state.categories.length > 1;
-                        return (React.createElement("div", { key: c.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
-                            React.createElement("input", { type: "color", value: c.color, onChange: e => update(c.id, { color: e.target.value }), "aria-label": `${c.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
-                            React.createElement("input", { key: `cemoji-${c.id}-${c.emoji}`, defaultValue: c.emoji, "aria-label": `${c.name} emoji`, onBlur: e => { const v = e.target.value.trim().slice(0, 2); if (v && v !== c.emoji)
-                                    update(c.id, { emoji: v });
-                                else if (!v)
-                                    e.target.value = c.emoji; }, style: { ...S.input, marginBottom: 0, width: 52, textAlign: "center", flexShrink: 0 } }),
-                            React.createElement("input", { key: `cname-${c.id}-${c.name}`, defaultValue: c.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== c.name)
-                                    update(c.id, { name: v });
-                                else if (!v)
-                                    e.target.value = c.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
-                            React.createElement("button", { onClick: () => { if (canDelete)
-                                    remove(c.id); }, disabled: !canDelete, title: used.has(c.id) ? "In use — can't remove" : (state.categories.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")));
-                    }),
+                    state.categories.map(c => (React.createElement(CategoryEditorRow, { key: c.id, cat: c, canDelete: !used.has(c.id) && state.categories.length > 1, lockReason: used.has(c.id) ? "In use — can't remove" : (state.categories.length <= 1 ? "Keep at least one" : "Remove"), onUpdate: patch => update(c.id, patch), onRemove: () => remove(c.id) }))),
                     anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Categories used by a logged spend can't be removed."),
                     React.createElement("button", { onClick: add, disabled: state.categories.length >= MAX_CATEGORIES, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: state.categories.length >= MAX_CATEGORIES ? 0.5 : 1, cursor: state.categories.length >= MAX_CATEGORIES ? "default" : "pointer" } }, state.categories.length >= MAX_CATEGORIES ? `Maximum ${MAX_CATEGORIES} categories` : "+ Add category")));
             })(),
@@ -1067,7 +1063,8 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
     return (React.createElement("div", { onClick: onEdit, style: { ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom: "none" } : {}), cursor: onEdit ? "pointer" : "default" } },
         React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[entry.method] || "var(--text-secondary)" } }),
         React.createElement("span", { style: { flex: 1, color: col, fontSize: 13 } },
-            cat && React.createElement("span", { title: cat.name, style: { marginRight: 5 } }, cat.emoji),
+            cat && React.createElement("span", { title: cat.name, style: { display: "inline-flex", verticalAlign: "-2px", marginRight: 5, width: 16, height: 16, borderRadius: "50%", background: cat.color, alignItems: "center", justifyContent: "center" } },
+                React.createElement(CategoryIcon, { icon: cat.icon, size: 10, color: "#fff" })),
             entry.label || METHOD_NAME[entry.method] || entry.method,
             entry.pinned && React.createElement("span", { style: { ...S.badge, background: "#0c4a6e", color: "#7dd3fc" } }, " \uD83D\uDCCC fixed"),
             entry.type === "business" && React.createElement("span", { style: S.badge }, " work"),
@@ -1130,19 +1127,58 @@ function MethodSelector({ value, onChange, dimmed }) {
         })),
         moreRight && React.createElement("div", { "aria-hidden": "true", style: { position: "absolute", top: 0, bottom: 0, right: 0, width: 24, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 2, pointerEvents: "none", color: "var(--text-tertiary)", fontSize: 12, background: "linear-gradient(to right, rgba(15,23,42,0), var(--surface) 70%)" } }, "\u25B8")));
 }
+// ─── Category Icon ────────────────────────────────────────────────────────────
+// Renders a monochrome line icon from ICONS. `color` sets both stroke and fill (for the few
+// icons with filled bits) via currentColor, so it reads white on a coloured circle or tinted
+// inline. Falls back to the generic "tag" glyph for an unknown key.
+function CategoryIcon({ icon, size = 24, color = "#fff", strokeWidth = 2 }) {
+    const markup = ICONS[icon] || ICONS.tag;
+    return React.createElement("svg", {
+        width: size, height: size, viewBox: "0 0 24 24", fill: "none",
+        stroke: "currentColor", strokeWidth, strokeLinecap: "round", strokeLinejoin: "round",
+        style: { color, display: "block" }, "aria-hidden": "true",
+        dangerouslySetInnerHTML: { __html: markup },
+    });
+}
+// A scrollable grid of every available icon; `value` is the selected key, `onPick(key)` selects.
+function IconPicker({ value, onPick }) {
+    return (React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 6, maxHeight: 160, overflowY: "auto", padding: "2px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8 } }, ICON_KEYS.map(k => {
+        const on = value === k;
+        return (React.createElement("button", { key: k, onClick: () => onPick(k), title: k, style: { display: "flex", alignItems: "center", justifyContent: "center", padding: "9px 0", borderRadius: 8, cursor: "pointer", background: on ? "var(--surface-2)" : "transparent", border: `1px solid ${on ? "var(--border-strong)" : "transparent"}` } },
+            React.createElement(CategoryIcon, { icon: k, size: 20, color: on ? "var(--text-heading)" : "var(--text-muted)" })));
+    })));
+}
+// One editable row in the Settings categories list: colour swatch, an icon button that reveals
+// an inline IconPicker, a name field, and a remove button. Owns its own icon-picker open state.
+function CategoryEditorRow({ cat, canDelete, lockReason, onUpdate, onRemove }) {
+    const [pickIcon, setPickIcon] = useState(false);
+    return (React.createElement("div", { style: { marginBottom: 8 } },
+        React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+            React.createElement("input", { type: "color", value: cat.color, onChange: e => onUpdate({ color: e.target.value }), "aria-label": `${cat.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
+            React.createElement("button", { onClick: () => setPickIcon(p => !p), title: "Choose icon", "aria-label": `${cat.name} icon`, style: { width: 34, height: 34, borderRadius: "50%", background: cat.color, border: pickIcon ? "2px solid var(--text-heading)" : "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, padding: 0 } },
+                React.createElement(CategoryIcon, { icon: cat.icon, size: 18, color: "#fff" })),
+            React.createElement("input", { key: `cname-${cat.id}-${cat.name}`, defaultValue: cat.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== cat.name)
+                    onUpdate({ name: v });
+                else if (!v)
+                    e.target.value = cat.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
+            React.createElement("button", { onClick: () => { if (canDelete)
+                    onRemove(); }, disabled: !canDelete, title: lockReason, style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")),
+        pickIcon && React.createElement("div", { style: { marginTop: 6 } },
+            React.createElement(IconPicker, { value: cat.icon, onPick: k => { onUpdate({ icon: k }); setPickIcon(false); } }))));
+}
 // ─── Category Picker ──────────────────────────────────────────────────────────
-// A Monzo-style grid of round category tiles (emoji on a coloured circle). Shown in place of
-// the keypad after logging a spend, and inline in the edit view. `value` is a category id or
-// null (None). Selecting calls `onPick(id | null)`. `onCreate(cat)` appends a new custom
+// A Monzo-style grid of round category tiles (a white line-icon on a coloured circle). Shown in
+// place of the keypad after logging a spend, and inline in the edit view. `value` is a category
+// id or null (None). Selecting calls `onPick(id | null)`. `onCreate(cat)` appends a new custom
 // category. `onBack`, when given, renders a back affordance that returns without picking.
 function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
     const [creating, setCreating] = useState(false);
     const [name, setName] = useState("");
-    const [emoji, setEmoji] = useState("🏷️");
+    const [icon, setIcon] = useState("tag");
     const [color, setColor] = useState("#60a5fa");
     const full = categories.length >= MAX_CATEGORIES;
     const tile = (bg, border, content, label, on, onClick, key) => (React.createElement("button", { key: key, onClick: onClick, title: label, style: { background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 } },
-        React.createElement("span", { style: { position: "relative", width: 58, height: 58, borderRadius: "50%", background: bg, border: `2px solid ${on ? "var(--text-heading)" : border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, boxShadow: on ? "0 0 0 2px var(--surface), 0 0 0 4px var(--text-heading)" : "none" } },
+        React.createElement("span", { style: { position: "relative", width: 58, height: 58, borderRadius: "50%", background: bg, border: `2px solid ${on ? "var(--text-heading)" : border}`, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: on ? "0 0 0 2px var(--surface), 0 0 0 4px var(--text-heading)" : "none" } },
             content,
             on && React.createElement("span", { style: { position: "absolute", top: -2, right: -2, width: 18, height: 18, borderRadius: "50%", background: "var(--text-heading)", color: "var(--surface)", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" } }, "\u2713")),
         React.createElement("span", { style: { fontSize: 11, color: on ? "var(--text-heading)" : "var(--text-muted)", fontWeight: on ? 700 : 500, textAlign: "center", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, label)));
@@ -1150,17 +1186,21 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
         return (React.createElement("div", null,
             React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", fontWeight: 600, marginBottom: 10 } }, "New category"),
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10 } },
+                React.createElement("span", { style: { width: 40, height: 40, borderRadius: "50%", background: color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
+                    React.createElement(CategoryIcon, { icon: icon, size: 22, color: "#fff" })),
                 React.createElement("input", { type: "color", value: color, onChange: e => setColor(e.target.value), "aria-label": "Category colour", style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
-                React.createElement("input", { value: emoji, onChange: e => setEmoji(e.target.value.slice(0, 2)), "aria-label": "Category emoji", placeholder: "\uD83C\uDFF7\uFE0F", style: { ...S.input, marginBottom: 0, width: 52, textAlign: "center", flexShrink: 0 } }),
                 React.createElement("input", { value: name, onChange: e => setName(e.target.value), placeholder: "Name e.g. Coffee", autoFocus: true, style: { ...S.input, marginBottom: 0, flex: 1 } })),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 } }, "Icon"),
+            React.createElement("div", { style: { marginBottom: 10 } },
+                React.createElement(IconPicker, { value: icon, onPick: setIcon })),
             React.createElement("div", { style: { display: "flex", gap: 8 } },
                 React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setCreating(false) }, "Cancel"),
-                React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1, opacity: name.trim() ? 1 : 0.5 }, disabled: !name.trim(), onClick: () => { const cat = { id: genId(), name: name.trim(), emoji: emoji.trim() || "🏷️", color }; onCreate(cat); onPick(cat.id); } }, "Create"))));
+                React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1, opacity: name.trim() ? 1 : 0.5 }, disabled: !name.trim(), onClick: () => { const cat = { id: genId(), name: name.trim(), icon, color }; onCreate(cat); onPick(cat.id); } }, "Create"))));
     }
     return (React.createElement("div", null,
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, justifyItems: "center", maxHeight: 300, overflowY: "auto" } },
             tile("var(--surface)", "var(--border-strong)", React.createElement("span", { style: { color: "var(--text-muted)", fontSize: 20 } }, "\u2205"), "None", value == null, () => onPick(null), "none"),
-            categories.map(c => tile(c.color, c.color, React.createElement("span", null, c.emoji), c.name, value === c.id, () => onPick(c.id), c.id)),
+            categories.map(c => tile(c.color, c.color, React.createElement(CategoryIcon, { icon: c.icon, size: 26, color: "#fff" }), c.name, value === c.id, () => onPick(c.id), c.id)),
             !full && tile("var(--surface)", "var(--border-strong)", React.createElement("span", { style: { color: "var(--text-secondary)", fontSize: 26, fontWeight: 300 } }, "+"), "Create", false, () => setCreating(true), "create")),
         onBack && React.createElement("button", { style: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", padding: "12px 0 0", width: "100%" }, onClick: onBack }, "\u2190 Back")));
 }
@@ -1369,7 +1409,8 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
                 React.createElement(CategoryPicker, { categories: categories, value: category, onPick: (id) => { setCategory(id); setEditPickCat(false); }, onCreate: onAddCategory, onBack: () => setEditPickCat(false) }))) : (React.createElement("button", { onClick: () => setEditPickCat(true), style: { display: "flex", alignItems: "center", gap: 8, width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px", marginBottom: 10, cursor: "pointer", color: "var(--text-heading)", fontSize: 13 } },
                 catRow
                     ? React.createElement(React.Fragment, null,
-                        React.createElement("span", { style: { width: 20, height: 20, borderRadius: "50%", background: catRow.color, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12 } }, catRow.emoji),
+                        React.createElement("span", { style: { width: 20, height: 20, borderRadius: "50%", background: catRow.color, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
+                            React.createElement(CategoryIcon, { icon: catRow.icon, size: 12, color: "#fff" })),
                         catRow.name)
                     : React.createElement("span", { style: { color: "var(--text-muted)" } }, "None"),
                 React.createElement("span", { style: { marginLeft: "auto", color: "var(--text-tertiary)" } }, "Change \u25B8"))))),
