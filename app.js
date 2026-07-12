@@ -313,7 +313,7 @@ const HELP_TOPICS = [
     ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover."],
     ["Summary & export", "The Summary tab breaks the period down: spend vs budget, personal vs reimbursable work spend, a per-card breakdown you can tap into, your biggest spends, and where spending came from. You can export it all as text."],
     ["Going back to a past period", "In Settings, “Go back to…” lets you revisit a finished period. Its figures reflect that period's own budget, and any edits you make there apply only to it — your current period is left untouched."],
-    ["Your data & security", "Everything is encrypted on your device with your passphrase and never leaves your phone. Your recovery code is the only way back in if you forget the passphrase, so keep it somewhere safe. Face ID unlocks where supported, the app auto-locks after a couple of minutes in the background, and the 🔒 button locks it instantly."],
+    ["Your data & security", "Everything is encrypted on your device with your passphrase and never leaves your phone. Your recovery code is the only way back in if you forget the passphrase, so keep it somewhere safe. Face ID unlocks where supported, the app auto-locks after a couple of minutes in the background, and Lock now (at the bottom of Settings) locks it instantly."],
     ["Moving to another device", "Each browser keeps its own separate data. Use Export account (below) to get an encrypted backup, then import it in another browser or on a new phone to carry everything across."],
 ];
 // Collapsible "How it works" card: an outer expand reveals a single-open topic accordion.
@@ -362,7 +362,7 @@ function App() {
     const [showBackup, setShowBackup] = useState(false); // export-account modal
     const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
     const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
-    const [helpFocus, setHelpFocus] = useState(false); // when true, Settings' "How it works" card auto-opens (from the new-user hint)
+    const [helpNonce, setHelpNonce] = useState(0); // bumped by the help button / new-user hint; each bump re-opens & scrolls to Settings' "How it works" card
     const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
     // If history trims (caps at 12 months) while a past period is being viewed, the index
     // it pointed at could now be stale — fall back to live rather than show the wrong period.
@@ -559,6 +559,7 @@ function App() {
             React.createElement("div", { style: S.headerRight },
                 React.createElement("div", { style: { ...S.remaining, color: remainColor } }, fmt(remaining)),
                 React.createElement("div", { style: S.remainLabel }, "left"))),
+        React.createElement("button", { style: S.helpFab, "aria-label": "Help", onClick: () => { setTab("settings"); setHelpNonce(n => n + 1); } }, "?"),
         viewingPast && (React.createElement("div", { style: S.pastBanner },
             React.createElement("span", null,
                 "Viewing ",
@@ -568,9 +569,10 @@ function App() {
         !viewingPast && state.helpHintSeen === false && (React.createElement("div", { style: S.hintBanner },
             React.createElement("span", null, "\uD83D\uDC4B New here? Take a quick tour of how it all works."),
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, flexShrink: 0 } },
-                React.createElement("button", { style: S.hintBtn, onClick: () => { dispatch({ type: "SETTINGS", patch: { helpHintSeen: true } }); setTab("settings"); setHelpFocus(true); } }, "Show me"),
+                React.createElement("button", { style: S.hintBtn, onClick: () => { dispatch({ type: "SETTINGS", patch: { helpHintSeen: true } }); setTab("settings"); setHelpNonce(n => n + 1); } }, "Show me"),
                 React.createElement("button", { style: S.hintDismiss, "aria-label": "Dismiss", onClick: () => dispatch({ type: "SETTINGS", patch: { helpHintSeen: true } }) }, "\u2715")))),
-        React.createElement("div", { style: S.tabs }, [["week", "Week"], ["pins", "Pinned"], ["savings", "Savings"], ["summary", "Summary"], ["settings", "⚙"]].map(([k, l]) => (React.createElement("button", { key: k, style: { ...S.tab, ...(tab === k ? S.tabActive : {}) }, onClick: () => setTab(k) }, l)))),
+        React.createElement("div", { style: S.tabs }, [["week", "Week"], ["pins", "Pinned"], ["savings", "Savings"], ["summary", "Summary"], ["settings", "⚙"]].map(([k, l]) => (React.createElement("button", { key: k, style: { ...S.tab, ...(tab === k ? S.tabActive : {}) }, onClick: () => { setTab(k); if (k === "settings")
+                setHelpNonce(0); } }, l)))),
         tab === "week" && (React.createElement("div", { style: { padding: "12px 16px 80px" } },
             React.createElement("div", { style: S.weekNav }, weeks.map(w => (React.createElement("button", { key: w.index, style: { ...S.weekPill, ...(currentWeekObj && w.index === currentWeekObj.index ? S.weekPillCurrent : {}), ...(activeWeek === w.index ? S.weekPillActive : {}) }, onClick: () => setActiveWeek(w.index) },
                 "W",
@@ -665,7 +667,6 @@ function App() {
                             state.theme === "light" ? "Light" : "Dark",
                             " mode")),
                     React.createElement(ThemeToggle, { theme: state.theme || "dark", onToggle: () => dispatch({ type: "SETTINGS", patch: { theme: state.theme === "light" ? "dark" : "light" } }) }))),
-            React.createElement(HelpCard, { focus: helpFocus }),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Budget"),
                 React.createElement("div", { style: { marginBottom: 10 } },
@@ -732,12 +733,18 @@ function App() {
                     ")")) : (React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: () => setViewingPastIndex(mostRecentArchiveIndex) },
                     "\u2190 Go back to ",
                     state.monthHistory[mostRecentArchiveIndex].monthLabel))) : (React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)" } }, "No previous period to go back to yet."))),
+            React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Move to another device"),
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Each browser keeps its own separate data \u2014 so Safari, Chrome and the home-screen app each start fresh. Export your account here, then import it in the other browser or on a new phone to carry everything across."),
                 React.createElement("div", { style: { display: "flex", gap: 8 } },
                     React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1 }, onClick: () => setShowBackup(true) }, "Export account"),
                     React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setShowImportAcct(true) }, "Import account"))),
+            React.createElement("div", { style: S.settingsCard },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Security"),
+                React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Lock the app now and return to the passphrase screen. It also auto-locks after a couple of minutes in the background."),
+                React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: () => { if (window.SpendVault && window.SpendVault.requestLock)
+                        window.SpendVault.requestLock(); } }, "\uD83D\uDD12 Lock now")),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#f87171", marginBottom: 10, textTransform: "uppercase" } }, "Reset"),
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Erase everything on this device \u2014 budget, transactions, history and your passphrase \u2014 and start over from setup. This can't be undone."),
@@ -1631,4 +1638,6 @@ const S = {
     hintBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#0c2a4a", borderBottom: "1px solid #0369a1", padding: "8px 16px", fontSize: 12, color: "#bfdbfe", lineHeight: 1.4 },
     hintBtn: { background: "#0369a1", border: "none", borderRadius: 6, color: "var(--on-accent)", padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
     hintDismiss: { background: "none", border: "none", color: "#7dd3fc", fontSize: 14, cursor: "pointer", padding: "2px 4px", lineHeight: 1 },
+    // Floating help button — same footprint as the old lock button, themed so it reads in light + dark.
+    helpFab: { position: "fixed", right: "calc(14px + env(safe-area-inset-right))", bottom: "calc(14px + env(safe-area-inset-bottom))", width: 44, height: 44, borderRadius: "50%", background: "var(--surface)", border: "1px solid var(--border-strong)", color: "var(--text-secondary)", fontSize: 20, fontWeight: 700, cursor: "pointer", zIndex: 50, boxShadow: "0 2px 10px rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, padding: 0 },
 };
