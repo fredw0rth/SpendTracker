@@ -12,12 +12,30 @@ const DEFAULT_METHODS = [
 ];
 const MAX_METHODS = 12;
 const genId = () => Math.random().toString(36).slice(2);
+// Spending categories: what a spend was *for* (Groceries, Transport, …). Like methods, these are
+// a user-editable list of {id, name, emoji, color} living in state.categories. Entries store the
+// chosen category's id in `.category`; an absent/null `.category` means uncategorised ("None"),
+// which is never stored as a category row.
+const DEFAULT_CATEGORIES = [
+    { id: "groceries", name: "Groceries", emoji: "🛒", color: "#f59e0b" },
+    { id: "eatingout", name: "Eating out", emoji: "🍽️", color: "#84cc16" },
+    { id: "transport", name: "Transport", emoji: "🚆", color: "#14b8a6" },
+    { id: "shopping", name: "Shopping", emoji: "🛍️", color: "#d946ef" },
+    { id: "bills", name: "Bills", emoji: "💡", color: "#3b82f6" },
+    { id: "entertain", name: "Entertainment", emoji: "🎬", color: "#10b981" },
+    { id: "personal", name: "Personal care", emoji: "❤️", color: "#ef4444" },
+    { id: "general", name: "General", emoji: "📦", color: "#6b7280" },
+];
+const MAX_CATEGORIES = 24;
 // These module-level views are refreshed from state.methods at the top of App() each render, so
 // the ~30 existing `METHODS` / `METHOD_COLOR[id]` call-sites keep working without prop-threading.
 // (Single synchronous root render, no StrictMode → children read the fresh values in the same pass.)
 let METHODS = DEFAULT_METHODS; // [{id,name,color}]
 let METHOD_COLOR = Object.fromEntries(DEFAULT_METHODS.map(m => [m.id, m.color])); // id -> colour
 let METHOD_NAME = Object.fromEntries(DEFAULT_METHODS.map(m => [m.id, m.name])); // id -> display name
+// Category views, refreshed from state.categories in App() the same way (see App()).
+let CATEGORIES = DEFAULT_CATEGORIES; // [{id,name,emoji,color}]
+let CATEGORY_BY_ID = Object.fromEntries(DEFAULT_CATEGORIES.map(c => [c.id, c])); // id -> {name,emoji,color}
 // Derive a coherent chip palette (used by the selectors) from a single method colour.
 const chipColors = (c) => ({ bg: c + "22", border: c, text: c });
 const STORAGE_KEY = "spendtracker_v6";
@@ -227,6 +245,8 @@ function defaultState() {
         theme: "dark",
         lastMethod: "Amex",
         methods: DEFAULT_METHODS,
+        categories: DEFAULT_CATEGORIES,
+        categoryPrompt: true,
         helpHintSeen: false,
         entries: [],
         pins: [],
@@ -345,13 +365,21 @@ function App() {
     var _a;
     const [state, dispatch] = useReducer(reducer, null, () => {
         const s = load() || defaultState();
-        // Backfill payment methods for accounts created before they were customisable.
-        return (s.methods && s.methods.length) ? s : { ...s, methods: DEFAULT_METHODS };
+        // Backfill fields for accounts created before they existed: methods (customisable payment
+        // types), categories, and the category-prompt toggle. Spread once so all backfills apply.
+        return {
+            ...s,
+            methods: (s.methods && s.methods.length) ? s.methods : DEFAULT_METHODS,
+            categories: (s.categories && s.categories.length) ? s.categories : DEFAULT_CATEGORIES,
+            categoryPrompt: s.categoryPrompt === undefined ? true : s.categoryPrompt,
+        };
     });
     // Refresh the module-level method views from state before any child renders (see Constants).
     METHODS = state.methods;
     METHOD_COLOR = Object.fromEntries(state.methods.map(m => [m.id, m.color]));
     METHOD_NAME = Object.fromEntries(state.methods.map(m => [m.id, m.name]));
+    CATEGORIES = state.categories;
+    CATEGORY_BY_ID = Object.fromEntries(state.categories.map(c => [c.id, c]));
     const [tab, setTab] = useState("week");
     const [activeWeek, setActiveWeek] = useState(1);
     const [showEntryFor, setShowEntryFor] = useState(null);
@@ -709,6 +737,42 @@ function App() {
                     anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Types with logged transactions can't be removed."),
                     React.createElement("button", { onClick: add, disabled: state.methods.length >= MAX_METHODS, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" } }, state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type")));
             })(),
+            (() => {
+                // Every category id referenced by a live or archived entry — such categories can't be removed.
+                const used = new Set();
+                [state, ...(state.monthHistory || [])].forEach(src => {
+                    (src.entries || []).forEach(e => { if (e.category)
+                        used.add(e.category); });
+                });
+                const setCats = (cs) => dispatch({ type: "SETTINGS", patch: { categories: cs } });
+                const update = (id, patch) => setCats(state.categories.map(c => c.id === id ? { ...c, ...patch } : c));
+                const remove = (id) => setCats(state.categories.filter(c => c.id !== id));
+                const add = () => setCats([...state.categories, { id: genId(), name: "New category", emoji: "🏷️", color: "#60a5fa" }]);
+                const anyInUse = state.categories.some(c => used.has(c.id));
+                return (React.createElement("div", { style: S.settingsCard },
+                    React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8 } },
+                        React.createElement("div", null,
+                            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" } }, "Spending categories"),
+                            React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginTop: 2 } }, "Ask for a category after logging a spend")),
+                        React.createElement(ToggleSwitch, { on: state.categoryPrompt, onToggle: () => dispatch({ type: "SETTINGS", patch: { categoryPrompt: !state.categoryPrompt } }), ariaLabel: "Toggle category prompt", thumbOn: "\uD83C\uDFF7\uFE0F", thumbOff: "\u2715" })),
+                    state.categories.map(c => {
+                        const canDelete = !used.has(c.id) && state.categories.length > 1;
+                        return (React.createElement("div", { key: c.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
+                            React.createElement("input", { type: "color", value: c.color, onChange: e => update(c.id, { color: e.target.value }), "aria-label": `${c.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
+                            React.createElement("input", { key: `cemoji-${c.id}-${c.emoji}`, defaultValue: c.emoji, "aria-label": `${c.name} emoji`, onBlur: e => { const v = e.target.value.trim().slice(0, 2); if (v && v !== c.emoji)
+                                    update(c.id, { emoji: v });
+                                else if (!v)
+                                    e.target.value = c.emoji; }, style: { ...S.input, marginBottom: 0, width: 52, textAlign: "center", flexShrink: 0 } }),
+                            React.createElement("input", { key: `cname-${c.id}-${c.name}`, defaultValue: c.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== c.name)
+                                    update(c.id, { name: v });
+                                else if (!v)
+                                    e.target.value = c.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
+                            React.createElement("button", { onClick: () => { if (canDelete)
+                                    remove(c.id); }, disabled: !canDelete, title: used.has(c.id) ? "In use — can't remove" : (state.categories.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")));
+                    }),
+                    anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Categories used by a logged spend can't be removed."),
+                    React.createElement("button", { onClick: add, disabled: state.categories.length >= MAX_CATEGORIES, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: state.categories.length >= MAX_CATEGORIES ? 0.5 : 1, cursor: state.categories.length >= MAX_CATEGORIES ? "default" : "pointer" } }, state.categories.length >= MAX_CATEGORIES ? `Maximum ${MAX_CATEGORIES} categories` : "+ Add category")));
+            })(),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Pay period"),
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10 } },
@@ -753,7 +817,7 @@ function App() {
                     React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe)
                             window.SpendVault.wipe(); } }, "Erase everything")))))),
         !viewingPast && (React.createElement("button", { "aria-label": "Quick add spend", onClick: () => setShowEntryFor(todayWeekIndex(weeks)), style: S.quickAdd }, "+")),
-        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
+        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
         (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
@@ -966,6 +1030,11 @@ function ThemeToggle({ theme, onToggle }) {
     return (React.createElement("button", { role: "switch", "aria-checked": isLight, "aria-label": isLight ? "Switch to dark mode" : "Switch to light mode", onClick: onToggle, style: { position: "relative", width: 56, height: 30, borderRadius: 15, border: "1px solid var(--border-strong)", background: "var(--surface-2)", cursor: "pointer", padding: 0, flexShrink: 0 } },
         React.createElement("span", { "aria-hidden": "true", style: { position: "absolute", top: 2, left: isLight ? 28 : 2, width: 24, height: 24, borderRadius: "50%", background: "var(--surface)", border: "1px solid var(--border-strong)", boxShadow: "0 1px 3px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, lineHeight: 1, transition: "left 0.2s ease" } }, isLight ? "☀️" : "🌙")));
 }
+// Generic on/off switch, same visual language as ThemeToggle (used for the category prompt).
+function ToggleSwitch({ on, onToggle, ariaLabel, thumbOn = "", thumbOff = "" }) {
+    return (React.createElement("button", { role: "switch", "aria-checked": !!on, "aria-label": ariaLabel, onClick: onToggle, style: { position: "relative", width: 56, height: 30, borderRadius: 15, border: "1px solid var(--border-strong)", background: on ? "#0369a1" : "var(--surface-2)", cursor: "pointer", padding: 0, flexShrink: 0, transition: "background 0.2s ease" } },
+        React.createElement("span", { "aria-hidden": "true", style: { position: "absolute", top: 2, left: on ? 28 : 2, width: 24, height: 24, borderRadius: "50%", background: "var(--surface)", border: "1px solid var(--border-strong)", boxShadow: "0 1px 3px rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, lineHeight: 1, transition: "left 0.2s ease" } }, on ? thumbOn : thumbOff)));
+}
 // ─── Confirm Delete Button ────────────────────────────────────────────────────
 // Tapping × turns it into a red "confirm?" for ~3s; a second tap deletes.
 // Tapping anywhere else, or letting it time out, resets back to ×.
@@ -994,9 +1063,11 @@ function ConfirmDeleteButton({ onConfirm, style }) {
 // ─── Entry Line ───────────────────────────────────────────────────────────────
 function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
     const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "var(--text-primary)";
+    const cat = entry.category && CATEGORY_BY_ID[entry.category];
     return (React.createElement("div", { onClick: onEdit, style: { ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom: "none" } : {}), cursor: onEdit ? "pointer" : "default" } },
         React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[entry.method] || "var(--text-secondary)" } }),
         React.createElement("span", { style: { flex: 1, color: col, fontSize: 13 } },
+            cat && React.createElement("span", { title: cat.name, style: { marginRight: 5 } }, cat.emoji),
             entry.label || METHOD_NAME[entry.method] || entry.method,
             entry.pinned && React.createElement("span", { style: { ...S.badge, background: "#0c4a6e", color: "#7dd3fc" } }, " \uD83D\uDCCC fixed"),
             entry.type === "business" && React.createElement("span", { style: S.badge }, " work"),
@@ -1059,8 +1130,42 @@ function MethodSelector({ value, onChange, dimmed }) {
         })),
         moreRight && React.createElement("div", { "aria-hidden": "true", style: { position: "absolute", top: 0, bottom: 0, right: 0, width: 24, display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 2, pointerEvents: "none", color: "var(--text-tertiary)", fontSize: 12, background: "linear-gradient(to right, rgba(15,23,42,0), var(--surface) 70%)" } }, "\u25B8")));
 }
+// ─── Category Picker ──────────────────────────────────────────────────────────
+// A Monzo-style grid of round category tiles (emoji on a coloured circle). Shown in place of
+// the keypad after logging a spend, and inline in the edit view. `value` is a category id or
+// null (None). Selecting calls `onPick(id | null)`. `onCreate(cat)` appends a new custom
+// category. `onBack`, when given, renders a back affordance that returns without picking.
+function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
+    const [creating, setCreating] = useState(false);
+    const [name, setName] = useState("");
+    const [emoji, setEmoji] = useState("🏷️");
+    const [color, setColor] = useState("#60a5fa");
+    const full = categories.length >= MAX_CATEGORIES;
+    const tile = (bg, border, content, label, on, onClick, key) => (React.createElement("button", { key: key, onClick: onClick, title: label, style: { background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 6 } },
+        React.createElement("span", { style: { position: "relative", width: 58, height: 58, borderRadius: "50%", background: bg, border: `2px solid ${on ? "var(--text-heading)" : border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, boxShadow: on ? "0 0 0 2px var(--surface), 0 0 0 4px var(--text-heading)" : "none" } },
+            content,
+            on && React.createElement("span", { style: { position: "absolute", top: -2, right: -2, width: 18, height: 18, borderRadius: "50%", background: "var(--text-heading)", color: "var(--surface)", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" } }, "\u2713")),
+        React.createElement("span", { style: { fontSize: 11, color: on ? "var(--text-heading)" : "var(--text-muted)", fontWeight: on ? 700 : 500, textAlign: "center", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, label)));
+    if (creating) {
+        return (React.createElement("div", null,
+            React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", fontWeight: 600, marginBottom: 10 } }, "New category"),
+            React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10 } },
+                React.createElement("input", { type: "color", value: color, onChange: e => setColor(e.target.value), "aria-label": "Category colour", style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
+                React.createElement("input", { value: emoji, onChange: e => setEmoji(e.target.value.slice(0, 2)), "aria-label": "Category emoji", placeholder: "\uD83C\uDFF7\uFE0F", style: { ...S.input, marginBottom: 0, width: 52, textAlign: "center", flexShrink: 0 } }),
+                React.createElement("input", { value: name, onChange: e => setName(e.target.value), placeholder: "Name e.g. Coffee", autoFocus: true, style: { ...S.input, marginBottom: 0, flex: 1 } })),
+            React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setCreating(false) }, "Cancel"),
+                React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1, opacity: name.trim() ? 1 : 0.5 }, disabled: !name.trim(), onClick: () => { const cat = { id: genId(), name: name.trim(), emoji: emoji.trim() || "🏷️", color }; onCreate(cat); onPick(cat.id); } }, "Create"))));
+    }
+    return (React.createElement("div", null,
+        React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, justifyItems: "center", maxHeight: 300, overflowY: "auto" } },
+            tile("var(--surface)", "var(--border-strong)", React.createElement("span", { style: { color: "var(--text-muted)", fontSize: 20 } }, "\u2205"), "None", value == null, () => onPick(null), "none"),
+            categories.map(c => tile(c.color, c.color, React.createElement("span", null, c.emoji), c.name, value === c.id, () => onPick(c.id), c.id)),
+            !full && tile("var(--surface)", "var(--border-strong)", React.createElement("span", { style: { color: "var(--text-secondary)", fontSize: 26, fontWeight: 300 } }, "+"), "Create", false, () => setCreating(true), "create")),
+        onBack && React.createElement("button", { style: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", padding: "12px 0 0", width: "100%" }, onClick: onBack }, "\u2190 Back")));
+}
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categoryPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
     const editEntry = edit && edit.kind === "entry" ? edit.data : null;
     const editCredit = edit && edit.kind === "credit" ? edit.data : null;
     const editData = editEntry || editCredit;
@@ -1084,6 +1189,13 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
     const [note, setNote] = useState(() => editData ? (editData.label || "") : "");
     const [showNote, setShowNote] = useState(() => !!(editData && editData.label));
     const [flash, setFlash] = useState(null);
+    // The chosen category id (or null = None). Seeds from the edited entry when editing.
+    const [category, setCategory] = useState(() => (editEntry && editEntry.category) || null);
+    // After ↵ on a categorisable spend, we stash the built entry here and swap the keypad for the
+    // category grid; selecting a category commits the save. Null the rest of the time.
+    const [pendingSave, setPendingSave] = useState(null);
+    // In edit mode, an inline category picker toggled from the Category row.
+    const [editPickCat, setEditPickCat] = useState(false);
     // Split flow: null (not splitting) → "total" (entering the full amount) → "theirs" (entering the portion that isn't yours)
     const [splitStage, setSplitStage] = useState(null);
     const [splitTotal, setSplitTotal] = useState(0);
@@ -1110,6 +1222,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
         setNote("");
         setSplitStage(null);
         setSplitTotal(0);
+        setCategory(null);
     }
     function selectType(v) {
         setType(v);
@@ -1123,6 +1236,23 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
             setCents(0);
         }
     }
+    // Commit a stashed save once its category is chosen (or None). A pending save is either a
+    // single entry (`{kind:"entry", entry, flash}`) or a split pair (`{kind:"split", your, their,
+    // flash}`) — the category lands only on the *personal* portion; the excluded half isn't yours.
+    function commitPending(save, catId) {
+        if (save.kind === "split") {
+            if (save.your)
+                onSave(catId ? { ...save.your, category: catId } : save.your);
+            onSave(save.their);
+        }
+        else {
+            onSave(catId ? { ...save.entry, category: catId } : save.entry);
+        }
+        setPendingSave(null);
+        setFlash(save.flash);
+        setTimeout(() => setFlash(null), 900);
+        resetAfterSave();
+    }
     function pressEnter() {
         if (amount <= 0)
             return;
@@ -1132,7 +1262,8 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
                 onUpdateCredit({ ...editCredit, amount, label: note.trim() });
             }
             else {
-                onUpdate({ ...editEntry, amount: isSplitEdit ? editEntry.amount : amount, label: note.trim(), note: note.trim(), method, type });
+                // Personal entries carry the (possibly changed) category; other kinds keep none.
+                onUpdate({ ...editEntry, amount: isSplitEdit ? editEntry.amount : amount, label: note.trim(), note: note.trim(), method, type, category: (type === "personal" && !isSplitEdit) ? (category || undefined) : undefined });
             }
             onClose();
             return;
@@ -1153,29 +1284,35 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
                 // Both halves share one `order` (as they share `baseDate`) so the pair stays adjacent
                 // and moves as a single unit when the list is sorted or hand-reordered.
                 const baseOrder = Date.now();
-                if (yourPortion > 0) {
-                    onSave({ id: Math.random().toString(36).slice(2), amount: yourPortion, label: note.trim(), note: note.trim(), method, type: "personal", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId });
-                }
                 // The "not yours" portion is excluded from your spend total — same bucket as shared/split pins.
                 // This covers both work reimbursement and splitting a tab with friends; neither should
                 // touch your remaining budget, and neither should be conflated with actual work expenses.
-                onSave({ id: Math.random().toString(36).slice(2), amount: theirPortion, label: note.trim(), note: note.trim(), method, type: "excluded", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId });
-                setFlash({ amount: splitTotal, split: true });
-                setTimeout(() => setFlash(null), 900);
-                resetAfterSave();
+                const your = yourPortion > 0 ? { id: Math.random().toString(36).slice(2), amount: yourPortion, label: note.trim(), note: note.trim(), method, type: "personal", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId } : null;
+                const their = { id: Math.random().toString(36).slice(2), amount: theirPortion, label: note.trim(), note: note.trim(), method, type: "excluded", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId };
+                const save = { kind: "split", your, their, flash: { amount: splitTotal, split: true } };
+                // Offer categorisation of the personal portion when there is one and the prompt is on.
+                if (categoryPrompt && your) {
+                    setPendingSave(save);
+                    return;
+                }
+                commitPending(save, null);
                 return;
             }
         }
         if (type === "credit") {
             onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), weekIndex: selectedWeek, from: "", date: new Date().toISOString(), order: Date.now() });
             setFlash({ amount, credit: true });
+            setTimeout(() => setFlash(null), 900);
+            resetAfterSave();
+            return;
         }
-        else {
-            onSave({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), note: note.trim(), method, type, weekIndex: selectedWeek, date: new Date().toISOString(), order: Date.now() });
-            setFlash({ amount, method });
+        const entry = { id: Math.random().toString(36).slice(2), amount, label: note.trim(), note: note.trim(), method, type, weekIndex: selectedWeek, date: new Date().toISOString(), order: Date.now() };
+        // Personal spends get the category prompt (when enabled); work expenses skip it.
+        if (categoryPrompt && type === "personal") {
+            setPendingSave({ kind: "entry", entry, flash: { amount, method } });
+            return;
         }
-        setTimeout(() => setFlash(null), 900);
-        resetAfterSave();
+        commitPending({ kind: "entry", entry, flash: { amount, method } }, null);
     }
     const digits = [[7, 8, 9], [4, 5, 6], [1, 2, 3], ["00", 0, "⌫"]];
     const subheading = { fontSize: 12, color: "var(--text-secondary)", marginBottom: 6, fontWeight: 500 };
@@ -1205,6 +1342,17 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
             dateStr(w.start),
             "\u2013",
             dateStr(w.end))))));
+    // After ↵ on a categorisable spend, the keypad is swapped for the category grid (Monzo-style).
+    if (pendingSave) {
+        const pendAmt = pendingSave.kind === "split" ? pendingSave.flash.amount : pendingSave.entry.amount;
+        return (React.createElement(Modal, { onClose: onClose, title: "Category" },
+            React.createElement("div", { style: { fontSize: 13, color: "var(--text-secondary)", marginBottom: 14, textAlign: "center" } },
+                "What was this ",
+                React.createElement("strong", { style: { color: "var(--text-heading)" } }, fmt(pendAmt)),
+                " for?"),
+            React.createElement(CategoryPicker, { categories: categories, value: null, onPick: (id) => commitPending(pendingSave, id), onCreate: onAddCategory, onBack: () => setPendingSave(null) })));
+    }
+    const catRow = category && CATEGORY_BY_ID[category];
     return (React.createElement(Modal, { onClose: onClose, title: title },
         React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "var(--border-strong)"}`, opacity: isSplitEdit ? 0.7 : 1 } },
             displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
@@ -1215,6 +1363,16 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, onSave, onSaveCredi
         classOptions.length > 0 && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Classification"),
             React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#4ade80" : v === "split" ? "#d8b4fe" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
+        isEdit && !editCredit && !isSplitEdit && type === "personal" && (React.createElement(React.Fragment, null,
+            React.createElement("div", { style: subheading }, "Category"),
+            editPickCat ? (React.createElement("div", { style: { marginBottom: 10 } },
+                React.createElement(CategoryPicker, { categories: categories, value: category, onPick: (id) => { setCategory(id); setEditPickCat(false); }, onCreate: onAddCategory, onBack: () => setEditPickCat(false) }))) : (React.createElement("button", { onClick: () => setEditPickCat(true), style: { display: "flex", alignItems: "center", gap: 8, width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px", marginBottom: 10, cursor: "pointer", color: "var(--text-heading)", fontSize: 13 } },
+                catRow
+                    ? React.createElement(React.Fragment, null,
+                        React.createElement("span", { style: { width: 20, height: 20, borderRadius: "50%", background: catRow.color, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 12 } }, catRow.emoji),
+                        catRow.name)
+                    : React.createElement("span", { style: { color: "var(--text-muted)" } }, "None"),
+                React.createElement("span", { style: { marginLeft: "auto", color: "var(--text-tertiary)" } }, "Change \u25B8"))))),
         type === "split" && !isEdit && (React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", marginBottom: 10, lineHeight: 1.5 } }, splitStage === "total"
             ? "Enter the full amount you paid, then continue."
             : "Enter just the portion that isn't yours — work reimbursement, a friend's share of the bill, etc. The rest stays personal.")),
