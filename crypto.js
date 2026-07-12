@@ -675,24 +675,6 @@
     return null;
   }
 
-  // ── Discreet floating lock button, shown only while unlocked ──
-  function LockButton() {
-    return h("button", {
-      "aria-label": "Lock app",
-      onClick: () => Session.lock(),
-      style: {
-        position: "fixed",
-        right: "calc(14px + env(safe-area-inset-right))",
-        bottom: "calc(14px + env(safe-area-inset-bottom))",
-        width: 44, height: 44, borderRadius: "50%",
-        background: "rgba(15,23,42,0.9)", border: "1px solid #334155",
-        color: "#94a3b8", fontSize: 18, cursor: "pointer", zIndex: 50,
-        backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)",
-        boxShadow: "0 2px 10px rgba(0,0,0,0.4)",
-      },
-    }, "🔒");
-  }
-
   // ── Import screen: bring in a previously exported account (reached from the welcome flow) ──
   function ImportScreen({ onCancel }) {
     const [text, setText] = useState("");
@@ -779,7 +761,7 @@
 
     if (phase === "boot") return null;
     if (phase === "unlocked") {
-      return h(React.Fragment, null, h(App), h(LockButton));
+      return h(App);
     }
     if (phase === "locked" && vault) {
       return h(LockScreen, { vault, onUnlocked: handleUnlocked });
