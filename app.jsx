@@ -400,6 +400,7 @@ function App() {
   const [showBackup, setShowBackup] = useState(false); // export-account modal
   const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
   const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
+  const [openIconCat, setOpenIconCat] = useState(null); // id of the category whose icon picker is open in Settings (only one at a time)
   const [helpNonce, setHelpNonce] = useState(0); // bumped by the help button / new-user hint; each bump re-opens & scrolls to Settings' "How it works" card
   const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
 
@@ -844,7 +845,9 @@ function App() {
                   <CategoryEditorRow key={c.id} cat={c}
                     canDelete={!used.has(c.id) && state.categories.length > 1}
                     lockReason={used.has(c.id) ? "In use — can't remove" : (state.categories.length <= 1 ? "Keep at least one" : "Remove")}
-                    onUpdate={patch => update(c.id, patch)} onRemove={() => remove(c.id)} />
+                    open={openIconCat === c.id}
+                    onToggle={() => setOpenIconCat(prev => prev === c.id ? null : c.id)}
+                    onUpdate={patch => update(c.id, patch)} onRemove={() => { setOpenIconCat(null); remove(c.id); }} />
                 ))}
                 {anyInUse && <div style={{ fontSize:11, color:"var(--text-muted)", marginTop:2, marginBottom:8 }}>Categories used by a logged spend can't be removed.</div>}
                 <button onClick={add} disabled={state.categories.length >= MAX_CATEGORIES}
@@ -1308,15 +1311,15 @@ function IconPicker({ value, onPick }) {
 
 // One editable row in the Settings categories list: colour swatch, an icon button that reveals
 // an inline IconPicker, a name field, and a remove button. Owns its own icon-picker open state.
-function CategoryEditorRow({ cat, canDelete, lockReason, onUpdate, onRemove }) {
-  const [pickIcon, setPickIcon] = useState(false);
+// `open`/`onToggle` are controlled by the parent so only one row's icon picker is open at a time.
+function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdate, onRemove }) {
   return (
     <div style={{ marginBottom:8 }}>
       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
         <input type="color" value={cat.color} onChange={e => onUpdate({ color: e.target.value })} aria-label={`${cat.name} colour`}
           style={{ width:34, height:34, padding:2, border:"1px solid var(--border)", borderRadius:8, background:"var(--surface)", cursor:"pointer", flexShrink:0 }} />
-        <button onClick={() => setPickIcon(p => !p)} title="Choose icon" aria-label={`${cat.name} icon`}
-          style={{ width:34, height:34, borderRadius:"50%", background:cat.color, border:pickIcon?"2px solid var(--text-heading)":"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", flexShrink:0, padding:0 }}>
+        <button onClick={onToggle} title="Choose icon" aria-label={`${cat.name} icon`}
+          style={{ width:34, height:34, borderRadius:"50%", background:cat.color, border:open?"2px solid var(--text-heading)":"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", flexShrink:0, padding:0 }}>
           <CategoryIcon icon={cat.icon} size={18} color="#fff" />
         </button>
         <input key={`cname-${cat.id}-${cat.name}`} defaultValue={cat.name} placeholder="Name"
@@ -1325,7 +1328,7 @@ function CategoryEditorRow({ cat, canDelete, lockReason, onUpdate, onRemove }) {
         <button onClick={() => { if (canDelete) onRemove(); }} disabled={!canDelete} title={lockReason}
           style={{ ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize:16, flexShrink:0 }}>✕</button>
       </div>
-      {pickIcon && <div style={{ marginTop:6 }}><IconPicker value={cat.icon} onPick={k => { onUpdate({ icon: k }); setPickIcon(false); }} /></div>}
+      {open && <div style={{ marginTop:6 }}><IconPicker value={cat.icon} onPick={k => { onUpdate({ icon: k }); onToggle(); }} /></div>}
     </div>
   );
 }

@@ -400,6 +400,7 @@ function App() {
     const [showBackup, setShowBackup] = useState(false); // export-account modal
     const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
     const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
+    const [openIconCat, setOpenIconCat] = useState(null); // id of the category whose icon picker is open in Settings (only one at a time)
     const [helpNonce, setHelpNonce] = useState(0); // bumped by the help button / new-user hint; each bump re-opens & scrolls to Settings' "How it works" card
     const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
     // If history trims (caps at 12 months) while a past period is being viewed, the index
@@ -765,7 +766,7 @@ function App() {
                             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" } }, "Spending categories"),
                             React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginTop: 2 } }, "Ask for a category after logging a spend")),
                         React.createElement(ToggleSwitch, { on: state.categoryPrompt, onToggle: () => dispatch({ type: "SETTINGS", patch: { categoryPrompt: !state.categoryPrompt } }), ariaLabel: "Toggle category prompt", thumbOn: "\uD83C\uDFF7\uFE0F", thumbOff: "\u2715" })),
-                    state.categories.map(c => (React.createElement(CategoryEditorRow, { key: c.id, cat: c, canDelete: !used.has(c.id) && state.categories.length > 1, lockReason: used.has(c.id) ? "In use — can't remove" : (state.categories.length <= 1 ? "Keep at least one" : "Remove"), onUpdate: patch => update(c.id, patch), onRemove: () => remove(c.id) }))),
+                    state.categories.map(c => (React.createElement(CategoryEditorRow, { key: c.id, cat: c, canDelete: !used.has(c.id) && state.categories.length > 1, lockReason: used.has(c.id) ? "In use — can't remove" : (state.categories.length <= 1 ? "Keep at least one" : "Remove"), open: openIconCat === c.id, onToggle: () => setOpenIconCat(prev => prev === c.id ? null : c.id), onUpdate: patch => update(c.id, patch), onRemove: () => { setOpenIconCat(null); remove(c.id); } }))),
                     anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Categories used by a logged spend can't be removed."),
                     React.createElement("button", { onClick: add, disabled: state.categories.length >= MAX_CATEGORIES, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: state.categories.length >= MAX_CATEGORIES ? 0.5 : 1, cursor: state.categories.length >= MAX_CATEGORIES ? "default" : "pointer" } }, state.categories.length >= MAX_CATEGORIES ? `Maximum ${MAX_CATEGORIES} categories` : "+ Add category")));
             })(),
@@ -1150,12 +1151,12 @@ function IconPicker({ value, onPick }) {
 }
 // One editable row in the Settings categories list: colour swatch, an icon button that reveals
 // an inline IconPicker, a name field, and a remove button. Owns its own icon-picker open state.
-function CategoryEditorRow({ cat, canDelete, lockReason, onUpdate, onRemove }) {
-    const [pickIcon, setPickIcon] = useState(false);
+// `open`/`onToggle` are controlled by the parent so only one row's icon picker is open at a time.
+function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdate, onRemove }) {
     return (React.createElement("div", { style: { marginBottom: 8 } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
             React.createElement("input", { type: "color", value: cat.color, onChange: e => onUpdate({ color: e.target.value }), "aria-label": `${cat.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
-            React.createElement("button", { onClick: () => setPickIcon(p => !p), title: "Choose icon", "aria-label": `${cat.name} icon`, style: { width: 34, height: 34, borderRadius: "50%", background: cat.color, border: pickIcon ? "2px solid var(--text-heading)" : "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, padding: 0 } },
+            React.createElement("button", { onClick: onToggle, title: "Choose icon", "aria-label": `${cat.name} icon`, style: { width: 34, height: 34, borderRadius: "50%", background: cat.color, border: open ? "2px solid var(--text-heading)" : "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, padding: 0 } },
                 React.createElement(CategoryIcon, { icon: cat.icon, size: 18, color: "#fff" })),
             React.createElement("input", { key: `cname-${cat.id}-${cat.name}`, defaultValue: cat.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== cat.name)
                     onUpdate({ name: v });
@@ -1163,8 +1164,8 @@ function CategoryEditorRow({ cat, canDelete, lockReason, onUpdate, onRemove }) {
                     e.target.value = cat.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
             React.createElement("button", { onClick: () => { if (canDelete)
                     onRemove(); }, disabled: !canDelete, title: lockReason, style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")),
-        pickIcon && React.createElement("div", { style: { marginTop: 6 } },
-            React.createElement(IconPicker, { value: cat.icon, onPick: k => { onUpdate({ icon: k }); setPickIcon(false); } }))));
+        open && React.createElement("div", { style: { marginTop: 6 } },
+            React.createElement(IconPicker, { value: cat.icon, onPick: k => { onUpdate({ icon: k }); onToggle(); } }))));
 }
 // ─── Category Picker ──────────────────────────────────────────────────────────
 // A Monzo-style grid of round category tiles (a white line-icon on a coloured circle). Shown in
