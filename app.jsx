@@ -242,6 +242,7 @@ function defaultState() {
     methods: DEFAULT_METHODS,
     categories: DEFAULT_CATEGORIES,
     categoryPrompt: true, // ask for a category after logging a personal/split spend
+    descriptionPrompt: true, // show a description field when logging/editing a spend
 
     helpHintSeen: false, // drives the one-time "take a tour" hint for brand-new accounts only
     entries: [],
@@ -380,6 +381,7 @@ function App() {
         ? s.categories.map(c => c.icon ? c : { ...c, icon: DEFAULT_CATEGORY_ICON[c.id] || "tag" })
         : DEFAULT_CATEGORIES,
       categoryPrompt: s.categoryPrompt === undefined ? true : s.categoryPrompt,
+      descriptionPrompt: s.descriptionPrompt === undefined ? true : s.descriptionPrompt,
     };
   });
 
@@ -401,6 +403,9 @@ function App() {
   const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
   const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
   const [showCustomise, setShowCustomise] = useState(false); // appearance / payment types / categories modal
+  // The most recently deleted entry/credit (or split pair), kept verbatim so Undo can restore it
+  // exactly. Global (not per-week/tab) and not persisted — survives navigation, clears on reload.
+  const [lastDeleted, setLastDeleted] = useState(null); // {kind:"entry",entry} | {kind:"credit",credit} | {kind:"split",your,their}
   const [helpNonce, setHelpNonce] = useState(0); // bumped by the help button / new-user hint; each bump re-opens & scrolls to Settings' "How it works" card
   const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
 
@@ -585,6 +590,17 @@ function App() {
     if (viewingPast) dispatch({ type: "EDIT_PAST_CREDIT", op: "upd", archiveIndex: viewingPastIndex, credit });
     else dispatch({ type: "UPD_CREDIT", credit });
   }
+
+  // Restores the most recently deleted entry/credit (or split pair) verbatim — same id/order/
+  // weekIndex, so it reappears in its original week and position. Global, not per-week, so it
+  // survives switching tabs/weeks; plain useState (not persisted `state`) so it clears on reload.
+  function undoLastDeleted() {
+    if (!lastDeleted) return;
+    if (lastDeleted.kind === "entry") addEntry(lastDeleted.entry);
+    else if (lastDeleted.kind === "credit") addCredit(lastDeleted.credit);
+    else { if (lastDeleted.your) addEntry(lastDeleted.your); if (lastDeleted.their) addEntry(lastDeleted.their); }
+    setLastDeleted(null);
+  }
   // Pins are shared across periods (they're recurring fixed costs), so pin edits always
   // apply live regardless of which period is being viewed.
 
@@ -659,7 +675,7 @@ function App() {
           )}
 
           {weeks.filter(w => w.index === activeWeek).map(week => (
-            <WeekPanel key={week.index} week={week} entries={effectiveData.entries.filter(e => e.weekIndex === week.index)} credits={effectiveData.credits.filter(c => c.weekIndex === week.index) || []} weeklyBudget={rebalancedBudgets[week.index] ?? effectiveData.weeklyBudget} isLastWeek={week.index === weeks.length} onAddEntry={() => setShowEntryFor(week.index)} onDelEntry={delEntry} onDelCredit={delCredit} onEditEntry={(entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex })} onEditCredit={(credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex })} onUpdEntry={updEntry} onUpdCredit={updCredit} />
+            <WeekPanel key={week.index} week={week} weeks={weeks} entries={effectiveData.entries.filter(e => e.weekIndex === week.index)} credits={effectiveData.credits.filter(c => c.weekIndex === week.index) || []} weeklyBudget={rebalancedBudgets[week.index] ?? effectiveData.weeklyBudget} isLastWeek={week.index === weeks.length} categories={state.categories} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onAddEntry={() => setShowEntryFor(week.index)} onDelEntry={delEntry} onDelCredit={delCredit} onEditEntry={(entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex })} onEditCredit={(credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex })} onUpdEntry={updEntry} onUpdCredit={updCredit} onCapture={setLastDeleted} lastDeleted={lastDeleted} onUndo={undoLastDeleted} />
           ))}
         </div>
       )}
@@ -705,7 +721,7 @@ function App() {
         <div style={{ padding:"12px 16px" }}>
           <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"20px", marginBottom:12 }}>
             <div style={{ fontSize:11, color:"var(--text-secondary)", marginBottom:4, textTransform:"uppercase" }}>Total saved</div>
-            <div style={{ fontSize:36, fontWeight:800, color: totalSaved >= 0 ? "#4ade80" : "#f87171", marginBottom:8 }}>{totalSaved < 0 ? "-" : ""}{fmt(totalSaved)}</div>
+            <div style={{ fontSize:36, fontWeight:800, color: totalSaved >= 0 ? "#22c55e" : "#f87171", marginBottom:8 }}>{totalSaved < 0 ? "-" : ""}{fmt(totalSaved)}</div>
             <div style={{ fontSize:12, color:"var(--text-secondary)", lineHeight:1.5 }}>Leftover budget carried over from completed months. {state.monthLabel}'s leftover is added to this once the month ends.</div>
           </div>
 
@@ -731,7 +747,7 @@ function App() {
                   <div style={{ fontSize:13, color:"var(--text-primary)", fontWeight:600 }}>{r.label}</div>
                   <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{fmt(r.spent)} spent of {fmt(r.budget)}</div>
                 </div>
-                <div style={{ fontSize:15, fontWeight:700, color: r.saved >= 0 ? "#4ade80" : "#f87171" }}>{signed(r.saved)}</div>
+                <div style={{ fontSize:15, fontWeight:700, color: r.saved >= 0 ? "#22c55e" : "#f87171" }}>{signed(r.saved)}</div>
               </div>
             ))}
           </div>
@@ -860,7 +876,7 @@ function App() {
       )}
 
       {/* Modals */}
-      {(showEntryFor !== null || editTarget) && <EntryModal weekIndex={editTarget ? editTarget.weekIndex : showEntryFor} weeks={weeks} edit={editTarget} defaultMethod={state.lastMethod || state.methods[0].id} categories={state.categories} categoryPrompt={state.categoryPrompt} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onSave={addEntry} onSaveCredit={addCredit} onUpdate={updEntry} onUpdateCredit={updCredit} onClose={() => { setShowEntryFor(null); setEditTarget(null); }} />}
+      {(showEntryFor !== null || editTarget) && <EntryModal weekIndex={editTarget ? editTarget.weekIndex : showEntryFor} weeks={weeks} edit={editTarget} defaultMethod={state.lastMethod || state.methods[0].id} categories={state.categories} categoryPrompt={state.categoryPrompt} descriptionPrompt={state.descriptionPrompt} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onSave={addEntry} onSaveCredit={addCredit} onUpdate={updEntry} onUpdateCredit={updCredit} onClose={() => { setShowEntryFor(null); setEditTarget(null); }} />}
       {(showAddPin || editPin) && <PinModal pin={editPin} onSave={pin => { if (editPin) dispatch({ type: "UPD_PIN", pin }); else dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }} onClose={() => { setShowAddPin(false); setEditPin(null); }} />}
       {showExport && <ExportModal state={effectiveData} weeks={weeks} rebalancedBudgets={rebalancedBudgets} totalSpent={totalSpent} remaining={remaining} totalCredits={totalCredits} methodTotals={methodTotals} onClose={() => setShowExport(false)} />}
       {showBackup && <BackupModal onClose={() => setShowBackup(false)} />}
@@ -871,7 +887,7 @@ function App() {
 }
 
 // ─── Week Panel ───────────────────────────────────────────────────────────────
-function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit, onUpdEntry, onUpdCredit }) {
+function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, categories, onAddCategory, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit, onUpdEntry, onUpdCredit, onCapture, lastDeleted, onUndo }) {
   const personal = entries.filter(e => e.type === "personal");
   const spent = personal.reduce((s, e) => s + e.amount, 0);
   const over = spent - weeklyBudget;
@@ -880,6 +896,8 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
   const [editMode, setEditMode] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
+  const [showMove, setShowMove] = useState(false);
+  const [showCategorize, setShowCategorize] = useState(false);
   const [dragId, setDragId] = useState(null);         // id of the unit being dragged, or null
   const [dragList, setDragList] = useState(null);     // working unit order during a drag, else null
   const dragIdRef = useRef(null);
@@ -911,11 +929,16 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
   // During a drag, render the live working order; otherwise the sorted order.
   const renderUnits = dragList || units;
 
-  // Deleting one half of a split removes both halves, since a lone remainder is meaningless
+  // Deleting one half of a split removes both halves, since a lone remainder is meaningless.
+  // Captures the full object(s) via onCapture before deleting, so Undo can restore them —
+  // DEL_ENTRY/DEL_CREDIT only take an id and the object is gone from state once deleted.
   function handleDelete(entry) {
     if (entry.splitGroupId) {
-      entries.filter(e => e.splitGroupId === entry.splitGroupId).forEach(e => onDelEntry(e.id));
+      const group = entries.filter(e => e.splitGroupId === entry.splitGroupId);
+      onCapture({ kind: "split", your: group.find(e => e.type === "personal") || null, their: group.find(e => e.type === "excluded") || null });
+      group.forEach(e => onDelEntry(e.id));
     } else {
+      onCapture({ kind: "entry", entry });
       onDelEntry(entry.id);
     }
   }
@@ -925,16 +948,52 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
     setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   }
 
-  function exitEdit() { setEditMode(false); setSelected(new Set()); setConfirmBulk(false); }
+  function exitEdit() { setEditMode(false); setSelected(new Set()); setConfirmBulk(false); setShowMove(false); setShowCategorize(false); }
 
   // Bulk delete every selected unit, expanding split groups to both halves (like handleDelete).
+  // Only captures for Undo when exactly one unit was selected — a bulk delete of many has no
+  // single sensible "last deleted" for one Undo button to restore.
   function bulkDelete() {
-    units.forEach(u => {
-      if (!selected.has(u.id)) return;
+    const toDelete = units.filter(u => selected.has(u.id));
+    if (toDelete.length === 1) {
+      const u = toDelete[0];
+      if (u.kind === "credit") onCapture({ kind: "credit", credit: u.credit });
+      else if (u.kind === "single") onCapture({ kind: "entry", entry: u.entry });
+      else onCapture({ kind: "split", your: u.group.find(e => e.type === "personal") || null, their: u.group.find(e => e.type === "excluded") || null });
+    }
+    toDelete.forEach(u => {
       if (u.kind === "credit") onDelCredit(u.credit.id);
       else if (u.kind === "single") onDelEntry(u.entry.id);
       else u.group.forEach(half => onDelEntry(half.id));
     });
+    exitEdit();
+  }
+
+  // Bulk move every selected unit to a different week (reusing UPD_ENTRY/UPD_CREDIT, same as drag reorder).
+  function bulkMove(newWeek) {
+    units.forEach(u => {
+      if (!selected.has(u.id)) return;
+      if (u.kind === "credit") onUpdCredit({ ...u.credit, weekIndex: newWeek });
+      else if (u.kind === "single") onUpdEntry({ ...u.entry, weekIndex: newWeek });
+      else u.group.forEach(half => onUpdEntry({ ...half, weekIndex: newWeek }));
+    });
+    setShowMove(false);
+    exitEdit();
+  }
+
+  // Bulk-assign a category to every selected personal entry (and a split's personal half).
+  // Credits and non-personal entries are silently skipped, matching EntryModal's own rule that
+  // only personal spends can carry a category.
+  function bulkCategorize(catId) {
+    units.forEach(u => {
+      if (!selected.has(u.id)) return;
+      if (u.kind === "single" && u.entry.type === "personal") onUpdEntry({ ...u.entry, category: catId || undefined });
+      else if (u.kind === "split") {
+        const your = u.group.find(e => e.type === "personal");
+        if (your) onUpdEntry({ ...your, category: catId || undefined });
+      }
+    });
+    setShowCategorize(false);
     exitEdit();
   }
 
@@ -1016,6 +1075,12 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
     <div>
       <div style={S.weekHeader}>
         <span style={{ fontWeight:600, color:"var(--text-heading)", fontSize:14 }}>{dateStr(week.start)} — {dateStr(week.end)}</span>
+        {(units.length > 0 || lastDeleted) && (
+          <div style={{ display:"flex", gap:6 }}>
+            {lastDeleted && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={onUndo}>Undo</button>}
+            {units.length > 0 && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => setEditMode(true)}>Edit</button>}
+          </div>
+        )}
       </div>
       <div style={S.budgetCard}>
         <div style={S.bar}><div style={{ ...S.barFill, width: pct + "%", background: over > 0 ? "#ef4444" : "#06b6d4" }} /></div>
@@ -1046,17 +1111,41 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
       {!editMode ? (
         <div style={{ display:"flex", gap:8, marginTop:12 }}>
           <button style={{ ...S.actionBtn, flex:1 }} onClick={onAddEntry}>Log spend</button>
+          {lastDeleted && <button style={S.editToggle} onClick={onUndo}>Undo</button>}
           {units.length > 0 && <button style={S.editToggle} onClick={() => setEditMode(true)}>Edit</button>}
         </div>
       ) : (
-        <div style={S.bulkDelBar}>
-          <button style={S.editToggle} onClick={exitEdit}>Done</button>
-          <div style={{ flex:1, fontSize:12, color:"var(--text-secondary)", textAlign:"center" }}>Drag ≡ to reorder</div>
-          {selected.size > 0 && (confirmBulk
-            ? <button style={{ ...S.btn, background:"#dc2626", padding:"10px 14px", fontSize:13 }} onClick={bulkDelete}>Delete {selected.size}?</button>
-            : <button style={{ ...S.btn, background:"#7f1d1d", border:"1px solid #b91c1c", padding:"10px 14px", fontSize:13 }} onClick={() => setConfirmBulk(true)}>Delete {selected.size}</button>
+        <>
+          <div style={S.bulkDelBar}>
+            <button style={S.editToggle} onClick={exitEdit}>Done</button>
+            {selected.size === 0 ? (
+              <div style={{ flex:1, fontSize:12, color:"var(--text-secondary)", textAlign:"center" }}>Drag ≡ to reorder</div>
+            ) : (
+              <div style={{ flex:1, display:"flex", gap:6, justifyContent:"center" }}>
+                <button style={{ ...S.editToggle, padding:"8px 10px", fontSize:12 }} onClick={() => { setShowCategorize(false); setShowMove(m => !m); }}>Move</button>
+                <button style={{ ...S.editToggle, padding:"8px 10px", fontSize:12 }} onClick={() => { setShowMove(false); setShowCategorize(c => !c); }}>Categorize</button>
+              </div>
+            )}
+            {selected.size > 0 && (confirmBulk
+              ? <button style={{ ...S.btn, background:"#dc2626", padding:"10px 14px", fontSize:13 }} onClick={bulkDelete}>Delete {selected.size}?</button>
+              : <button style={{ ...S.btn, background:"#7f1d1d", border:"1px solid #b91c1c", padding:"10px 14px", fontSize:13 }} onClick={() => setConfirmBulk(true)}>Delete {selected.size}</button>
+            )}
+          </div>
+          {showMove && (
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:8, justifyContent:"center" }}>
+              <span style={{ fontSize:12, color:"var(--text-secondary)" }}>Move {selected.size} to</span>
+              <select style={S.weekSelect} defaultValue="" onChange={e => { if (e.target.value !== "") bulkMove(Number(e.target.value)); }}>
+                <option value="" disabled>Week…</option>
+                {(weeks || []).filter(w => w.index !== week.index).map(w => <option key={w.index} value={w.index}>Week {w.index}</option>)}
+              </select>
+            </div>
           )}
-        </div>
+          {showCategorize && (
+            <div style={{ marginTop:8 }}>
+              <CategoryPicker categories={categories} value={null} onPick={id => bulkCategorize(id)} onCreate={onAddCategory} onBack={() => setShowCategorize(false)} />
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -1109,7 +1198,7 @@ function ConfirmDeleteButton({ onConfirm, style }) {
     <button
       style={{
         ...style,
-        ...(confirming ? { color:"#ef4444", fontSize:11, fontWeight:700, background:"#450a0a", borderRadius:5, padding:"2px 7px", whiteSpace:"nowrap" } : {}),
+        ...(confirming ? { color:"#ef4444", fontSize:11, fontWeight:700, background:chipColors("#ef4444").bg, borderRadius:5, padding:"2px 7px", whiteSpace:"nowrap" } : {}),
       }}
       onClick={handleClick}
       onBlur={() => setConfirming(false)}
@@ -1121,7 +1210,7 @@ function ConfirmDeleteButton({ onConfirm, style }) {
 
 // ─── Entry Line ───────────────────────────────────────────────────────────────
 function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
-  const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "var(--text-primary)";
+  const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a855f7" : "var(--text-primary)";
   const cat = entry.category && CATEGORY_BY_ID[entry.category];
   return (
     <div onClick={onEdit} style={{ ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom:"none" } : {}), cursor: onEdit ? "pointer" : "default" }}>
@@ -1129,9 +1218,9 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
       <span style={{ flex:1, color:col, fontSize:13 }}>
         {cat && <span title={cat.name} style={{ display:"inline-flex", verticalAlign:"-2px", marginRight:5, width:16, height:16, borderRadius:"50%", background:cat.color, alignItems:"center", justifyContent:"center" }}><CategoryIcon icon={cat.icon} size={10} color="#fff" /></span>}
         {entry.label || METHOD_NAME[entry.method] || entry.method}
-        {entry.pinned && <span style={{ ...S.badge, background:"#0c4a6e", color:"#7dd3fc" }}> 📌 fixed</span>}
+        {entry.pinned && <span style={{ ...S.badge, background:chipColors("#38bdf8").bg, color:"#38bdf8" }}> 📌 fixed</span>}
         {entry.type === "business" && <span style={S.badge}> work</span>}
-        {entry.type === "excluded" && <span style={{ ...S.badge, background:"#3b0764", color:"#d8b4fe" }}> reimbursable</span>}
+        {entry.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> reimbursable</span>}
         {entry.splitGroupId && entry.type === "personal" && <span style={{ ...S.badge, background:"var(--surface-2)", color:"var(--text-tertiary)" }}> split</span>}
       </span>
       <span style={{ color:col, fontWeight:600, fontSize:13 }}>{fmt(entry.amount)}</span>
@@ -1156,7 +1245,7 @@ function CreditLine({ credit, onDel, onEdit, hideDelete }) {
 function PinCard({ pin, onEdit, onDelete }) {
   const isB = pin.type === "business";
   const isX = pin.type === "excluded";
-  const col = isB ? "#f59e0b" : isX ? "#a78bfa" : "var(--text-heading)";
+  const col = isB ? "#f59e0b" : isX ? "#a855f7" : "var(--text-heading)";
   return (
     <div style={S.pinCard}>
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
@@ -1164,13 +1253,13 @@ function PinCard({ pin, onEdit, onDelete }) {
         <span style={{ flex:1, fontWeight:600, fontSize:14, color:col }}>
           {pin.label}
           {isB && <span style={S.badge}> work</span>}
-          {isX && <span style={{ ...S.badge, background:"#3b0764", color:"#d8b4fe" }}> split</span>}
+          {isX && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> split</span>}
         </span>
         <button style={S.iconBtn} onClick={onEdit}>✎</button>
         <ConfirmDeleteButton onConfirm={onDelete} style={{ ...S.iconBtn, color:"#ef4444" }} />
       </div>
-      <div style={{ fontSize:22, fontWeight:800, letterSpacing:"-1px", color: isB ? "#f59e0b" : isX ? "#a78bfa" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom:4 }}>{pin.amount ? fmt(pin.amount) : "—"}</div>
-      {isScheduledPin(pin) && <div style={{ fontSize:11, color:"#7dd3fc", marginTop:2 }}>📌 {pin.freq === "weekly" ? `Every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][pin.day]}` : `Monthly · day ${pin.day}`} · in week log</div>}
+      <div style={{ fontSize:22, fontWeight:800, letterSpacing:"-1px", color: isB ? "#f59e0b" : isX ? "#a855f7" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom:4 }}>{pin.amount ? fmt(pin.amount) : "—"}</div>
+      {isScheduledPin(pin) && <div style={{ fontSize:11, color:"#38bdf8", marginTop:2 }}>📌 {pin.freq === "weekly" ? `Every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][pin.day]}` : `Monthly · day ${pin.day}`} · in week log</div>}
       {pin.note && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:4 }}>{pin.note}</div>}
     </div>
   );
@@ -1433,6 +1522,15 @@ function CustomiseModal({ state, dispatch, onClose }) {
         </div>
         <PaymentMethodsSettingsCard state={state} dispatch={dispatch} />
         <CategoriesSettingsCard state={state} dispatch={dispatch} />
+        <div style={S.settingsCard}>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
+            <div>
+              <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", textTransform:"uppercase" }}>Descriptions</div>
+              <div style={{ fontSize:12, color:"var(--text-muted)", marginTop:2 }}>Show a description field when logging or editing a spend</div>
+            </div>
+            <ToggleSwitch on={state.descriptionPrompt} onToggle={() => dispatch({ type:"SETTINGS", patch:{ descriptionPrompt: !state.descriptionPrompt } })} ariaLabel="Toggle description field" thumbOn="📝" thumbOff="✕" />
+          </div>
+        </div>
       </div>
     </Modal>
   );
@@ -1503,7 +1601,7 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
 }
 
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categoryPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categoryPrompt, descriptionPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
   const editEntry = edit && edit.kind === "entry" ? edit.data : null;
   const editCredit = edit && edit.kind === "credit" ? edit.data : null;
   const editData = editEntry || editCredit;
@@ -1526,7 +1624,6 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
   });
   const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : "personal"));
   const [note, setNote] = useState(() => editData ? (editData.label || "") : "");
-  const [showNote, setShowNote] = useState(() => !!(editData && editData.label));
   const [flash, setFlash] = useState(null);
   // The chosen category id (or null = None). Seeds from the edited entry when editing.
   const [category, setCategory] = useState(() => (editEntry && editEntry.category) || null);
@@ -1542,8 +1639,8 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
 
   const amount = cents / 100;
   const displayStr = amount.toFixed(2);
-  const creditColors = { bg: "#14532d", border: "#22c55e", text: "#4ade80" };
-  const splitColors = { bg: "#3b0764", border: "#a855f7", text: "#d8b4fe" };
+  const creditColors = chipColors("#22c55e");
+  const splitColors = chipColors("#a855f7");
   const mc = type === "credit" ? creditColors : type === "split" ? splitColors : chipColors(METHOD_COLOR[method] || "#60a5fa");
 
   function pressDigit(d) {
@@ -1698,8 +1795,8 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
   return (
     <Modal onClose={onClose} title={title}>
       <div style={{ background:"var(--surface-2)", borderRadius:12, padding:"14px 20px", marginBottom:12, textAlign:"center", border:`1px solid ${flash ? mc.border : "var(--border-strong)"}`, opacity: isSplitEdit ? 0.7 : 1 }}>
-        {displayCaption && <div style={{ fontSize:11, color:"#a78bfa", fontWeight:600, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.04em" }}>{displayCaption}</div>}
-        <div style={{ fontSize: displayStr.length > 7 ? 30 : 42, fontWeight:800, color: flash ? "#4ade80" : "var(--text-heading)" }}>
+        {displayCaption && <div style={{ fontSize:11, color:"#a855f7", fontWeight:600, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.04em" }}>{displayCaption}</div>}
+        <div style={{ fontSize: displayStr.length > 7 ? 30 : 42, fontWeight:800, color: flash ? "#22c55e" : "var(--text-heading)" }}>
           {flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`}
         </div>
       </div>
@@ -1712,7 +1809,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
       {classOptions.length > 0 && <>
         <div style={subheading}>Classification</div>
         <div style={{ display:"flex", gap:6, marginBottom:10 }}>
-          {classOptions.map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "var(--surface-2)":"var(--surface)", border:`1px solid ${type===v?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="credit"?"#4ade80":v==="split"?"#d8b4fe":"var(--text-heading)") : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:type===v?600:400, cursor:"pointer" }} onClick={() => selectType(v)}>{l}</button>)}
+          {classOptions.map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "var(--surface-2)":"var(--surface)", border:`1px solid ${type===v?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="credit"?"#22c55e":v==="split"?"#a855f7":"var(--text-heading)") : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:type===v?600:400, cursor:"pointer" }} onClick={() => selectType(v)}>{l}</button>)}
         </div>
       </>}
 
@@ -1739,15 +1836,20 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
       )}
 
       {type === "split" && !isEdit && (
-        <div style={{ fontSize:11, color:"#a78bfa", marginBottom:10, lineHeight:1.5 }}>
+        <div style={{ fontSize:11, color:"#a855f7", marginBottom:10, lineHeight:1.5 }}>
           {splitStage === "total"
             ? "Enter the full amount you paid, then continue."
             : "Enter just the portion that isn't yours — work reimbursement, a friend's share of the bill, etc. The rest stays personal."}
         </div>
       )}
 
-      <button style={{ background:"none", border:"none", color: showNote?"#60a5fa":"var(--text-secondary)", fontSize:12, cursor:"pointer", padding:"0 0 8px", textAlign:"left", width:"100%" }} onClick={() => setShowNote(p=>!p)}>{showNote ? "▾ Hide note" : "▸ Add a note"}</button>
-      {showNote && <input style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text-heading)", padding:"8px 12px", marginBottom:10, fontSize:13, width:"100%", boxSizing:"border-box", outline:"none" }} placeholder="e.g. golf, birthday" value={note} onChange={e=>setNote(e.target.value)} autoFocus />}
+      {descriptionPrompt && (
+        <>
+          <div style={subheading}>Description</div>
+          <input style={{ width:"100%", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text-heading)", padding:"9px 12px", marginBottom:10, fontSize:13, boxSizing:"border-box", outline:"none" }}
+            placeholder="Tap to add a description" value={note} onChange={e => setNote(e.target.value)} />
+        </>
+      )}
 
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6 }}>
         {digits.map((row, ri) => (<>{row.map((d, i) => <button key={`${ri}-${i}`} style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, color: d==="⌫" ? "#ef4444" : "var(--text-body)", fontSize: d==="⌫" ? 18 : 20, fontWeight:600, padding:"14px 0", cursor:"pointer", opacity: isSplitEdit ? 0.4 : 1 }} onClick={() => d === "⌫" ? pressDelete() : pressDigit(d)}>{d}</button>)}{ri === 0 && <button style={{ gridRow: "span 4", background: amount>0 ? mc.bg : "var(--surface)", border:`1px solid ${amount>0 ? mc.border : "var(--border)"}`, borderRadius:8, color: amount>0 ? mc.text : "var(--text-muted)", fontSize:18, fontWeight:800, cursor: amount>0?"pointer":"default", display:"flex", alignItems:"center", justifyContent:"center" }} onClick={pressEnter}>{enterGlyph}</button>}</> ))}
@@ -1771,7 +1873,7 @@ function PinModal({ pin, onSave, onClose }) {
   const [dow, setDow] = useState(pin?.freq === "weekly" ? (pin?.day ?? 1) : 1);
 
   const segBtn = (on) => ({ flex:1, background: on ? "var(--surface-2)":"var(--surface)", border:`1px solid ${on?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: on ? "var(--text-heading)" : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:600, cursor:"pointer" });
-  const dayBtn = (on) => ({ flex:1, background: on ? "#0c4a6e":"var(--surface)", border:`1px solid ${on?"#0369a1":"var(--border)"}`, borderRadius:8, color: on ? "#7dd3fc" : "var(--text-muted)", padding:"7px 2px", fontSize:11, fontWeight:600, cursor:"pointer" });
+  const dayBtn = (on) => ({ flex:1, background: on ? chipColors("#38bdf8").bg : "var(--surface)", border:`1px solid ${on?"#0369a1":"var(--border)"}`, borderRadius:8, color: on ? "#38bdf8" : "var(--text-muted)", padding:"7px 2px", fontSize:11, fontWeight:600, cursor:"pointer" });
   const hint = { fontSize:11, color:"var(--text-secondary)", marginBottom:6 };
 
   return (
@@ -1780,7 +1882,7 @@ function PinModal({ pin, onSave, onClose }) {
       <input style={{ ...S.input, marginBottom:10 }} type="number" inputMode="decimal" placeholder="Amount" value={amount} onChange={e => setAmount(e.target.value)} />
       <MethodSelector value={method} onChange={setMethod} />
       <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-        {[["personal","Personal"],["business","Work"],["excluded","Split"]].map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "var(--surface-2)":"var(--surface)", border:`1px solid ${type===v?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="excluded"?"#a78bfa":"var(--text-heading)") : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:600, cursor:"pointer" }} onClick={() => setType(v)}>{l}</button>)}
+        {[["personal","Personal"],["business","Work"],["excluded","Split"]].map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "var(--surface-2)":"var(--surface)", border:`1px solid ${type===v?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="excluded"?"#a855f7":"var(--text-heading)") : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:600, cursor:"pointer" }} onClick={() => setType(v)}>{l}</button>)}
       </div>
 
       <div style={hint}>Populate into the week log</div>
@@ -1896,8 +1998,8 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
           )}
           {splitTotal > 0 && (
             <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
-              <span style={{ color:"#a78bfa" }}>Split spend</span>
-              <span style={{ color:"#a78bfa", fontWeight:600 }}>{fmt(splitTotal)}</span>
+              <span style={{ color:"#a855f7" }}>Split spend</span>
+              <span style={{ color:"#a855f7", fontWeight:600 }}>{fmt(splitTotal)}</span>
             </div>
           )}
           <div style={{ borderTop:"1px solid var(--border)", marginTop:6, display:"flex", justifyContent:"space-between", padding:"6px 0 5px" }}>
@@ -1987,7 +2089,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
       {totalCredits > 0 && (
         <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px" }}>
           <div style={{ fontSize:11, fontWeight:600, color:"#22c55e", marginBottom:8, textTransform:"uppercase" }}>Credits</div>
-          <div style={{ fontSize:20, fontWeight:800, color:"#4ade80" }}>+{fmt(totalCredits)}</div>
+          <div style={{ fontSize:20, fontWeight:800, color:"#22c55e" }}>+{fmt(totalCredits)}</div>
         </div>
       )}
 
@@ -2024,14 +2126,14 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
         {transactions.map((t, i) => (
           <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none" }}>
             <div style={{ flex:1 }}>
-              <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : "var(--text-primary)" }}>
+              <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : "var(--text-primary)" }}>
                 {t.desc}
                 {t.type === "business" && <span style={S.badge}> work</span>}
-                {t.type === "excluded" && <span style={{ ...S.badge, background:"#3b0764", color:"#d8b4fe" }}> reimbursable</span>}
+                {t.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> reimbursable</span>}
               </div>
               {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
             </div>
-            <span style={{ fontWeight:600, fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : col }}>{fmt(t.amount)}</span>
+            <span style={{ fontWeight:600, fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : col }}>{fmt(t.amount)}</span>
           </div>
         ))}
       </div>
@@ -2171,14 +2273,14 @@ function ImportBackupModal({ onClose }) {
 
   return (
     <Modal onClose={onClose} title="Import account">
-      <div style={{ background:"#1c1207", border:"1px solid #92400e", borderRadius:10, padding:"12px 14px", fontSize:12, color:"#fcd34d", lineHeight:1.6, marginBottom:12 }}>
+      <div style={{ background:chipColors("#f59e0b").bg, border:"1px solid #f59e0b", borderRadius:10, padding:"12px 14px", fontSize:12, color:"#f59e0b", lineHeight:1.6, marginBottom:12 }}>
         Importing <strong>replaces everything on this device</strong> with the imported account — the data here is wiped. Export your current account first if you might want it back.
       </div>
       <textarea style={{ ...S.input, height:90, resize:"none", fontFamily:"monospace", fontSize:11 }} placeholder="Paste a backup here…" value={text} onChange={e => setText(e.target.value)} />
       <input type="file" accept=".json,application/json" onChange={onFile} style={{ fontSize:12, color:"var(--text-secondary)", marginBottom:12, width:"100%" }} />
       {err && <div style={{ color:"#f87171", fontSize:13, marginBottom:10 }}>{err}</div>}
       {!confirm ? (
-        <button style={{ ...S.btn, background: text?"#b45309":"var(--surface-2)", color: text?"var(--on-accent)":"var(--text-heading)", width:"100%", ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={() => setConfirm(true)}>Continue…</button>
+        <button style={{ ...S.btn, background: text?"#f59e0b":"var(--surface-2)", color: text?"var(--on-accent)":"var(--text-heading)", width:"100%", ...(text?{}:{opacity:0.5}) }} disabled={!text} onClick={() => setConfirm(true)}>Continue…</button>
       ) : (
         <div style={{ display:"flex", gap:8 }}>
           <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", flex:1 }} onClick={() => setConfirm(false)}>Cancel</button>
@@ -2203,8 +2305,8 @@ const S = {
   headerRight: { textAlign:"right" },
   remaining: { fontSize:28, fontWeight:800, letterSpacing:"-1px", lineHeight:1 },
   remainLabel: { fontSize:10, color:"var(--text-secondary)", textTransform:"uppercase" },
-  pastBanner: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, background:"#451a03", borderBottom:"1px solid #92400e", padding:"8px 16px", fontSize:11, color:"#fcd34d" },
-  pastBannerBtn: { background:"#78350f", border:"1px solid #b45309", borderRadius:6, color:"#fde68a", padding:"4px 10px", fontSize:11, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" },
+  pastBanner: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, background:"var(--surface-2)", borderBottom:"1px solid #f59e0b", padding:"8px 16px", fontSize:11, color:"var(--text-body)" },
+  pastBannerBtn: { background:"#f59e0b", border:"none", borderRadius:6, color:"var(--on-accent)", padding:"4px 10px", fontSize:11, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" },
   tabs: { display:"flex", borderBottom:"1px solid var(--border)", padding:"0 16px" },
   tab: { flex:1, background:"none", border:"none", borderBottom:"2px solid transparent", color:"var(--text-secondary)", padding:"10px 4px", fontSize:13, fontWeight:500, cursor:"pointer" },
   tabActive: { color:"var(--text-heading)", borderBottom:"2px solid #0369a1" },
@@ -2217,21 +2319,21 @@ const S = {
   dailyCard: { flex:1, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"10px 12px" },
   dailyLabel: { fontSize:10, color:"var(--text-secondary)", textTransform:"uppercase", marginBottom:3 },
   dailySub: { fontSize:10, color:"var(--text-secondary)", marginTop:2 },
-  weekHeader: { padding:"10px 0 8px", borderBottom:"1px solid var(--border)", marginBottom:10 },
+  weekHeader: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, padding:"10px 0 8px", borderBottom:"1px solid var(--border)", marginBottom:10 },
   budgetCard: { background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"12px" },
   bar: { height:6, background:"var(--surface-2)", borderRadius:3, overflow:"hidden" },
   barFill: { height:"100%", borderRadius:3 },
   entryRow: { display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderBottom:"1px solid var(--surface)" },
-  splitGroup: { background:"#0c0a1a", border:"1px solid #2e1065", borderRadius:8, padding:"2px 10px", marginBottom:8 },
-  entryRowGrouped: { borderBottom:"1px solid #1e1338" },
+  splitGroup: { background:"#a855f714", border:"1px solid #a855f733", borderRadius:8, padding:"2px 10px", marginBottom:8 },
+  entryRowGrouped: { borderBottom:"1px solid #a855f722" },
   dot: { width:7, height:7, borderRadius:"50%", flexShrink:0 },
-  badge: { fontSize:10, background:"#451a03", color:"#f59e0b", borderRadius:3, padding:"1px 4px", marginLeft:4 },
+  badge: { fontSize:10, background:chipColors("#f59e0b").bg, color:"#f59e0b", borderRadius:3, padding:"1px 4px", marginLeft:4 },
   delBtn: { background:"none", border:"none", color:"var(--text-secondary)", cursor:"pointer", fontSize:16, padding:"0 2px" },
   actionBtn: { background:"var(--surface)", border:"1px dashed var(--border-strong)", borderRadius:8, color:"var(--text-tertiary)", padding:"10px", fontSize:13, fontWeight:500, cursor:"pointer" },
   editToggle: { background:"var(--surface)", border:"1px solid var(--border-strong)", borderRadius:8, color:"var(--text-tertiary)", padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer", flexShrink:0 },
   bulkDelBar: { display:"flex", alignItems:"center", gap:8, marginTop:12 },
-  checkbox: { width:22, height:22, flexShrink:0, borderRadius:6, border:"1px solid var(--border-strong)", background:"var(--surface)", color:"#4ade80", fontSize:13, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0 },
-  checkboxOn: { background:"#064e3b", borderColor:"#22c55e" },
+  checkbox: { width:22, height:22, flexShrink:0, borderRadius:6, border:"1px solid var(--border-strong)", background:"var(--surface)", color:"#22c55e", fontSize:13, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0 },
+  checkboxOn: { background:chipColors("#22c55e").bg, borderColor:"#22c55e" },
   dragHandle: { flexShrink:0, background:"none", border:"none", color:"var(--text-muted)", fontSize:20, lineHeight:1, cursor:"grab", padding:"6px 4px", touchAction:"none", userSelect:"none" },
   rowDragging: { opacity:0.55, background:"var(--surface)", borderRadius:8 },
   sectionTitle: { fontSize:13, fontWeight:700, color:"var(--text-body)", textTransform:"uppercase", letterSpacing:"0.08em" },
