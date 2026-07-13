@@ -400,6 +400,7 @@ function App() {
     const [showBackup, setShowBackup] = useState(false); // export-account modal
     const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
     const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
+    const [showCustomise, setShowCustomise] = useState(false); // appearance / payment types / categories modal
     const [helpNonce, setHelpNonce] = useState(0); // bumped by the help button / new-user hint; each bump re-opens & scrolls to Settings' "How it works" card
     const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
     // If history trims (caps at 12 months) while a past period is being viewed, the index
@@ -698,13 +699,9 @@ function App() {
         tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true) })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement("div", { style: S.settingsCard },
-                React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
-                    React.createElement("div", null,
-                        React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 2, textTransform: "uppercase" } }, "Appearance"),
-                        React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)" } },
-                            state.theme === "light" ? "Light" : "Dark",
-                            " mode")),
-                    React.createElement(ThemeToggle, { theme: state.theme || "dark", onToggle: () => dispatch({ type: "SETTINGS", patch: { theme: state.theme === "light" ? "dark" : "light" } }) }))),
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 2, textTransform: "uppercase" } }, "Customisation"),
+                React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 10 } }, "Appearance, payment types & spending categories"),
+                React.createElement("button", { onClick: () => setShowCustomise(true), style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" } }, "\uD83C\uDFA8 Open customisation")),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Budget"),
                 React.createElement("div", { style: { marginBottom: 10 } },
@@ -719,35 +716,6 @@ function App() {
                     "Monthly and weekly are linked across this ",
                     periodDays,
                     "-day period \u2014 changing one recalculates the other.")),
-            (() => {
-                // Every method id referenced by a live or archived transaction/pin — such types can't be removed.
-                const used = new Set();
-                [state, ...(state.monthHistory || [])].forEach(src => {
-                    (src.entries || []).forEach(e => used.add(e.method));
-                    (src.pins || []).forEach(p => used.add(p.method));
-                });
-                const setMethods = (ms) => dispatch({ type: "SETTINGS", patch: { methods: ms } });
-                const update = (id, patch) => setMethods(state.methods.map(m => m.id === id ? { ...m, ...patch } : m));
-                const remove = (id) => setMethods(state.methods.filter(m => m.id !== id));
-                const add = () => setMethods([...state.methods, { id: genId(), name: "New card", color: "#60a5fa" }]);
-                const anyInUse = state.methods.some(m => used.has(m.id));
-                return (React.createElement("div", { style: S.settingsCard },
-                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Payment methods"),
-                    state.methods.map(m => {
-                        const canDelete = !used.has(m.id) && state.methods.length > 1;
-                        return (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
-                            React.createElement("input", { type: "color", value: m.color, onChange: e => update(m.id, { color: e.target.value }), "aria-label": `${m.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
-                            React.createElement("input", { key: `mname-${m.id}-${m.name}`, defaultValue: m.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== m.name)
-                                    update(m.id, { name: v });
-                                else if (!v)
-                                    e.target.value = m.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
-                            React.createElement("button", { onClick: () => { if (canDelete)
-                                    remove(m.id); }, disabled: !canDelete, title: used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")));
-                    }),
-                    anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Types with logged transactions can't be removed."),
-                    React.createElement("button", { onClick: add, disabled: state.methods.length >= MAX_METHODS, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" } }, state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type")));
-            })(),
-            React.createElement(CategoriesSettingsCard, { state: state, dispatch: dispatch }),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Pay period"),
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10 } },
@@ -799,7 +767,8 @@ function App() {
                 dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }, onClose: () => { setShowAddPin(false); setEditPin(null); } }),
         showExport && React.createElement(ExportModal, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, remaining: remaining, totalCredits: totalCredits, methodTotals: methodTotals, onClose: () => setShowExport(false) }),
         showBackup && React.createElement(BackupModal, { onClose: () => setShowBackup(false) }),
-        showImportAcct && React.createElement(ImportBackupModal, { onClose: () => setShowImportAcct(false) })));
+        showImportAcct && React.createElement(ImportBackupModal, { onClose: () => setShowImportAcct(false) }),
+        showCustomise && React.createElement(CustomiseModal, { state: state, dispatch: dispatch, onClose: () => setShowCustomise(false) })));
 }
 // ─── Week Panel ───────────────────────────────────────────────────────────────
 function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit, onUpdEntry, onUpdCredit }) {
@@ -1128,9 +1097,12 @@ function IconPicker({ value, onPick }) {
     })));
 }
 // One editable row in the Settings categories list: colour swatch, an icon button that reveals
-// an inline IconPicker, a name field, and a remove button. Owns its own icon-picker open state.
-// `open`/`onToggle` are controlled by the parent so only one row's icon picker is open at a time.
-function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdate, onRemove }) {
+// an inline IconPicker, a name field, a remove button, and (when `onDragMouseDown`/`onDragTouchStart`
+// are given) a drag handle. The handle sits in the same flex row as the ✕ button — rather than
+// beside this whole component — so the two align on one baseline instead of drifting when the
+// icon picker below expands. Owns its own icon-picker open state via the controlled `open`/`onToggle`
+// props (only one row's icon picker is open at a time, coordinated by the parent).
+function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdate, onRemove, dragLabel, onDragMouseDown, onDragTouchStart }) {
     return (React.createElement("div", { style: { marginBottom: 8 } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
             React.createElement("input", { type: "color", value: cat.color, onChange: e => onUpdate({ color: e.target.value }), "aria-label": `${cat.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
@@ -1141,9 +1113,40 @@ function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdat
                 else if (!v)
                     e.target.value = cat.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
             React.createElement("button", { onClick: () => { if (canDelete)
-                    onRemove(); }, disabled: !canDelete, title: lockReason, style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")),
+                    onRemove(); }, disabled: !canDelete, title: lockReason, style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715"),
+            onDragMouseDown && React.createElement("button", { style: S.dragHandle, "aria-label": dragLabel, onMouseDown: onDragMouseDown, onTouchStart: onDragTouchStart }, "\u2261")),
         open && React.createElement("div", { style: { marginTop: 6 } },
             React.createElement(IconPicker, { value: cat.icon, onPick: k => { onUpdate({ icon: k }); onToggle(); } }))));
+}
+// ─── Payment Methods Settings Card ────────────────────────────────────────────
+// The Settings card that lists, edits, adds, and removes payment types (state.methods).
+function PaymentMethodsSettingsCard({ state, dispatch }) {
+    // Every method id referenced by a live or archived transaction/pin — such types can't be removed.
+    const used = new Set();
+    [state, ...(state.monthHistory || [])].forEach(src => {
+        (src.entries || []).forEach(e => used.add(e.method));
+        (src.pins || []).forEach(p => used.add(p.method));
+    });
+    const setMethods = (ms) => dispatch({ type: "SETTINGS", patch: { methods: ms } });
+    const update = (id, patch) => setMethods(state.methods.map(m => m.id === id ? { ...m, ...patch } : m));
+    const remove = (id) => setMethods(state.methods.filter(m => m.id !== id));
+    const add = () => setMethods([...state.methods, { id: genId(), name: "New card", color: "#60a5fa" }]);
+    const anyInUse = state.methods.some(m => used.has(m.id));
+    return (React.createElement("div", { style: S.settingsCard },
+        React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Payment methods"),
+        state.methods.map(m => {
+            const canDelete = !used.has(m.id) && state.methods.length > 1;
+            return (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
+                React.createElement("input", { type: "color", value: m.color, onChange: e => update(m.id, { color: e.target.value }), "aria-label": `${m.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
+                React.createElement("input", { key: `mname-${m.id}-${m.name}`, defaultValue: m.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== m.name)
+                        update(m.id, { name: v });
+                    else if (!v)
+                        e.target.value = m.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
+                React.createElement("button", { onClick: () => { if (canDelete)
+                        remove(m.id); }, disabled: !canDelete, title: used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")));
+        }),
+        anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Types with logged transactions can't be removed."),
+        React.createElement("button", { onClick: add, disabled: state.methods.length >= MAX_METHODS, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" } }, state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type")));
 }
 // ─── Categories Settings Card ─────────────────────────────────────────────────
 // The Settings card that lists, edits, adds/removes, and reorders spending categories, plus the
@@ -1233,12 +1236,29 @@ function CategoriesSettingsCard({ state, dispatch }) {
         renderCats.map(c => (React.createElement("div", { key: c.id, ref: el => { if (el)
                 rowRefs.current[c.id] = el;
             else
-                delete rowRefs.current[c.id]; }, style: { display: "flex", alignItems: "flex-start", gap: 2, ...(dragId === c.id ? S.rowDragging : {}) } },
-            React.createElement("div", { style: { flex: 1, minWidth: 0 } },
-                React.createElement(CategoryEditorRow, { cat: c, canDelete: !used.has(c.id) && categories.length > 1, lockReason: used.has(c.id) ? "In use — can't remove" : (categories.length <= 1 ? "Keep at least one" : "Remove"), open: openIconCat === c.id, onToggle: () => setOpenIconCat(prev => prev === c.id ? null : c.id), onUpdate: patch => update(c.id, patch), onRemove: () => remove(c.id) })),
-            React.createElement("button", { style: S.dragHandle, "aria-label": `Drag ${c.name} to reorder`, onMouseDown: (e) => { e.preventDefault(); e.stopPropagation(); beginDrag(e.clientY, c, false); }, onTouchStart: (e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, c, true); } }, "\u2261")))),
+                delete rowRefs.current[c.id]; }, style: dragId === c.id ? S.rowDragging : undefined },
+            React.createElement(CategoryEditorRow, { cat: c, canDelete: !used.has(c.id) && categories.length > 1, lockReason: used.has(c.id) ? "In use — can't remove" : (categories.length <= 1 ? "Keep at least one" : "Remove"), open: openIconCat === c.id, onToggle: () => setOpenIconCat(prev => prev === c.id ? null : c.id), onUpdate: patch => update(c.id, patch), onRemove: () => remove(c.id), dragLabel: `Drag ${c.name} to reorder`, onDragMouseDown: (e) => { e.preventDefault(); e.stopPropagation(); beginDrag(e.clientY, c, false); }, onDragTouchStart: (e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, c, true); } })))),
         anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Categories used by a logged spend can't be removed."),
         React.createElement("button", { onClick: add, disabled: categories.length >= MAX_CATEGORIES, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: categories.length >= MAX_CATEGORIES ? 0.5 : 1, cursor: categories.length >= MAX_CATEGORIES ? "default" : "pointer" } }, categories.length >= MAX_CATEGORIES ? `Maximum ${MAX_CATEGORIES} categories` : "+ Add category")));
+}
+// ─── Customise Modal ──────────────────────────────────────────────────────────
+// Groups the settings that shape how the app *looks* — theme, payment types, and spending
+// categories — behind one "Customisation" entry point in Settings, so the main Settings list
+// stays short. Content scrolls internally (capped below the viewport) so the modal sheet never
+// grows taller than the screen, however many payment types or categories are added.
+function CustomiseModal({ state, dispatch, onClose }) {
+    return (React.createElement(Modal, { onClose: onClose, title: "Customisation" },
+        React.createElement("div", { style: { maxHeight: "70vh", overflowY: "auto" } },
+            React.createElement("div", { style: S.settingsCard },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between" } },
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 2, textTransform: "uppercase" } }, "Appearance"),
+                        React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)" } },
+                            state.theme === "light" ? "Light" : "Dark",
+                            " mode")),
+                    React.createElement(ThemeToggle, { theme: state.theme || "dark", onToggle: () => dispatch({ type: "SETTINGS", patch: { theme: state.theme === "light" ? "dark" : "light" } }) }))),
+            React.createElement(PaymentMethodsSettingsCard, { state: state, dispatch: dispatch }),
+            React.createElement(CategoriesSettingsCard, { state: state, dispatch: dispatch }))));
 }
 // ─── Category Picker ──────────────────────────────────────────────────────────
 // A Monzo-style grid of round category tiles (a white line-icon on a coloured circle). Shown in
