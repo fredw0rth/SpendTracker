@@ -76,6 +76,20 @@
 <body>
 <div id="root"></div>
 
+<!-- Applies the pre-unlock theme preference (crypto.js's PRE_THEME_KEY — a separate,
+     unencrypted cousin of the real state.theme, which lives inside the encrypted vault and
+     can't be read this early) before anything paints, so the lock/setup screens don't flash
+     the other theme on a cold load. Runs before app.js/crypto.js so it can't reference their
+     helpers directly — the "spendtracker_pretheme" key name must stay in sync with crypto.js. -->
+<script>
+  try {
+    var t = localStorage.getItem("spendtracker_pretheme") === "light" ? "light" : "dark";
+    document.documentElement.dataset.theme = t;
+    var metaTheme = document.querySelector('meta[name="theme-color"]');
+    if (metaTheme) metaTheme.content = t === "light" ? "#f5efdf" : "#030712";
+  } catch (e) {}
+</script>
+
 <!-- app.js defines the tracker UI; crypto.js defines the encryption + lock screen
      that gates it. app.js must load first so crypto.js's Root can reference App
      and defaultState. -->

@@ -47,6 +47,14 @@
   const VAULT_KEY = "spendtracker_vault";   // legacy localStorage location (migrated away)
   const LEGACY_KEY = "spendtracker_v6";     // the old *plaintext* store, migrated then deleted
 
+  // Cosmetic-only theme preference for the screens that render before unlock (lock screen,
+  // onboarding) — these can't read the encrypted state.theme, so this small unencrypted flag is
+  // the only way to remember the user's choice across a reload. Not authoritative: once
+  // unlocked, App() applies the real (encrypted) state.theme over whatever this says.
+  const PRE_THEME_KEY = "spendtracker_pretheme";
+  function getPreTheme() { try { return localStorage.getItem(PRE_THEME_KEY) === "light" ? "light" : "dark"; } catch { return "dark"; } }
+  function setPreTheme(t) { try { localStorage.setItem(PRE_THEME_KEY, t === "light" ? "light" : "dark"); } catch {} }
+
   // PBKDF2 work factor. Higher = slower to brute-force a stolen vault, but also
   // slower to unlock on your phone. 250k is a sensible middle for mobile Safari.
   // Stored in the vault so it can be raised later without breaking old vaults.
@@ -451,23 +459,29 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  //  UI — all React.createElement, dark theme matching the app
+  //  UI — all React.createElement. Neutral colours are the same var(--...) theme tokens
+  //  index.html/app.jsx use, so these screens follow whatever getPreTheme() applies to
+  //  data-theme; accent/semantic colours (primary blue, link blue, err red, warn amber)
+  //  stay fixed hex regardless of theme, matching the rest of the app's convention.
   // ─────────────────────────────────────────────────────────────────────────────
   const C = {
-    page: { fontFamily: "'Inter', system-ui, sans-serif", background: "#030712", minHeight: "100vh", color: "#e2e8f0", maxWidth: 480, margin: "0 auto", padding: "0 20px", display: "flex", flexDirection: "column", justifyContent: "center", boxSizing: "border-box" },
-    brand: { fontSize: 28, fontWeight: 800, letterSpacing: "-1px", color: "#f1f5f9", marginBottom: 4 },
-    sub: { fontSize: 13, color: "#64748b", marginBottom: 24, lineHeight: 1.5 },
-    label: { fontSize: 12, color: "#64748b", display: "block", marginBottom: 6 },
-    input: { width: "100%", background: "#0f172a", border: "1px solid #1e293b", borderRadius: 10, color: "#f1f5f9", padding: "13px 14px", fontSize: 16, outline: "none", boxSizing: "border-box", marginBottom: 14 },
-    primary: { width: "100%", background: "#0369a1", border: "none", borderRadius: 10, color: "#f1f5f9", padding: "14px", fontSize: 15, fontWeight: 700, cursor: "pointer", marginTop: 4 },
+    page: { fontFamily: "'Inter', system-ui, sans-serif", background: "var(--bg)", minHeight: "100vh", color: "var(--text-primary)", maxWidth: 480, margin: "0 auto", padding: "0 20px", display: "flex", flexDirection: "column", justifyContent: "center", boxSizing: "border-box" },
+    brand: { fontSize: 28, fontWeight: 800, letterSpacing: "-1px", color: "var(--text-heading)", marginBottom: 4 },
+    sub: { fontSize: 13, color: "var(--text-secondary)", marginBottom: 24, lineHeight: 1.5 },
+    label: { fontSize: 12, color: "var(--text-secondary)", display: "block", marginBottom: 6 },
+    input: { width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, color: "var(--text-heading)", padding: "13px 14px", fontSize: 16, outline: "none", boxSizing: "border-box", marginBottom: 14 },
+    primary: { width: "100%", background: "#0369a1", border: "none", borderRadius: 10, color: "var(--on-accent)", padding: "14px", fontSize: 15, fontWeight: 700, cursor: "pointer", marginTop: 4 },
     primaryDisabled: { opacity: 0.4, cursor: "default" },
     link: { background: "none", border: "none", color: "#60a5fa", fontSize: 13, cursor: "pointer", padding: "12px 0", width: "100%" },
-    ghost: { width: "100%", background: "#0f172a", border: "1px solid #334155", borderRadius: 10, color: "#cbd5e1", padding: "13px", fontSize: 14, fontWeight: 600, cursor: "pointer", marginTop: 10 },
+    ghost: { width: "100%", background: "var(--surface)", border: "1px solid var(--border-strong)", borderRadius: 10, color: "var(--text-body)", padding: "13px", fontSize: 14, fontWeight: 600, cursor: "pointer", marginTop: 10 },
     err: { color: "#f87171", fontSize: 13, marginBottom: 12, minHeight: 18 },
-    note: { fontSize: 12, color: "#64748b", lineHeight: 1.6, marginTop: 4 },
-    codeBox: { background: "#0f172a", border: "1px dashed #334155", borderRadius: 10, padding: "16px", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 18, letterSpacing: "1px", color: "#93c5fd", textAlign: "center", wordBreak: "break-all", marginBottom: 12 },
-    check: { display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, color: "#cbd5e1", margin: "8px 0 16px", cursor: "pointer", lineHeight: 1.5 },
+    note: { fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6, marginTop: 4 },
+    codeBox: { background: "var(--bg)", border: "1px dashed var(--border-strong)", borderRadius: 10, padding: "16px", fontFamily: "ui-monospace, Menlo, monospace", fontSize: 18, letterSpacing: "1px", color: "var(--text-heading)", textAlign: "center", wordBreak: "break-all", marginBottom: 12 },
+    check: { display: "flex", alignItems: "flex-start", gap: 10, fontSize: 13, color: "var(--text-body)", margin: "8px 0 16px", cursor: "pointer", lineHeight: 1.5 },
     warn: { background: "#1c1207", border: "1px solid #92400e", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "#fcd34d", lineHeight: 1.6, marginBottom: 14 },
+    // Top-left appearance switch on the pre-unlock screens — mirrors app.jsx's bottom-right
+    // helpFab safe-area pattern, mirrored to the opposite corner.
+    preThemeToggle: { position: "fixed", left: "calc(14px + env(safe-area-inset-left))", top: "calc(14px + env(safe-area-inset-top))", zIndex: 50 },
   };
 
   // ── Lock screen: unlock an existing vault ──
@@ -584,6 +598,7 @@
       const w = parseFloat(weekly);
       return {
         ...base,
+        theme: getPreTheme(),
         monthlyBudget: isNaN(m) ? base.monthlyBudget : m,
         weeklyBudget: isNaN(w) ? base.weeklyBudget : w,
       };
@@ -617,9 +632,9 @@
         h("div", { style: C.brand }, "Welcome"),
         h("div", { style: C.sub }, "Set your budget — enter either figure and the other fills in automatically. Then we'll lock your data down with a passphrase."),
         h("label", { style: C.label }, "Monthly budget (£)"),
-        h("input", { style: C.input, type: "number", inputMode: "decimal", placeholder: "e.g. 1000", value: monthly, onChange: (e) => onMonthlyChange(e.target.value), autoFocus: true }),
+        h("input", { style: C.input, type: "number", inputMode: "decimal", placeholder: "e.g. 1000", value: monthly, onChange: (e) => onMonthlyChange(e.target.value), onKeyDown: (e) => { if (e.key === "Enter" && ok) setStep("passphrase"); }, autoFocus: true }),
         h("label", { style: C.label }, "Weekly budget (£)"),
-        h("input", { style: C.input, type: "number", inputMode: "decimal", placeholder: "auto", value: weekly, onChange: (e) => onWeeklyChange(e.target.value) }),
+        h("input", { style: C.input, type: "number", inputMode: "decimal", placeholder: "auto", value: weekly, onChange: (e) => onWeeklyChange(e.target.value), onKeyDown: (e) => { if (e.key === "Enter" && ok) setStep("passphrase"); } }),
         h("div", { style: C.note }, `Linked across this pay period — ${period.days} days ≈ ${round2(W)} weeks. Change either box and the other recalculates. You can fine-tune everything in Settings later.`),
         h("button", { style: { ...C.primary, ...(ok ? {} : C.primaryDisabled) }, disabled: !ok, onClick: () => setStep("passphrase") }, "Continue"),
         onImport && h("button", { style: C.link, onClick: onImport }, "Been here before? Import a previous account")
@@ -634,8 +649,8 @@
       return h("div", { style: C.page },
         h("div", { style: C.brand }, "Choose a passphrase"),
         h("div", { style: C.sub }, "This encrypts everything you log. It's never stored — only you know it, and it can't be reset without your recovery code."),
-        h("input", { style: C.input, type: "password", autoCapitalize: "none", autoCorrect: "off", spellCheck: false, placeholder: "Passphrase (min 8 characters)", value: pass, onChange: (e) => setPass(e.target.value), autoFocus: true }),
-        h("input", { style: C.input, type: "password", autoCapitalize: "none", autoCorrect: "off", spellCheck: false, placeholder: "Confirm passphrase", value: confirm, onChange: (e) => setConfirm(e.target.value) }),
+        h("input", { style: C.input, type: "password", autoCapitalize: "none", autoCorrect: "off", spellCheck: false, placeholder: "Passphrase (min 8 characters)", value: pass, onChange: (e) => setPass(e.target.value), onKeyDown: (e) => { if (e.key === "Enter" && ok) setStep("recovery"); }, autoFocus: true }),
+        h("input", { style: C.input, type: "password", autoCapitalize: "none", autoCorrect: "off", spellCheck: false, placeholder: "Confirm passphrase", value: confirm, onChange: (e) => setConfirm(e.target.value), onKeyDown: (e) => { if (e.key === "Enter" && ok) setStep("recovery"); } }),
         h("div", { style: C.err }, tooShort ? "Use at least 8 characters." : mismatch ? "Passphrases don't match." : ""),
         h("button", { style: { ...C.primary, ...(ok ? {} : C.primaryDisabled) }, disabled: !ok, onClick: () => setStep("recovery") }, "Continue"),
         !isMigrate && h("button", { style: C.link, onClick: () => setStep("budget") }, "← Back")
@@ -713,6 +728,17 @@
     const [phase, setPhase] = useState("boot"); // boot | onboard | migrate | locked | unlocked
     const [vault, setVault] = useState(null);
     const [importing, setImporting] = useState(false); // showing the "import a previous account" screen
+    // Cosmetic-only theme for the pre-unlock screens (see PRE_THEME_KEY above). index.html
+    // already applies this to data-theme before first paint; this state exists so the toggle's
+    // own icon re-renders immediately when tapped.
+    const [preTheme, setPreThemeState] = useState(getPreTheme);
+
+    function togglePreTheme() {
+      const next = preTheme === "light" ? "dark" : "light";
+      setPreThemeState(next);
+      setPreTheme(next);
+      document.documentElement.dataset.theme = next;
+    }
 
     useEffect(() => {
       let cancelled = false;
@@ -763,20 +789,29 @@
     if (phase === "unlocked") {
       return h(App);
     }
+
+    let screen;
     if (phase === "locked" && vault) {
-      return h(LockScreen, { vault, onUnlocked: handleUnlocked });
-    }
-    // Import is reachable from the pre-account screens (welcome / migrate).
-    if (importing && (phase === "onboard" || phase === "migrate")) {
-      return h(ImportScreen, { onCancel: () => setImporting(false) });
-    }
-    if (phase === "migrate") {
+      screen = h(LockScreen, { vault, onUnlocked: handleUnlocked });
+    } else if (importing && (phase === "onboard" || phase === "migrate")) {
+      // Import is reachable from the pre-account screens (welcome / migrate).
+      screen = h(ImportScreen, { onCancel: () => setImporting(false) });
+    } else if (phase === "migrate") {
       let seed = null;
       try { seed = JSON.parse(localStorage.getItem(LEGACY_KEY)); } catch { seed = null; }
-      return h(SetupFlow, { mode: "migrate", seedState: seed, onUnlocked: handleUnlocked, onImport: () => setImporting(true) });
+      screen = h(SetupFlow, { mode: "migrate", seedState: seed, onUnlocked: handleUnlocked, onImport: () => setImporting(true) });
+    } else {
+      // onboard
+      screen = h(SetupFlow, { mode: "onboard", seedState: null, onUnlocked: handleUnlocked, onImport: () => setImporting(true) });
     }
-    // onboard
-    return h(SetupFlow, { mode: "onboard", seedState: null, onUnlocked: handleUnlocked, onImport: () => setImporting(true) });
+
+    // A top-left appearance switch, present across every pre-unlock screen (lock, setup, import),
+    // reusing app.jsx's ThemeToggle directly — it's a bare top-level function in non-module
+    // app.js, so it's reachable here the same way window.defaultState/App already are.
+    return h(React.Fragment, null,
+      h("div", { style: C.preThemeToggle }, h(window.ThemeToggle, { theme: preTheme, onToggle: togglePreTheme })),
+      screen
+    );
   }
 
   window.SpendTrackerRoot = Root;
