@@ -43,8 +43,15 @@ let METHOD_NAME = Object.fromEntries(DEFAULT_METHODS.map(m => [m.id, m.name])); 
 // Category views, refreshed from state.categories in App() the same way (see App()).
 let CATEGORIES = DEFAULT_CATEGORIES;                               // [{id,name,emoji,color}]
 let CATEGORY_BY_ID = Object.fromEntries(DEFAULT_CATEGORIES.map(c => [c.id, c])); // id -> {name,emoji,color}
-// Derive a coherent chip palette (used by the selectors) from a single method colour.
-const chipColors = (c) => ({ bg: c + "22", border: c, text: c });
+// Derive a coherent chip palette (used by the selectors) from a single method colour. Reads the
+// live theme at call time (not cached) so every caller — inline in a component's render, never
+// baked into the static S style object below, which only evaluates once — stays correct across
+// an in-app theme toggle. Light mode uses a lower alpha for a properly pastel tint; dark mode
+// keeps the original strength.
+const chipColors = (c) => {
+  const light = document.documentElement.dataset.theme === "light";
+  return { bg: c + (light ? "14" : "22"), border: c, text: c };
+};
 const STORAGE_KEY = "spendtracker_v6";
 
 // Persistence goes through the encrypted session in crypto.js (window.SpendVault),
@@ -859,7 +866,7 @@ function App() {
             <div style={{ fontSize:11, fontWeight:600, color:"#f87171", marginBottom:10, textTransform:"uppercase" }}>Reset</div>
             <div style={{ fontSize:13, color:"var(--text-body)", marginBottom:10, lineHeight:1.5 }}>Erase everything on this device — budget, transactions, history and your passphrase — and start over from setup. This can't be undone.</div>
             {!confirmWipe ? (
-              <button style={{ ...S.btn, background:"#7f1d1d", border:"1px solid #b91c1c", width:"100%" }} onClick={() => setConfirmWipe(true)}>Reset app &amp; erase all data</button>
+              <button style={{ ...S.btn, background:"var(--danger-soft-bg)", border:"1px solid var(--danger-soft-border)", color:"var(--danger-soft-text)", width:"100%" }} onClick={() => setConfirmWipe(true)}>Reset app &amp; erase all data</button>
             ) : (
               <div style={{ display:"flex", gap:8 }}>
                 <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", flex:1 }} onClick={() => setConfirmWipe(false)}>Cancel</button>
@@ -1096,7 +1103,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
                style={{ display:"flex", alignItems:"center", gap:6, ...(dragId === unit.id ? S.rowDragging : {}) }}>
             {editMode && (unit.pinned
               ? <span style={{ ...S.checkbox, opacity:0.25, cursor:"default" }} />
-              : <button style={{ ...S.checkbox, ...(selected.has(unit.id) ? S.checkboxOn : {}) }} onClick={() => toggleSelect(unit.id)}>{selected.has(unit.id) ? "✓" : ""}</button>
+              : <button style={{ ...S.checkbox, ...(selected.has(unit.id) ? { background:chipColors("#22c55e").bg, borderColor:"#22c55e" } : {}) }} onClick={() => toggleSelect(unit.id)}>{selected.has(unit.id) ? "✓" : ""}</button>
             )}
             <div style={{ flex:1, minWidth:0 }}>{renderUnitContent(unit)}</div>
             {editMode && !unit.pinned && (
@@ -1122,24 +1129,26 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
               <div style={{ flex:1, fontSize:12, color:"var(--text-secondary)", textAlign:"center" }}>Drag ≡ to reorder</div>
             ) : (
               <div style={{ flex:1, display:"flex", gap:6, justifyContent:"center" }}>
-                <button style={{ ...S.editToggle, padding:"8px 10px", fontSize:12 }} onClick={() => { setShowCategorize(false); setShowMove(m => !m); }}>Move</button>
-                <button style={{ ...S.editToggle, padding:"8px 10px", fontSize:12 }} onClick={() => { setShowMove(false); setShowCategorize(c => !c); }}>Categorize</button>
+                {showMove ? (
+                  // Controlled, defaulting to the current week — that's the natural "no real
+                  // choice made yet" resting state, so no disabled placeholder option is needed.
+                  <select style={S.weekSelect} value={week.index}
+                    onChange={e => bulkMove(Number(e.target.value))}
+                    onBlur={() => setShowMove(false)}
+                    autoFocus>
+                    {(weeks || []).map(w => <option key={w.index} value={w.index}>Week {w.index}</option>)}
+                  </select>
+                ) : (
+                  <button style={{ ...S.editToggle, padding:"8px 10px", fontSize:12 }} onClick={() => { setShowCategorize(false); setShowMove(true); }}>Move</button>
+                )}
+                <button style={{ ...S.editToggle, padding:"8px 10px", fontSize:12 }} onClick={() => { setShowMove(false); setShowCategorize(c => !c); }}>Categorise</button>
               </div>
             )}
             {selected.size > 0 && (confirmBulk
               ? <button style={{ ...S.btn, background:"#dc2626", padding:"10px 14px", fontSize:13 }} onClick={bulkDelete}>Delete {selected.size}?</button>
-              : <button style={{ ...S.btn, background:"#7f1d1d", border:"1px solid #b91c1c", padding:"10px 14px", fontSize:13 }} onClick={() => setConfirmBulk(true)}>Delete {selected.size}</button>
+              : <button style={{ ...S.btn, background:"var(--danger-soft-bg)", border:"1px solid var(--danger-soft-border)", color:"var(--danger-soft-text)", padding:"10px 14px", fontSize:13 }} onClick={() => setConfirmBulk(true)}>Delete {selected.size}</button>
             )}
           </div>
-          {showMove && (
-            <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:8, justifyContent:"center" }}>
-              <span style={{ fontSize:12, color:"var(--text-secondary)" }}>Move {selected.size} to</span>
-              <select style={S.weekSelect} defaultValue="" onChange={e => { if (e.target.value !== "") bulkMove(Number(e.target.value)); }}>
-                <option value="" disabled>Week…</option>
-                {(weeks || []).filter(w => w.index !== week.index).map(w => <option key={w.index} value={w.index}>Week {w.index}</option>)}
-              </select>
-            </div>
-          )}
           {showCategorize && (
             <div style={{ marginTop:8 }}>
               <CategoryPicker categories={categories} value={null} onPick={id => bulkCategorize(id)} onCreate={onAddCategory} onBack={() => setShowCategorize(false)} />
@@ -1198,7 +1207,9 @@ function ConfirmDeleteButton({ onConfirm, style }) {
     <button
       style={{
         ...style,
-        ...(confirming ? { color:"#ef4444", fontSize:11, fontWeight:700, background:chipColors("#ef4444").bg, borderRadius:5, padding:"2px 7px", whiteSpace:"nowrap" } : {}),
+        // Tapping × is the confirmation click itself, so this transient state goes bold/dark
+        // (not pastel) — there's no "idle red" state here to keep soft, since the resting × is neutral.
+        ...(confirming ? { background:"#dc2626", color:"var(--on-accent)", fontSize:11, fontWeight:700, borderRadius:5, padding:"2px 7px", whiteSpace:"nowrap" } : {}),
       }}
       onClick={handleClick}
       onBlur={() => setConfirming(false)}
@@ -1219,7 +1230,7 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
         {cat && <span title={cat.name} style={{ display:"inline-flex", verticalAlign:"-2px", marginRight:5, width:16, height:16, borderRadius:"50%", background:cat.color, alignItems:"center", justifyContent:"center" }}><CategoryIcon icon={cat.icon} size={10} color="#fff" /></span>}
         {entry.label || METHOD_NAME[entry.method] || entry.method}
         {entry.pinned && <span style={{ ...S.badge, background:chipColors("#38bdf8").bg, color:"#38bdf8" }}> 📌 fixed</span>}
-        {entry.type === "business" && <span style={S.badge}> work</span>}
+        {entry.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
         {entry.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> reimbursable</span>}
         {entry.splitGroupId && entry.type === "personal" && <span style={{ ...S.badge, background:"var(--surface-2)", color:"var(--text-tertiary)" }}> split</span>}
       </span>
@@ -1252,7 +1263,7 @@ function PinCard({ pin, onEdit, onDelete }) {
         <span style={{ ...S.dot, background: METHOD_COLOR[pin.method] || "var(--text-secondary)" }} />
         <span style={{ flex:1, fontWeight:600, fontSize:14, color:col }}>
           {pin.label}
-          {isB && <span style={S.badge}> work</span>}
+          {isB && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
           {isX && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> split</span>}
         </span>
         <button style={S.iconBtn} onClick={onEdit}>✎</button>
@@ -2063,7 +2074,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
           {allSpendItems.map((item, i) => (
             <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid var(--border)" : "none" }}>
               <span style={{ ...S.dot, background: METHOD_COLOR[item.method] || "var(--text-secondary)" }} />
-              <span style={{ flex:1, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" }}>{item.desc}{item.type === "business" && <span style={S.badge}> work</span>}</span>
+              <span style={{ flex:1, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" }}>{item.desc}{item.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}</span>
               <span style={{ fontWeight:600, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-primary)" }}>{fmt(item.amount)}</span>
             </div>
           ))}
@@ -2128,7 +2139,7 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
             <div style={{ flex:1 }}>
               <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : "var(--text-primary)" }}>
                 {t.desc}
-                {t.type === "business" && <span style={S.badge}> work</span>}
+                {t.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
                 {t.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> reimbursable</span>}
               </div>
               {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
@@ -2327,13 +2338,16 @@ const S = {
   splitGroup: { background:"#a855f714", border:"1px solid #a855f733", borderRadius:8, padding:"2px 10px", marginBottom:8 },
   entryRowGrouped: { borderBottom:"1px solid #a855f722" },
   dot: { width:7, height:7, borderRadius:"50%", flexShrink:0 },
-  badge: { fontSize:10, background:chipColors("#f59e0b").bg, color:"#f59e0b", borderRadius:3, padding:"1px 4px", marginLeft:4 },
+  // Layout only — colour is applied inline at each usage site (via chipColors, called live at
+  // render time), never baked in here: S is a plain object evaluated once at script load, so a
+  // chipColors() call placed directly in this literal would freeze at whatever theme was active
+  // then and never update on a later in-app theme toggle.
+  badge: { fontSize:10, borderRadius:3, padding:"1px 4px", marginLeft:4 },
   delBtn: { background:"none", border:"none", color:"var(--text-secondary)", cursor:"pointer", fontSize:16, padding:"0 2px" },
   actionBtn: { background:"var(--surface)", border:"1px dashed var(--border-strong)", borderRadius:8, color:"var(--text-tertiary)", padding:"10px", fontSize:13, fontWeight:500, cursor:"pointer" },
   editToggle: { background:"var(--surface)", border:"1px solid var(--border-strong)", borderRadius:8, color:"var(--text-tertiary)", padding:"10px 16px", fontSize:13, fontWeight:600, cursor:"pointer", flexShrink:0 },
   bulkDelBar: { display:"flex", alignItems:"center", gap:8, marginTop:12 },
   checkbox: { width:22, height:22, flexShrink:0, borderRadius:6, border:"1px solid var(--border-strong)", background:"var(--surface)", color:"#22c55e", fontSize:13, fontWeight:800, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", padding:0 },
-  checkboxOn: { background:chipColors("#22c55e").bg, borderColor:"#22c55e" },
   dragHandle: { flexShrink:0, background:"none", border:"none", color:"var(--text-muted)", fontSize:20, lineHeight:1, cursor:"grab", padding:"6px 4px", touchAction:"none", userSelect:"none" },
   rowDragging: { opacity:0.55, background:"var(--surface)", borderRadius:8 },
   sectionTitle: { fontSize:13, fontWeight:700, color:"var(--text-body)", textTransform:"uppercase", letterSpacing:"0.08em" },

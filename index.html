@@ -33,6 +33,13 @@
     --text-primary: #e2e8f0;
     --text-heading: #f1f5f9;
     --on-accent: #f8fafc;
+    /* The "idle, not-yet-confirmed" state of a two-step destructive button (e.g. Reset app,
+       bulk Delete N). Matches the look these buttons always had, unchanged in dark mode; the
+       light-mode override below turns them properly pastel instead of a jarring dark maroon.
+       Their confirmed/final step stays a fixed bold red in both themes — only this idle state adapts. */
+    --danger-soft-bg: #7f1d1d;
+    --danger-soft-border: #b91c1c;
+    --danger-soft-text: var(--on-accent);
   }
   :root[data-theme="light"] {
     --bg: #f5efdf;
@@ -47,6 +54,9 @@
     --text-primary: #362e1c;
     --text-heading: #241f13;
     --on-accent: #fffcf3;
+    --danger-soft-bg: #fecaca;
+    --danger-soft-border: #fca5a5;
+    --danger-soft-text: #991b1b;
   }
   * { -webkit-tap-highlight-color: transparent; box-sizing: border-box; }
   html, body {
