@@ -1256,7 +1256,17 @@ function CustomiseModal({ state, dispatch, onClose }) {
                         React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)" } },
                             state.theme === "light" ? "Light" : "Dark",
                             " mode")),
-                    React.createElement(ThemeToggle, { theme: state.theme || "dark", onToggle: () => dispatch({ type: "SETTINGS", patch: { theme: state.theme === "light" ? "dark" : "light" } }) }))),
+                    React.createElement(ThemeToggle, { theme: state.theme || "dark", onToggle: () => {
+                            const next = state.theme === "light" ? "dark" : "light";
+                            dispatch({ type: "SETTINGS", patch: { theme: next } });
+                            // Mirror the choice into the unencrypted pre-unlock preference (crypto.js reads this
+                            // for the lock/setup screens, which can't see the encrypted state.theme) so the lock
+                            // screen doesn't show a stale theme after this change.
+                            try {
+                                localStorage.setItem("spendtracker_pretheme", next);
+                            }
+                            catch { }
+                        } }))),
             React.createElement(PaymentMethodsSettingsCard, { state: state, dispatch: dispatch }),
             React.createElement(CategoriesSettingsCard, { state: state, dispatch: dispatch }))));
 }
@@ -1277,19 +1287,27 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
             on && React.createElement("span", { style: { position: "absolute", top: -2, right: -2, width: 18, height: 18, borderRadius: "50%", background: "var(--text-heading)", color: "var(--surface)", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" } }, "\u2713")),
         React.createElement("span", { style: { fontSize: 11, color: on ? "var(--text-heading)" : "var(--text-muted)", fontWeight: on ? 700 : 500, textAlign: "center", maxWidth: 70, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, label)));
     if (creating) {
+        const createCategory = () => {
+            if (!name.trim())
+                return;
+            const cat = { id: genId(), name: name.trim(), icon, color };
+            onCreate(cat);
+            onPick(cat.id);
+        };
         return (React.createElement("div", null,
             React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", fontWeight: 600, marginBottom: 10 } }, "New category"),
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10 } },
                 React.createElement("span", { style: { width: 40, height: 40, borderRadius: "50%", background: color, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
                     React.createElement(CategoryIcon, { icon: icon, size: 22, color: "#fff" })),
                 React.createElement("input", { type: "color", value: color, onChange: e => setColor(e.target.value), "aria-label": "Category colour", style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
-                React.createElement("input", { value: name, onChange: e => setName(e.target.value), placeholder: "Name e.g. Coffee", autoFocus: true, style: { ...S.input, marginBottom: 0, flex: 1 } })),
+                React.createElement("input", { value: name, onChange: e => setName(e.target.value), onKeyDown: e => { if (e.key === "Enter")
+                        createCategory(); }, placeholder: "Name e.g. Coffee", autoFocus: true, style: { ...S.input, marginBottom: 0, flex: 1 } })),
             React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 } }, "Icon"),
             React.createElement("div", { style: { marginBottom: 10 } },
                 React.createElement(IconPicker, { value: icon, onPick: setIcon })),
             React.createElement("div", { style: { display: "flex", gap: 8 } },
                 React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setCreating(false) }, "Cancel"),
-                React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1, opacity: name.trim() ? 1 : 0.5 }, disabled: !name.trim(), onClick: () => { const cat = { id: genId(), name: name.trim(), icon, color }; onCreate(cat); onPick(cat.id); } }, "Create"))));
+                React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1, opacity: name.trim() ? 1 : 0.5 }, disabled: !name.trim(), onClick: createCategory }, "Create"))));
     }
     return (React.createElement("div", null,
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, justifyItems: "center", maxHeight: 300, overflowY: "auto" } },
@@ -1928,9 +1946,9 @@ const S = {
     modalTitle: { fontSize: 15, fontWeight: 700, color: "var(--text-heading)" },
     weekSelect: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 6, color: "var(--text-heading)", fontSize: 14, fontWeight: 700, padding: "3px 6px", cursor: "pointer", outline: "none", fontFamily: "inherit" },
     quickAdd: { position: "fixed", left: "calc(14px + env(safe-area-inset-left))", bottom: "calc(14px + env(safe-area-inset-bottom))", width: 52, height: 52, borderRadius: "50%", background: "#0369a1", border: "none", color: "var(--on-accent)", fontSize: 30, fontWeight: 400, lineHeight: 1, cursor: "pointer", zIndex: 50, boxShadow: "0 4px 14px rgba(3,105,161,0.5)", display: "flex", alignItems: "center", justifyContent: "center", paddingBottom: 4 },
-    hintBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#0c2a4a", borderBottom: "1px solid #0369a1", padding: "8px 16px", fontSize: 12, color: "#bfdbfe", lineHeight: 1.4 },
+    hintBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "var(--surface-2)", borderBottom: "1px solid #0369a1", padding: "8px 16px", fontSize: 12, color: "var(--text-body)", lineHeight: 1.4 },
     hintBtn: { background: "#0369a1", border: "none", borderRadius: 6, color: "var(--on-accent)", padding: "4px 10px", fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
-    hintDismiss: { background: "none", border: "none", color: "#7dd3fc", fontSize: 14, cursor: "pointer", padding: "2px 4px", lineHeight: 1 },
+    hintDismiss: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 14, cursor: "pointer", padding: "2px 4px", lineHeight: 1 },
     // Floating help button — same footprint as the old lock button, themed so it reads in light + dark.
     helpFab: { position: "fixed", right: "calc(14px + env(safe-area-inset-right))", bottom: "calc(14px + env(safe-area-inset-bottom))", width: 44, height: 44, borderRadius: "50%", background: "var(--surface)", border: "1px solid var(--border-strong)", color: "var(--text-secondary)", fontSize: 20, fontWeight: 700, cursor: "pointer", zIndex: 50, boxShadow: "0 2px 10px rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", lineHeight: 1, padding: 0 },
 };
