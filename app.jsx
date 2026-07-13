@@ -400,7 +400,6 @@ function App() {
   const [showBackup, setShowBackup] = useState(false); // export-account modal
   const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
   const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
-  const [openIconCat, setOpenIconCat] = useState(null); // id of the category whose icon picker is open in Settings (only one at a time)
   const [helpNonce, setHelpNonce] = useState(0); // bumped by the help button / new-user hint; each bump re-opens & scrolls to Settings' "How it works" card
   const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
 
@@ -821,42 +820,7 @@ function App() {
             );
           })()}
 
-          {(() => {
-            // Every category id referenced by a live or archived entry — such categories can't be removed.
-            const used = new Set();
-            [state, ...(state.monthHistory || [])].forEach(src => {
-              (src.entries || []).forEach(e => { if (e.category) used.add(e.category); });
-            });
-            const setCats = (cs) => dispatch({ type: "SETTINGS", patch: { categories: cs } });
-            const update = (id, patch) => setCats(state.categories.map(c => c.id === id ? { ...c, ...patch } : c));
-            const remove = (id) => setCats(state.categories.filter(c => c.id !== id));
-            const add = () => setCats([...state.categories, { id: genId(), name: "New category", icon: "tag", color: "#60a5fa" }]);
-            const anyInUse = state.categories.some(c => used.has(c.id));
-            return (
-              <div style={S.settingsCard}>
-                <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, gap:8 }}>
-                  <div>
-                    <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", textTransform:"uppercase" }}>Spending categories</div>
-                    <div style={{ fontSize:12, color:"var(--text-muted)", marginTop:2 }}>Ask for a category after logging a spend</div>
-                  </div>
-                  <ToggleSwitch on={state.categoryPrompt} onToggle={() => dispatch({ type:"SETTINGS", patch:{ categoryPrompt: !state.categoryPrompt } })} ariaLabel="Toggle category prompt" thumbOn="🏷️" thumbOff="✕" />
-                </div>
-                {state.categories.map(c => (
-                  <CategoryEditorRow key={c.id} cat={c}
-                    canDelete={!used.has(c.id) && state.categories.length > 1}
-                    lockReason={used.has(c.id) ? "In use — can't remove" : (state.categories.length <= 1 ? "Keep at least one" : "Remove")}
-                    open={openIconCat === c.id}
-                    onToggle={() => setOpenIconCat(prev => prev === c.id ? null : c.id)}
-                    onUpdate={patch => update(c.id, patch)} onRemove={() => { setOpenIconCat(null); remove(c.id); }} />
-                ))}
-                {anyInUse && <div style={{ fontSize:11, color:"var(--text-muted)", marginTop:2, marginBottom:8 }}>Categories used by a logged spend can't be removed.</div>}
-                <button onClick={add} disabled={state.categories.length >= MAX_CATEGORIES}
-                  style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", width:"100%", marginTop:4, opacity: state.categories.length >= MAX_CATEGORIES ? 0.5 : 1, cursor: state.categories.length >= MAX_CATEGORIES ? "default" : "pointer" }}>
-                  {state.categories.length >= MAX_CATEGORIES ? `Maximum ${MAX_CATEGORIES} categories` : "+ Add category"}
-                </button>
-              </div>
-            );
-          })()}
+          <CategoriesSettingsCard state={state} dispatch={dispatch} />
 
           <div style={S.settingsCard}>
             <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Pay period</div>
@@ -1329,6 +1293,112 @@ function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdat
           style={{ ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize:16, flexShrink:0 }}>✕</button>
       </div>
       {open && <div style={{ marginTop:6 }}><IconPicker value={cat.icon} onPick={k => { onUpdate({ icon: k }); onToggle(); }} /></div>}
+    </div>
+  );
+}
+
+// ─── Categories Settings Card ─────────────────────────────────────────────────
+// The Settings card that lists, edits, adds/removes, and reorders spending categories, plus the
+// category-prompt toggle. Categories have no separate `order` field — a category's position in
+// state.categories IS its order (used by both this list and the CategoryPicker grid) — so a
+// completed drag just persists the reordered array directly.
+function CategoriesSettingsCard({ state, dispatch }) {
+  const categories = state.categories;
+  // Every category id referenced by a live or archived entry — such categories can't be removed.
+  const used = new Set();
+  [state, ...(state.monthHistory || [])].forEach(src => {
+    (src.entries || []).forEach(e => { if (e.category) used.add(e.category); });
+  });
+  const setCats = (cs) => dispatch({ type: "SETTINGS", patch: { categories: cs } });
+  const update = (id, patch) => setCats(categories.map(c => c.id === id ? { ...c, ...patch } : c));
+  const remove = (id) => { setOpenIconCat(null); setCats(categories.filter(c => c.id !== id)); };
+  const add = () => setCats([...categories, { id: genId(), name: "New category", icon: "tag", color: "#60a5fa" }]);
+  const anyInUse = categories.some(c => used.has(c.id));
+
+  const [openIconCat, setOpenIconCat] = useState(null); // id of the category whose icon picker is open (only one at a time)
+  const [dragId, setDragId] = useState(null);           // id of the category being dragged, or null
+  const [dragList, setDragList] = useState(null);       // working category order during a drag, else null
+  const dragIdRef = useRef(null);
+  const dragListRef = useRef(null);
+  const rowRefs = useRef({});                            // category id -> row DOM node, for hit-testing during drag
+
+  // During a drag, render the live working order; otherwise the stored order.
+  const renderCats = dragList || categories;
+
+  // Hand-rolled drag reorder — same mechanic as the Week page's transaction list (WeekPanel):
+  // on each move, hit-test the pointer against the other rows' midpoints to find the drop index.
+  function beginDrag(clientY, cat, isTouch) {
+    dragIdRef.current = cat.id;
+    dragListRef.current = categories;
+    setDragId(cat.id);
+    setDragList(categories);
+
+    const move = (y) => {
+      const prev = dragListRef.current;
+      const id = dragIdRef.current;
+      const without = prev.filter(c => c.id !== id);
+      let to = without.length;
+      for (let i = 0; i < without.length; i++) {
+        const el = rowRefs.current[without[i].id];
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (y < r.top + r.height / 2) { to = i; break; }
+      }
+      const moved = prev.find(c => c.id === id);
+      const next = without.slice();
+      next.splice(to, 0, moved);
+      if (next.some((c, i) => c.id !== prev[i].id)) { dragListRef.current = next; setDragList(next); }
+    };
+    const onTouchMove = (e) => { e.preventDefault(); move(e.touches[0].clientY); };
+    const onMouseMove = (e) => move(e.clientY);
+    const end = () => {
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", end);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", end);
+      if (dragListRef.current) setCats(dragListRef.current);
+      dragIdRef.current = null; dragListRef.current = null;
+      setDragId(null); setDragList(null);
+    };
+    if (isTouch) {
+      window.addEventListener("touchmove", onTouchMove, { passive: false });
+      window.addEventListener("touchend", end);
+    } else {
+      window.addEventListener("mousemove", onMouseMove);
+      window.addEventListener("mouseup", end);
+    }
+  }
+
+  return (
+    <div style={S.settingsCard}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10, gap:8 }}>
+        <div>
+          <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", textTransform:"uppercase" }}>Spending categories</div>
+          <div style={{ fontSize:12, color:"var(--text-muted)", marginTop:2 }}>Ask for a category after logging a spend</div>
+        </div>
+        <ToggleSwitch on={state.categoryPrompt} onToggle={() => dispatch({ type:"SETTINGS", patch:{ categoryPrompt: !state.categoryPrompt } })} ariaLabel="Toggle category prompt" thumbOn="🏷️" thumbOff="✕" />
+      </div>
+      {renderCats.map(c => (
+        <div key={c.id} ref={el => { if (el) rowRefs.current[c.id] = el; else delete rowRefs.current[c.id]; }}
+             style={{ display:"flex", alignItems:"flex-start", gap:2, ...(dragId === c.id ? S.rowDragging : {}) }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <CategoryEditorRow cat={c}
+              canDelete={!used.has(c.id) && categories.length > 1}
+              lockReason={used.has(c.id) ? "In use — can't remove" : (categories.length <= 1 ? "Keep at least one" : "Remove")}
+              open={openIconCat === c.id}
+              onToggle={() => setOpenIconCat(prev => prev === c.id ? null : c.id)}
+              onUpdate={patch => update(c.id, patch)} onRemove={() => remove(c.id)} />
+          </div>
+          <button style={S.dragHandle} aria-label={`Drag ${c.name} to reorder`}
+                  onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); beginDrag(e.clientY, c, false); }}
+                  onTouchStart={(e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, c, true); }}>≡</button>
+        </div>
+      ))}
+      {anyInUse && <div style={{ fontSize:11, color:"var(--text-muted)", marginTop:2, marginBottom:8 }}>Categories used by a logged spend can't be removed.</div>}
+      <button onClick={add} disabled={categories.length >= MAX_CATEGORIES}
+        style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", width:"100%", marginTop:4, opacity: categories.length >= MAX_CATEGORIES ? 0.5 : 1, cursor: categories.length >= MAX_CATEGORIES ? "default" : "pointer" }}>
+        {categories.length >= MAX_CATEGORIES ? `Maximum ${MAX_CATEGORIES} categories` : "+ Add category"}
+      </button>
     </div>
   );
 }
