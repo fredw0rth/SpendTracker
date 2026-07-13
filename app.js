@@ -253,6 +253,7 @@ function defaultState() {
         methods: DEFAULT_METHODS,
         categories: DEFAULT_CATEGORIES,
         categoryPrompt: true,
+        descriptionPrompt: true,
         helpHintSeen: false,
         entries: [],
         pins: [],
@@ -382,6 +383,7 @@ function App() {
                 ? s.categories.map(c => c.icon ? c : { ...c, icon: DEFAULT_CATEGORY_ICON[c.id] || "tag" })
                 : DEFAULT_CATEGORIES,
             categoryPrompt: s.categoryPrompt === undefined ? true : s.categoryPrompt,
+            descriptionPrompt: s.descriptionPrompt === undefined ? true : s.descriptionPrompt,
         };
     });
     // Refresh the module-level method views from state before any child renders (see Constants).
@@ -401,6 +403,9 @@ function App() {
     const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
     const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
     const [showCustomise, setShowCustomise] = useState(false); // appearance / payment types / categories modal
+    // The most recently deleted entry/credit (or split pair), kept verbatim so Undo can restore it
+    // exactly. Global (not per-week/tab) and not persisted — survives navigation, clears on reload.
+    const [lastDeleted, setLastDeleted] = useState(null); // {kind:"entry",entry} | {kind:"credit",credit} | {kind:"split",your,their}
     const [helpNonce, setHelpNonce] = useState(0); // bumped by the help button / new-user hint; each bump re-opens & scrolls to Settings' "How it works" card
     const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
     // If history trims (caps at 12 months) while a past period is being viewed, the index
@@ -586,6 +591,24 @@ function App() {
         else
             dispatch({ type: "UPD_CREDIT", credit });
     }
+    // Restores the most recently deleted entry/credit (or split pair) verbatim — same id/order/
+    // weekIndex, so it reappears in its original week and position. Global, not per-week, so it
+    // survives switching tabs/weeks; plain useState (not persisted `state`) so it clears on reload.
+    function undoLastDeleted() {
+        if (!lastDeleted)
+            return;
+        if (lastDeleted.kind === "entry")
+            addEntry(lastDeleted.entry);
+        else if (lastDeleted.kind === "credit")
+            addCredit(lastDeleted.credit);
+        else {
+            if (lastDeleted.your)
+                addEntry(lastDeleted.your);
+            if (lastDeleted.their)
+                addEntry(lastDeleted.their);
+        }
+        setLastDeleted(null);
+    }
     // Pins are shared across periods (they're recurring fixed costs), so pin edits always
     // apply live regardless of which period is being viewed.
     return (React.createElement("div", { style: S.root },
@@ -631,7 +654,7 @@ function App() {
                         "d left")))),
             weeks.filter(w => w.index === activeWeek).map(week => {
                 var _a;
-                return (React.createElement(WeekPanel, { key: week.index, week: week, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit, onEditEntry: (entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex }), onEditCredit: (credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex }), onUpdEntry: updEntry, onUpdCredit: updCredit }));
+                return (React.createElement(WeekPanel, { key: week.index, week: week, weeks: weeks, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit, onEditEntry: (entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex }), onEditCredit: (credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex }), onUpdEntry: updEntry, onUpdCredit: updCredit, onCapture: setLastDeleted, lastDeleted: lastDeleted, onUndo: undoLastDeleted }));
             }))),
         tab === "pins" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
@@ -664,7 +687,7 @@ function App() {
             return (React.createElement("div", { style: { padding: "12px 16px" } },
                 React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "20px", marginBottom: 12 } },
                     React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 4, textTransform: "uppercase" } }, "Total saved"),
-                    React.createElement("div", { style: { fontSize: 36, fontWeight: 800, color: totalSaved >= 0 ? "#4ade80" : "#f87171", marginBottom: 8 } },
+                    React.createElement("div", { style: { fontSize: 36, fontWeight: 800, color: totalSaved >= 0 ? "#22c55e" : "#f87171", marginBottom: 8 } },
                         totalSaved < 0 ? "-" : "",
                         fmt(totalSaved)),
                     React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 } },
@@ -694,7 +717,7 @@ function App() {
                                 fmt(r.spent),
                                 " spent of ",
                                 fmt(r.budget))),
-                        React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#4ade80" : "#f87171" } }, signed(r.saved))))))));
+                        React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#22c55e" : "#f87171" } }, signed(r.saved))))))));
         })(),
         tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true) })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
@@ -760,7 +783,7 @@ function App() {
                     React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe)
                             window.SpendVault.wipe(); } }, "Erase everything")))))),
         !viewingPast && (React.createElement("button", { "aria-label": "Quick add spend", onClick: () => setShowEntryFor(todayWeekIndex(weeks)), style: S.quickAdd }, "+")),
-        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
+        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
         (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
@@ -771,7 +794,7 @@ function App() {
         showCustomise && React.createElement(CustomiseModal, { state: state, dispatch: dispatch, onClose: () => setShowCustomise(false) })));
 }
 // ─── Week Panel ───────────────────────────────────────────────────────────────
-function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit, onUpdEntry, onUpdCredit }) {
+function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, categories, onAddCategory, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit, onUpdEntry, onUpdCredit, onCapture, lastDeleted, onUndo }) {
     const personal = entries.filter(e => e.type === "personal");
     const spent = personal.reduce((s, e) => s + e.amount, 0);
     const over = spent - weeklyBudget;
@@ -779,6 +802,8 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
     const [editMode, setEditMode] = useState(false);
     const [selected, setSelected] = useState(() => new Set());
     const [confirmBulk, setConfirmBulk] = useState(false);
+    const [showMove, setShowMove] = useState(false);
+    const [showCategorize, setShowCategorize] = useState(false);
     const [dragId, setDragId] = useState(null); // id of the unit being dragged, or null
     const [dragList, setDragList] = useState(null); // working unit order during a drag, else null
     const dragIdRef = useRef(null);
@@ -809,12 +834,17 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
     units.sort((a, b) => b.order - a.order);
     // During a drag, render the live working order; otherwise the sorted order.
     const renderUnits = dragList || units;
-    // Deleting one half of a split removes both halves, since a lone remainder is meaningless
+    // Deleting one half of a split removes both halves, since a lone remainder is meaningless.
+    // Captures the full object(s) via onCapture before deleting, so Undo can restore them —
+    // DEL_ENTRY/DEL_CREDIT only take an id and the object is gone from state once deleted.
     function handleDelete(entry) {
         if (entry.splitGroupId) {
-            entries.filter(e => e.splitGroupId === entry.splitGroupId).forEach(e => onDelEntry(e.id));
+            const group = entries.filter(e => e.splitGroupId === entry.splitGroupId);
+            onCapture({ kind: "split", your: group.find(e => e.type === "personal") || null, their: group.find(e => e.type === "excluded") || null });
+            group.forEach(e => onDelEntry(e.id));
         }
         else {
+            onCapture({ kind: "entry", entry });
             onDelEntry(entry.id);
         }
     }
@@ -822,12 +852,22 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
         setConfirmBulk(false);
         setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
     }
-    function exitEdit() { setEditMode(false); setSelected(new Set()); setConfirmBulk(false); }
+    function exitEdit() { setEditMode(false); setSelected(new Set()); setConfirmBulk(false); setShowMove(false); setShowCategorize(false); }
     // Bulk delete every selected unit, expanding split groups to both halves (like handleDelete).
+    // Only captures for Undo when exactly one unit was selected — a bulk delete of many has no
+    // single sensible "last deleted" for one Undo button to restore.
     function bulkDelete() {
-        units.forEach(u => {
-            if (!selected.has(u.id))
-                return;
+        const toDelete = units.filter(u => selected.has(u.id));
+        if (toDelete.length === 1) {
+            const u = toDelete[0];
+            if (u.kind === "credit")
+                onCapture({ kind: "credit", credit: u.credit });
+            else if (u.kind === "single")
+                onCapture({ kind: "entry", entry: u.entry });
+            else
+                onCapture({ kind: "split", your: u.group.find(e => e.type === "personal") || null, their: u.group.find(e => e.type === "excluded") || null });
+        }
+        toDelete.forEach(u => {
             if (u.kind === "credit")
                 onDelCredit(u.credit.id);
             else if (u.kind === "single")
@@ -835,6 +875,39 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
             else
                 u.group.forEach(half => onDelEntry(half.id));
         });
+        exitEdit();
+    }
+    // Bulk move every selected unit to a different week (reusing UPD_ENTRY/UPD_CREDIT, same as drag reorder).
+    function bulkMove(newWeek) {
+        units.forEach(u => {
+            if (!selected.has(u.id))
+                return;
+            if (u.kind === "credit")
+                onUpdCredit({ ...u.credit, weekIndex: newWeek });
+            else if (u.kind === "single")
+                onUpdEntry({ ...u.entry, weekIndex: newWeek });
+            else
+                u.group.forEach(half => onUpdEntry({ ...half, weekIndex: newWeek }));
+        });
+        setShowMove(false);
+        exitEdit();
+    }
+    // Bulk-assign a category to every selected personal entry (and a split's personal half).
+    // Credits and non-personal entries are silently skipped, matching EntryModal's own rule that
+    // only personal spends can carry a category.
+    function bulkCategorize(catId) {
+        units.forEach(u => {
+            if (!selected.has(u.id))
+                return;
+            if (u.kind === "single" && u.entry.type === "personal")
+                onUpdEntry({ ...u.entry, category: catId || undefined });
+            else if (u.kind === "split") {
+                const your = u.group.find(e => e.type === "personal");
+                if (your)
+                    onUpdEntry({ ...your, category: catId || undefined });
+            }
+        });
+        setShowCategorize(false);
         exitEdit();
     }
     // Persist a hand-reordered list: redistribute the units' existing order values to their new
@@ -926,7 +999,10 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
             React.createElement("span", { style: { fontWeight: 600, color: "var(--text-heading)", fontSize: 14 } },
                 dateStr(week.start),
                 " \u2014 ",
-                dateStr(week.end))),
+                dateStr(week.end)),
+            (units.length > 0 || lastDeleted) && (React.createElement("div", { style: { display: "flex", gap: 6 } },
+                lastDeleted && React.createElement("button", { style: { ...S.editToggle, padding: "5px 10px", fontSize: 12 }, onClick: onUndo }, "Undo"),
+                units.length > 0 && React.createElement("button", { style: { ...S.editToggle, padding: "5px 10px", fontSize: 12 }, onClick: () => setEditMode(true) }, "Edit")))),
         React.createElement("div", { style: S.budgetCard },
             React.createElement("div", { style: S.bar },
                 React.createElement("div", { style: { ...S.barFill, width: pct + "%", background: over > 0 ? "#ef4444" : "#06b6d4" } })),
@@ -954,17 +1030,34 @@ function WeekPanel({ week, entries, credits, weeklyBudget, isLastWeek, onAddEntr
             units.length === 0 && React.createElement("div", { style: { color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" } }, "Nothing logged")),
         !editMode ? (React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
             React.createElement("button", { style: { ...S.actionBtn, flex: 1 }, onClick: onAddEntry }, "Log spend"),
-            units.length > 0 && React.createElement("button", { style: S.editToggle, onClick: () => setEditMode(true) }, "Edit"))) : (React.createElement("div", { style: S.bulkDelBar },
-            React.createElement("button", { style: S.editToggle, onClick: exitEdit }, "Done"),
-            React.createElement("div", { style: { flex: 1, fontSize: 12, color: "var(--text-secondary)", textAlign: "center" } }, "Drag \u2261 to reorder"),
-            selected.size > 0 && (confirmBulk
-                ? React.createElement("button", { style: { ...S.btn, background: "#dc2626", padding: "10px 14px", fontSize: 13 }, onClick: bulkDelete },
-                    "Delete ",
+            lastDeleted && React.createElement("button", { style: S.editToggle, onClick: onUndo }, "Undo"),
+            units.length > 0 && React.createElement("button", { style: S.editToggle, onClick: () => setEditMode(true) }, "Edit"))) : (React.createElement(React.Fragment, null,
+            React.createElement("div", { style: S.bulkDelBar },
+                React.createElement("button", { style: S.editToggle, onClick: exitEdit }, "Done"),
+                selected.size === 0 ? (React.createElement("div", { style: { flex: 1, fontSize: 12, color: "var(--text-secondary)", textAlign: "center" } }, "Drag \u2261 to reorder")) : (React.createElement("div", { style: { flex: 1, display: "flex", gap: 6, justifyContent: "center" } },
+                    React.createElement("button", { style: { ...S.editToggle, padding: "8px 10px", fontSize: 12 }, onClick: () => { setShowCategorize(false); setShowMove(m => !m); } }, "Move"),
+                    React.createElement("button", { style: { ...S.editToggle, padding: "8px 10px", fontSize: 12 }, onClick: () => { setShowMove(false); setShowCategorize(c => !c); } }, "Categorize"))),
+                selected.size > 0 && (confirmBulk
+                    ? React.createElement("button", { style: { ...S.btn, background: "#dc2626", padding: "10px 14px", fontSize: 13 }, onClick: bulkDelete },
+                        "Delete ",
+                        selected.size,
+                        "?")
+                    : React.createElement("button", { style: { ...S.btn, background: "#7f1d1d", border: "1px solid #b91c1c", padding: "10px 14px", fontSize: 13 }, onClick: () => setConfirmBulk(true) },
+                        "Delete ",
+                        selected.size))),
+            showMove && (React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 8, justifyContent: "center" } },
+                React.createElement("span", { style: { fontSize: 12, color: "var(--text-secondary)" } },
+                    "Move ",
                     selected.size,
-                    "?")
-                : React.createElement("button", { style: { ...S.btn, background: "#7f1d1d", border: "1px solid #b91c1c", padding: "10px 14px", fontSize: 13 }, onClick: () => setConfirmBulk(true) },
-                    "Delete ",
-                    selected.size))))));
+                    " to"),
+                React.createElement("select", { style: S.weekSelect, defaultValue: "", onChange: e => { if (e.target.value !== "")
+                        bulkMove(Number(e.target.value)); } },
+                    React.createElement("option", { value: "", disabled: true }, "Week\u2026"),
+                    (weeks || []).filter(w => w.index !== week.index).map(w => React.createElement("option", { key: w.index, value: w.index },
+                        "Week ",
+                        w.index))))),
+            showCategorize && (React.createElement("div", { style: { marginTop: 8 } },
+                React.createElement(CategoryPicker, { categories: categories, value: null, onPick: id => bulkCategorize(id), onCreate: onAddCategory, onBack: () => setShowCategorize(false) })))))));
 }
 // ─── Theme Toggle ─────────────────────────────────────────────────────────────
 // A classic sun/moon switch: a single thumb carries whichever glyph is active and slides
@@ -1001,12 +1094,12 @@ function ConfirmDeleteButton({ onConfirm, style }) {
     }
     return (React.createElement("button", { style: {
             ...style,
-            ...(confirming ? { color: "#ef4444", fontSize: 11, fontWeight: 700, background: "#450a0a", borderRadius: 5, padding: "2px 7px", whiteSpace: "nowrap" } : {}),
+            ...(confirming ? { color: "#ef4444", fontSize: 11, fontWeight: 700, background: chipColors("#ef4444").bg, borderRadius: 5, padding: "2px 7px", whiteSpace: "nowrap" } : {}),
         }, onClick: handleClick, onBlur: () => setConfirming(false) }, confirming ? "confirm?" : "×"));
 }
 // ─── Entry Line ───────────────────────────────────────────────────────────────
 function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
-    const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a78bfa" : "var(--text-primary)";
+    const col = entry.type === "business" ? "#f59e0b" : entry.type === "excluded" ? "#a855f7" : "var(--text-primary)";
     const cat = entry.category && CATEGORY_BY_ID[entry.category];
     return (React.createElement("div", { onClick: onEdit, style: { ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom: "none" } : {}), cursor: onEdit ? "pointer" : "default" } },
         React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[entry.method] || "var(--text-secondary)" } }),
@@ -1014,9 +1107,9 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
             cat && React.createElement("span", { title: cat.name, style: { display: "inline-flex", verticalAlign: "-2px", marginRight: 5, width: 16, height: 16, borderRadius: "50%", background: cat.color, alignItems: "center", justifyContent: "center" } },
                 React.createElement(CategoryIcon, { icon: cat.icon, size: 10, color: "#fff" })),
             entry.label || METHOD_NAME[entry.method] || entry.method,
-            entry.pinned && React.createElement("span", { style: { ...S.badge, background: "#0c4a6e", color: "#7dd3fc" } }, " \uD83D\uDCCC fixed"),
+            entry.pinned && React.createElement("span", { style: { ...S.badge, background: chipColors("#38bdf8").bg, color: "#38bdf8" } }, " \uD83D\uDCCC fixed"),
             entry.type === "business" && React.createElement("span", { style: S.badge }, " work"),
-            entry.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " reimbursable"),
+            entry.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: chipColors("#a855f7").bg, color: "#a855f7" } }, " reimbursable"),
             entry.splitGroupId && entry.type === "personal" && React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, " split")),
         React.createElement("span", { style: { color: col, fontWeight: 600, fontSize: 13 } }, fmt(entry.amount)),
         !hideDelete && React.createElement(ConfirmDeleteButton, { onConfirm: onDel, style: S.delBtn })));
@@ -1039,18 +1132,18 @@ function CreditLine({ credit, onDel, onEdit, hideDelete }) {
 function PinCard({ pin, onEdit, onDelete }) {
     const isB = pin.type === "business";
     const isX = pin.type === "excluded";
-    const col = isB ? "#f59e0b" : isX ? "#a78bfa" : "var(--text-heading)";
+    const col = isB ? "#f59e0b" : isX ? "#a855f7" : "var(--text-heading)";
     return (React.createElement("div", { style: S.pinCard },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
             React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[pin.method] || "var(--text-secondary)" } }),
             React.createElement("span", { style: { flex: 1, fontWeight: 600, fontSize: 14, color: col } },
                 pin.label,
                 isB && React.createElement("span", { style: S.badge }, " work"),
-                isX && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " split")),
+                isX && React.createElement("span", { style: { ...S.badge, background: chipColors("#a855f7").bg, color: "#a855f7" } }, " split")),
             React.createElement("button", { style: S.iconBtn, onClick: onEdit }, "\u270E"),
             React.createElement(ConfirmDeleteButton, { onConfirm: onDelete, style: { ...S.iconBtn, color: "#ef4444" } })),
-        React.createElement("div", { style: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: isB ? "#f59e0b" : isX ? "#a78bfa" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom: 4 } }, pin.amount ? fmt(pin.amount) : "—"),
-        isScheduledPin(pin) && React.createElement("div", { style: { fontSize: 11, color: "#7dd3fc", marginTop: 2 } },
+        React.createElement("div", { style: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: isB ? "#f59e0b" : isX ? "#a855f7" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom: 4 } }, pin.amount ? fmt(pin.amount) : "—"),
+        isScheduledPin(pin) && React.createElement("div", { style: { fontSize: 11, color: "#38bdf8", marginTop: 2 } },
             "\uD83D\uDCCC ",
             pin.freq === "weekly" ? `Every ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][pin.day]}` : `Monthly · day ${pin.day}`,
             " \u00B7 in week log"),
@@ -1268,7 +1361,13 @@ function CustomiseModal({ state, dispatch, onClose }) {
                             catch { }
                         } }))),
             React.createElement(PaymentMethodsSettingsCard, { state: state, dispatch: dispatch }),
-            React.createElement(CategoriesSettingsCard, { state: state, dispatch: dispatch }))));
+            React.createElement(CategoriesSettingsCard, { state: state, dispatch: dispatch }),
+            React.createElement("div", { style: S.settingsCard },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
+                    React.createElement("div", null,
+                        React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" } }, "Descriptions"),
+                        React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginTop: 2 } }, "Show a description field when logging or editing a spend")),
+                    React.createElement(ToggleSwitch, { on: state.descriptionPrompt, onToggle: () => dispatch({ type: "SETTINGS", patch: { descriptionPrompt: !state.descriptionPrompt } }), ariaLabel: "Toggle description field", thumbOn: "\uD83D\uDCDD", thumbOff: "\u2715" }))))));
 }
 // ─── Category Picker ──────────────────────────────────────────────────────────
 // A Monzo-style grid of round category tiles (a white line-icon on a coloured circle). Shown in
@@ -1317,7 +1416,7 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
         onBack && React.createElement("button", { style: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", padding: "12px 0 0", width: "100%" }, onClick: onBack }, "\u2190 Back")));
 }
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categoryPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categoryPrompt, descriptionPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
     const editEntry = edit && edit.kind === "entry" ? edit.data : null;
     const editCredit = edit && edit.kind === "credit" ? edit.data : null;
     const editData = editEntry || editCredit;
@@ -1339,7 +1438,6 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
     });
     const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : "personal"));
     const [note, setNote] = useState(() => editData ? (editData.label || "") : "");
-    const [showNote, setShowNote] = useState(() => !!(editData && editData.label));
     const [flash, setFlash] = useState(null);
     // The chosen category id (or null = None). Seeds from the edited entry when editing.
     const [category, setCategory] = useState(() => (editEntry && editEntry.category) || null);
@@ -1353,8 +1451,8 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
     const [splitTotal, setSplitTotal] = useState(0);
     const amount = cents / 100;
     const displayStr = amount.toFixed(2);
-    const creditColors = { bg: "#14532d", border: "#22c55e", text: "#4ade80" };
-    const splitColors = { bg: "#3b0764", border: "#a855f7", text: "#d8b4fe" };
+    const creditColors = chipColors("#22c55e");
+    const splitColors = chipColors("#a855f7");
     const mc = type === "credit" ? creditColors : type === "split" ? splitColors : chipColors(METHOD_COLOR[method] || "#60a5fa");
     function pressDigit(d) {
         if (isSplitEdit)
@@ -1507,14 +1605,14 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
     const catRow = category && CATEGORY_BY_ID[category];
     return (React.createElement(Modal, { onClose: onClose, title: title },
         React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "var(--border-strong)"}`, opacity: isSplitEdit ? 0.7 : 1 } },
-            displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
-            React.createElement("div", { style: { fontSize: displayStr.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#4ade80" : "var(--text-heading)" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`)),
+            displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a855f7", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
+            React.createElement("div", { style: { fontSize: displayStr.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#22c55e" : "var(--text-heading)" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`)),
         !editCredit && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Payment type"),
             React.createElement(MethodSelector, { value: method, onChange: setMethod, dimmed: type === "credit" })),
         classOptions.length > 0 && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Classification"),
-            React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#4ade80" : v === "split" ? "#d8b4fe" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
+            React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#22c55e" : v === "split" ? "#a855f7" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
         isEdit && !editCredit && !isSplitEdit && type === "personal" && (React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Category"),
             editPickCat ? (React.createElement("div", { style: { marginBottom: 10 } },
@@ -1526,11 +1624,12 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
                         catRow.name)
                     : React.createElement("span", { style: { color: "var(--text-muted)" } }, "None"),
                 React.createElement("span", { style: { marginLeft: "auto", color: "var(--text-tertiary)" } }, "Change \u25B8"))))),
-        type === "split" && !isEdit && (React.createElement("div", { style: { fontSize: 11, color: "#a78bfa", marginBottom: 10, lineHeight: 1.5 } }, splitStage === "total"
+        type === "split" && !isEdit && (React.createElement("div", { style: { fontSize: 11, color: "#a855f7", marginBottom: 10, lineHeight: 1.5 } }, splitStage === "total"
             ? "Enter the full amount you paid, then continue."
             : "Enter just the portion that isn't yours — work reimbursement, a friend's share of the bill, etc. The rest stays personal.")),
-        React.createElement("button", { style: { background: "none", border: "none", color: showNote ? "#60a5fa" : "var(--text-secondary)", fontSize: 12, cursor: "pointer", padding: "0 0 8px", textAlign: "left", width: "100%" }, onClick: () => setShowNote(p => !p) }, showNote ? "▾ Hide note" : "▸ Add a note"),
-        showNote && React.createElement("input", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-heading)", padding: "8px 12px", marginBottom: 10, fontSize: 13, width: "100%", boxSizing: "border-box", outline: "none" }, placeholder: "e.g. golf, birthday", value: note, onChange: e => setNote(e.target.value), autoFocus: true }),
+        descriptionPrompt && (React.createElement(React.Fragment, null,
+            React.createElement("div", { style: subheading }, "Description"),
+            React.createElement("input", { style: { width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-heading)", padding: "9px 12px", marginBottom: 10, fontSize: 13, boxSizing: "border-box", outline: "none" }, placeholder: "Tap to add a description", value: note, onChange: e => setNote(e.target.value) }))),
         React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6 } }, digits.map((row, ri) => (React.createElement(React.Fragment, null,
             row.map((d, i) => React.createElement("button", { key: `${ri}-${i}`, style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: d === "⌫" ? "#ef4444" : "var(--text-body)", fontSize: d === "⌫" ? 18 : 20, fontWeight: 600, padding: "14px 0", cursor: "pointer", opacity: isSplitEdit ? 0.4 : 1 }, onClick: () => d === "⌫" ? pressDelete() : pressDigit(d) }, d)),
             ri === 0 && React.createElement("button", { style: { gridRow: "span 4", background: amount > 0 ? mc.bg : "var(--surface)", border: `1px solid ${amount > 0 ? mc.border : "var(--border)"}`, borderRadius: 8, color: amount > 0 ? mc.text : "var(--text-muted)", fontSize: 18, fontWeight: 800, cursor: amount > 0 ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: pressEnter }, enterGlyph)))))));
@@ -1550,13 +1649,13 @@ function PinModal({ pin, onSave, onClose }) {
     const [dom, setDom] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) === "monthly" ? ((_b = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _b !== void 0 ? _b : 1) : 1);
     const [dow, setDow] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) === "weekly" ? ((_c = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _c !== void 0 ? _c : 1) : 1);
     const segBtn = (on) => ({ flex: 1, background: on ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
-    const dayBtn = (on) => ({ flex: 1, background: on ? "#0c4a6e" : "var(--surface)", border: `1px solid ${on ? "#0369a1" : "var(--border)"}`, borderRadius: 8, color: on ? "#7dd3fc" : "var(--text-muted)", padding: "7px 2px", fontSize: 11, fontWeight: 600, cursor: "pointer" });
+    const dayBtn = (on) => ({ flex: 1, background: on ? chipColors("#38bdf8").bg : "var(--surface)", border: `1px solid ${on ? "#0369a1" : "var(--border)"}`, borderRadius: 8, color: on ? "#38bdf8" : "var(--text-muted)", padding: "7px 2px", fontSize: 11, fontWeight: 600, cursor: "pointer" });
     const hint = { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 };
     return (React.createElement(Modal, { onClose: onClose, title: pin ? "Edit" : "New pin" },
         React.createElement("input", { style: S.input, placeholder: "Label e.g. Gym", value: label, onChange: e => setLabel(e.target.value) }),
         React.createElement("input", { style: { ...S.input, marginBottom: 10 }, type: "number", inputMode: "decimal", placeholder: "Amount", value: amount, onChange: e => setAmount(e.target.value) }),
         React.createElement(MethodSelector, { value: method, onChange: setMethod }),
-        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["excluded", "Split"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "excluded" ? "#a78bfa" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setType(v) }, l))),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["excluded", "Split"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "excluded" ? "#a855f7" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setType(v) }, l))),
         React.createElement("div", { style: hint }, "Populate into the week log"),
         React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["none", "One-off"], ["monthly", "Monthly"], ["weekly", "Weekly"]].map(([v, l]) => React.createElement("button", { key: v, style: segBtn(freq === v), onClick: () => setFreq(v) }, l))),
         freq === "monthly" && (React.createElement("div", { style: { marginBottom: 10 } },
@@ -1644,8 +1743,8 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                 React.createElement("span", { style: { color: "#f59e0b" } }, "Business spend"),
                 React.createElement("span", { style: { color: "#f59e0b", fontWeight: 600 } }, fmt(businessTotal)))),
             splitTotal > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
-                React.createElement("span", { style: { color: "#a78bfa" } }, "Split spend"),
-                React.createElement("span", { style: { color: "#a78bfa", fontWeight: 600 } }, fmt(splitTotal)))),
+                React.createElement("span", { style: { color: "#a855f7" } }, "Split spend"),
+                React.createElement("span", { style: { color: "#a855f7", fontWeight: 600 } }, fmt(splitTotal)))),
             React.createElement("div", { style: { borderTop: "1px solid var(--border)", marginTop: 6, display: "flex", justifyContent: "space-between", padding: "6px 0 5px" } },
                 React.createElement("span", { style: { color: "var(--text-body)", fontSize: 13, fontWeight: 600 } }, "Gross spend across all cards"),
                 React.createElement("span", { style: { color: "var(--text-heading)", fontWeight: 700, fontSize: 13 } }, fmt(grossSpend))),
@@ -1709,7 +1808,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                     " \u25CF")))),
         totalCredits > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px" } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#22c55e", marginBottom: 8, textTransform: "uppercase" } }, "Credits"),
-            React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#4ade80" } },
+            React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#22c55e" } },
                 "+",
                 fmt(totalCredits)))),
         methodDetail && (React.createElement(MethodDetailModal, { method: methodDetail, transactions: transactionsFor(methodDetail), gross: grossByMethod[methodDetail], net: methodTotals[methodDetail], onClose: () => setMethodDetail(null) }))));
@@ -1738,12 +1837,12 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
             transactions.length === 0 && React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "12px 0", textAlign: "center" } }, "No transactions yet"),
             transactions.map((t, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none" } },
                 React.createElement("div", { style: { flex: 1 } },
-                    React.createElement("div", { style: { fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : "var(--text-primary)" } },
+                    React.createElement("div", { style: { fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : "var(--text-primary)" } },
                         t.desc,
                         t.type === "business" && React.createElement("span", { style: S.badge }, " work"),
-                        t.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: "#3b0764", color: "#d8b4fe" } }, " reimbursable")),
+                        t.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: chipColors("#a855f7").bg, color: "#a855f7" } }, " reimbursable")),
                     t.date && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } }, dateStr(new Date(t.date)))),
-                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a78bfa" : col } }, fmt(t.amount))))))));
+                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : col } }, fmt(t.amount))))))));
 }
 // ─── Export Modal ─────────────────────────────────────────────────────────────
 function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, totalCredits, methodTotals, onClose }) {
@@ -1871,14 +1970,14 @@ function ImportBackupModal({ onClose }) {
         }
     }
     return (React.createElement(Modal, { onClose: onClose, title: "Import account" },
-        React.createElement("div", { style: { background: "#1c1207", border: "1px solid #92400e", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "#fcd34d", lineHeight: 1.6, marginBottom: 12 } },
+        React.createElement("div", { style: { background: chipColors("#f59e0b").bg, border: "1px solid #f59e0b", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "#f59e0b", lineHeight: 1.6, marginBottom: 12 } },
             "Importing ",
             React.createElement("strong", null, "replaces everything on this device"),
             " with the imported account \u2014 the data here is wiped. Export your current account first if you might want it back."),
         React.createElement("textarea", { style: { ...S.input, height: 90, resize: "none", fontFamily: "monospace", fontSize: 11 }, placeholder: "Paste a backup here\u2026", value: text, onChange: e => setText(e.target.value) }),
         React.createElement("input", { type: "file", accept: ".json,application/json", onChange: onFile, style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 12, width: "100%" } }),
         err && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10 } }, err),
-        !confirm ? (React.createElement("button", { style: { ...S.btn, background: text ? "#b45309" : "var(--surface-2)", color: text ? "var(--on-accent)" : "var(--text-heading)", width: "100%", ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: () => setConfirm(true) }, "Continue\u2026")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
+        !confirm ? (React.createElement("button", { style: { ...S.btn, background: text ? "#f59e0b" : "var(--surface-2)", color: text ? "var(--on-accent)" : "var(--text-heading)", width: "100%", ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: () => setConfirm(true) }, "Continue\u2026")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
             React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirm(false) }, "Cancel"),
             React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, disabled: busy, onClick: doImport }, busy ? "Importing…" : "Wipe & import")))));
 }
@@ -1900,8 +1999,8 @@ const S = {
     headerRight: { textAlign: "right" },
     remaining: { fontSize: 28, fontWeight: 800, letterSpacing: "-1px", lineHeight: 1 },
     remainLabel: { fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase" },
-    pastBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "#451a03", borderBottom: "1px solid #92400e", padding: "8px 16px", fontSize: 11, color: "#fcd34d" },
-    pastBannerBtn: { background: "#78350f", border: "1px solid #b45309", borderRadius: 6, color: "#fde68a", padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
+    pastBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "var(--surface-2)", borderBottom: "1px solid #f59e0b", padding: "8px 16px", fontSize: 11, color: "var(--text-body)" },
+    pastBannerBtn: { background: "#f59e0b", border: "none", borderRadius: 6, color: "var(--on-accent)", padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
     tabs: { display: "flex", borderBottom: "1px solid var(--border)", padding: "0 16px" },
     tab: { flex: 1, background: "none", border: "none", borderBottom: "2px solid transparent", color: "var(--text-secondary)", padding: "10px 4px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
     tabActive: { color: "var(--text-heading)", borderBottom: "2px solid #0369a1" },
@@ -1914,21 +2013,21 @@ const S = {
     dailyCard: { flex: 1, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" },
     dailyLabel: { fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 3 },
     dailySub: { fontSize: 10, color: "var(--text-secondary)", marginTop: 2 },
-    weekHeader: { padding: "10px 0 8px", borderBottom: "1px solid var(--border)", marginBottom: 10 },
+    weekHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "10px 0 8px", borderBottom: "1px solid var(--border)", marginBottom: 10 },
     budgetCard: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px" },
     bar: { height: 6, background: "var(--surface-2)", borderRadius: 3, overflow: "hidden" },
     barFill: { height: "100%", borderRadius: 3 },
     entryRow: { display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid var(--surface)" },
-    splitGroup: { background: "#0c0a1a", border: "1px solid #2e1065", borderRadius: 8, padding: "2px 10px", marginBottom: 8 },
-    entryRowGrouped: { borderBottom: "1px solid #1e1338" },
+    splitGroup: { background: "#a855f714", border: "1px solid #a855f733", borderRadius: 8, padding: "2px 10px", marginBottom: 8 },
+    entryRowGrouped: { borderBottom: "1px solid #a855f722" },
     dot: { width: 7, height: 7, borderRadius: "50%", flexShrink: 0 },
-    badge: { fontSize: 10, background: "#451a03", color: "#f59e0b", borderRadius: 3, padding: "1px 4px", marginLeft: 4 },
+    badge: { fontSize: 10, background: chipColors("#f59e0b").bg, color: "#f59e0b", borderRadius: 3, padding: "1px 4px", marginLeft: 4 },
     delBtn: { background: "none", border: "none", color: "var(--text-secondary)", cursor: "pointer", fontSize: 16, padding: "0 2px" },
     actionBtn: { background: "var(--surface)", border: "1px dashed var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "10px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
     editToggle: { background: "var(--surface)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "10px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", flexShrink: 0 },
     bulkDelBar: { display: "flex", alignItems: "center", gap: 8, marginTop: 12 },
-    checkbox: { width: 22, height: 22, flexShrink: 0, borderRadius: 6, border: "1px solid var(--border-strong)", background: "var(--surface)", color: "#4ade80", fontSize: 13, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 },
-    checkboxOn: { background: "#064e3b", borderColor: "#22c55e" },
+    checkbox: { width: 22, height: 22, flexShrink: 0, borderRadius: 6, border: "1px solid var(--border-strong)", background: "var(--surface)", color: "#22c55e", fontSize: 13, fontWeight: 800, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 },
+    checkboxOn: { background: chipColors("#22c55e").bg, borderColor: "#22c55e" },
     dragHandle: { flexShrink: 0, background: "none", border: "none", color: "var(--text-muted)", fontSize: 20, lineHeight: 1, cursor: "grab", padding: "6px 4px", touchAction: "none", userSelect: "none" },
     rowDragging: { opacity: 0.55, background: "var(--surface)", borderRadius: 8 },
     sectionTitle: { fontSize: 13, fontWeight: 700, color: "var(--text-body)", textTransform: "uppercase", letterSpacing: "0.08em" },
