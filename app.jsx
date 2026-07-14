@@ -619,9 +619,12 @@ function App() {
           <div style={S.appTitle}>SpendTracker</div>
           <div style={S.appSub}>{effectiveData.monthLabel}{viewingPast ? " · past period" : ""}</div>
         </div>
-        <div style={S.headerRight}>
-          <div style={{ ...S.remaining, color: remainColor }}>{fmt(remaining)}</div>
-          <div style={S.remainLabel}>left</div>
+        <div style={{ display:"flex", alignItems:"flex-start", gap:8 }}>
+          <div style={S.headerRight}>
+            <div style={{ ...S.remaining, color: remainColor }}>{fmt(remaining)}</div>
+            <div style={S.remainLabel}>left</div>
+          </div>
+          <button style={S.headerGearBtn} aria-label="Settings" onClick={() => { setTab("settings"); setHelpNonce(0); }}>⚙</button>
         </div>
       </div>
 
@@ -650,8 +653,8 @@ function App() {
 
       {/* Tabs */}
       <div style={S.tabs}>
-        {[["week","Week"],["pins","Pinned"],["savings","Savings"],["summary","Summary"],["settings","⚙"]].map(([k,l]) => (
-          <button key={k} style={{ ...S.tab, ...(tab===k ? S.tabActive : {}) }} onClick={() => { setTab(k); if (k === "settings") setHelpNonce(0); }}>{l}</button>
+        {[["week","Week"],["pins","Pinned"],["savings","Savings"],["summary","Summary"]].map(([k,l]) => (
+          <button key={k} style={{ ...S.tab, ...(tab===k ? S.tabActive : {}) }} onClick={() => setTab(k)}>{l}</button>
         ))}
       </div>
 
@@ -782,6 +785,8 @@ function App() {
       {/* SETTINGS */}
       {tab === "settings" && (
         <div style={{ padding:"12px 16px" }}>
+          <HelpCard focus={helpNonce} />
+
           <div style={S.settingsCard}>
             <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:2, textTransform:"uppercase" }}>Customisation</div>
             <div style={{ fontSize:12, color:"var(--text-muted)", marginBottom:10 }}>Appearance, payment types &amp; spending categories</div>
@@ -845,8 +850,6 @@ function App() {
             )}
           </div>
 
-          <HelpCard focus={helpNonce} />
-
           <div style={S.settingsCard}>
             <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Move to another device</div>
             <div style={{ fontSize:13, color:"var(--text-body)", marginBottom:10, lineHeight:1.5 }}>Each browser keeps its own separate data — so Safari, Chrome and the home-screen app each start fresh. Export your account here, then import it in the other browser or on a new phone to carry everything across.</div>
@@ -854,12 +857,6 @@ function App() {
               <button style={{ ...S.btn, background:"#0369a1", flex:1 }} onClick={() => setShowBackup(true)}>Export account</button>
               <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", flex:1 }} onClick={() => setShowImportAcct(true)}>Import account</button>
             </div>
-          </div>
-
-          <div style={S.settingsCard}>
-            <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Security</div>
-            <div style={{ fontSize:13, color:"var(--text-body)", marginBottom:10, lineHeight:1.5 }}>Lock the app now and return to the passphrase screen. It also auto-locks after a couple of minutes in the background.</div>
-            <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", width:"100%" }} onClick={() => { if (window.SpendVault && window.SpendVault.requestLock) window.SpendVault.requestLock(); }}>🔒 Lock now</button>
           </div>
 
           <div style={S.settingsCard}>
@@ -884,7 +881,7 @@ function App() {
 
       {/* Modals */}
       {(showEntryFor !== null || editTarget) && <EntryModal weekIndex={editTarget ? editTarget.weekIndex : showEntryFor} weeks={weeks} edit={editTarget} defaultMethod={state.lastMethod || state.methods[0].id} categories={state.categories} categoryPrompt={state.categoryPrompt} descriptionPrompt={state.descriptionPrompt} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onSave={addEntry} onSaveCredit={addCredit} onUpdate={updEntry} onUpdateCredit={updCredit} onClose={() => { setShowEntryFor(null); setEditTarget(null); }} />}
-      {(showAddPin || editPin) && <PinModal pin={editPin} onSave={pin => { if (editPin) dispatch({ type: "UPD_PIN", pin }); else dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }} onClose={() => { setShowAddPin(false); setEditPin(null); }} />}
+      {(showAddPin || editPin) && <PinModal pin={editPin} categories={state.categories} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onSave={pin => { if (editPin) dispatch({ type: "UPD_PIN", pin }); else dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }} onClose={() => { setShowAddPin(false); setEditPin(null); }} />}
       {showExport && <ExportModal state={effectiveData} weeks={weeks} rebalancedBudgets={rebalancedBudgets} totalSpent={totalSpent} remaining={remaining} totalCredits={totalCredits} methodTotals={methodTotals} onClose={() => setShowExport(false)} />}
       {showBackup && <BackupModal onClose={() => setShowBackup(false)} />}
       {showImportAcct && <ImportBackupModal onClose={() => setShowImportAcct(false)} />}
@@ -932,6 +929,13 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
   }
   for (const c of credits) units.push({ kind: "credit", id: c.id, order: effOrder(c), credit: c });
   units.sort((a, b) => b.order - a.order);
+
+  // Credits (and any non-personal entry) can't carry a category — matches bulkCategorize's own
+  // skip rule below — so the Categorise button should only appear when the selection actually has
+  // something categorisable, otherwise picking a category silently does nothing.
+  const categorisableSelectedCount = units.filter(u => selected.has(u.id) && (
+    (u.kind === "single" && u.entry.type === "personal") || u.kind === "split"
+  )).length;
 
   // During a drag, render the live working order; otherwise the sorted order.
   const renderUnits = dragList || units;
@@ -1141,7 +1145,9 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
                 ) : (
                   <button style={{ ...S.editToggle, padding:"8px 10px", fontSize:12 }} onClick={() => { setShowCategorize(false); setShowMove(true); }}>Move</button>
                 )}
-                <button style={{ ...S.editToggle, padding:"8px 10px", fontSize:12 }} onClick={() => { setShowMove(false); setShowCategorize(c => !c); }}>Categorise</button>
+                {categorisableSelectedCount > 0 && (
+                  <button style={{ ...S.editToggle, padding:"8px 10px", fontSize:12 }} onClick={() => { setShowMove(false); setShowCategorize(c => !c); }}>Categorise</button>
+                )}
               </div>
             )}
             {selected.size > 0 && (confirmBulk
@@ -1257,6 +1263,7 @@ function PinCard({ pin, onEdit, onDelete }) {
   const isB = pin.type === "business";
   const isX = pin.type === "excluded";
   const col = isB ? "#f59e0b" : isX ? "#a855f7" : "var(--text-heading)";
+  const cat = pin.category && CATEGORY_BY_ID[pin.category];
   return (
     <div style={S.pinCard}>
       <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
@@ -1265,9 +1272,10 @@ function PinCard({ pin, onEdit, onDelete }) {
           {pin.label}
           {isB && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
           {isX && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> split</span>}
+          {cat && <span style={{ ...S.badge, background:chipColors(cat.color).bg, color:cat.color }}> {cat.name}</span>}
         </span>
-        <button style={S.iconBtn} onClick={onEdit}>✎</button>
-        <ConfirmDeleteButton onConfirm={onDelete} style={{ ...S.iconBtn, color:"#ef4444" }} />
+        <button style={{ ...S.iconBtn, fontSize:20, padding:"4px 6px" }} onClick={onEdit}>✎</button>
+        <ConfirmDeleteButton onConfirm={onDelete} style={{ ...S.iconBtn, color:"#ef4444", fontSize:20, padding:"4px 6px" }} />
       </div>
       <div style={{ fontSize:22, fontWeight:800, letterSpacing:"-1px", color: isB ? "#f59e0b" : isX ? "#a855f7" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom:4 }}>{pin.amount ? fmt(pin.amount) : "—"}</div>
       {isScheduledPin(pin) && <div style={{ fontSize:11, color:"#38bdf8", marginTop:2 }}>📌 {pin.freq === "weekly" ? `Every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][pin.day]}` : `Monthly · day ${pin.day}`} · in week log</div>}
@@ -1531,8 +1539,6 @@ function CustomiseModal({ state, dispatch, onClose }) {
             }} />
           </div>
         </div>
-        <PaymentMethodsSettingsCard state={state} dispatch={dispatch} />
-        <CategoriesSettingsCard state={state} dispatch={dispatch} />
         <div style={S.settingsCard}>
           <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
             <div>
@@ -1542,6 +1548,8 @@ function CustomiseModal({ state, dispatch, onClose }) {
             <ToggleSwitch on={state.descriptionPrompt} onToggle={() => dispatch({ type:"SETTINGS", patch:{ descriptionPrompt: !state.descriptionPrompt } })} ariaLabel="Toggle description field" thumbOn="📝" thumbOff="✕" />
           </div>
         </div>
+        <PaymentMethodsSettingsCard state={state} dispatch={dispatch} />
+        <CategoriesSettingsCard state={state} dispatch={dispatch} />
       </div>
     </Modal>
   );
@@ -1870,17 +1878,19 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
 }
 
 // ─── Pin Modal ────────────────────────────────────────────────────────────────
-function PinModal({ pin, onSave, onClose }) {
+function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
   const [label, setLabel] = useState(pin?.label || "");
   const [amount, setAmount] = useState(pin?.amount?.toString() || "");
   const [method, setMethod] = useState(() => (pin && METHOD_NAME[pin.method]) ? pin.method : METHODS[0].id);
   const [type, setType] = useState(pin?.type || "personal");
+  const [category, setCategory] = useState(pin?.category || null);
+  const [pickCat, setPickCat] = useState(false);
   const [note, setNote] = useState(pin?.note || "");
   // Scheduling. Keep the month-day and week-day choices in separate state so switching
   // frequency back and forth doesn't lose the other selection. `day` on the saved pin is
   // the day-of-month for monthly and the day-of-week (0=Sun) for weekly.
   const [freq, setFreq] = useState(pin?.freq || "none");
-  const [dom, setDom] = useState(pin?.freq === "monthly" ? (pin?.day ?? 1) : 1);
+  const [dom, setDom] = useState(String(pin?.freq === "monthly" ? (pin?.day ?? 1) : 1));
   const [dow, setDow] = useState(pin?.freq === "weekly" ? (pin?.day ?? 1) : 1);
 
   const segBtn = (on) => ({ flex:1, background: on ? "var(--surface-2)":"var(--surface)", border:`1px solid ${on?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: on ? "var(--text-heading)" : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:600, cursor:"pointer" });
@@ -1896,6 +1906,28 @@ function PinModal({ pin, onSave, onClose }) {
         {[["personal","Personal"],["business","Work"],["excluded","Split"]].map(([v,l]) => <button key={v} style={{ flex:1, background: type===v ? "var(--surface-2)":"var(--surface)", border:`1px solid ${type===v?"var(--border-strong)":"var(--border)"}`, borderRadius:8, color: type===v ? (v==="business"?"#f59e0b":v==="excluded"?"#a855f7":"var(--text-heading)") : "var(--text-muted)", padding:"8px 4px", fontSize:12, fontWeight:600, cursor:"pointer" }} onClick={() => setType(v)}>{l}</button>)}
       </div>
 
+      {type === "personal" && (
+        <>
+          <div style={hint}>Category</div>
+          {pickCat ? (
+            <div style={{ marginBottom:10 }}>
+              <CategoryPicker categories={categories} value={category}
+                onPick={(id) => { setCategory(id); setPickCat(false); }}
+                onCreate={onAddCategory}
+                onBack={() => setPickCat(false)} />
+            </div>
+          ) : (
+            <button onClick={() => setPickCat(true)}
+              style={{ display:"flex", alignItems:"center", gap:8, width:"100%", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", marginBottom:10, cursor:"pointer", color:"var(--text-heading)", fontSize:13 }}>
+              {category && CATEGORY_BY_ID[category]
+                ? <><span style={{ width:20, height:20, borderRadius:"50%", background:CATEGORY_BY_ID[category].color, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><CategoryIcon icon={CATEGORY_BY_ID[category].icon} size={12} color="#fff" /></span>{CATEGORY_BY_ID[category].name}</>
+                : <span style={{ color:"var(--text-muted)" }}>None</span>}
+              <span style={{ marginLeft:"auto", color:"var(--text-tertiary)" }}>Change ▸</span>
+            </button>
+          )}
+        </>
+      )}
+
       <div style={hint}>Populate into the week log</div>
       <div style={{ display:"flex", gap:8, marginBottom:10 }}>
         {[["none","One-off"],["monthly","Monthly"],["weekly","Weekly"]].map(([v,l]) => <button key={v} style={segBtn(freq===v)} onClick={() => setFreq(v)}>{l}</button>)}
@@ -1904,7 +1936,8 @@ function PinModal({ pin, onSave, onClose }) {
         <div style={{ marginBottom:10 }}>
           <div style={hint}>On day of the month it falls</div>
           <input style={{ ...S.input, marginBottom:0 }} type="number" inputMode="numeric" min="1" max="31" value={dom}
-                 onChange={e => setDom(Math.min(31, Math.max(1, parseInt(e.target.value, 10) || 1)))} />
+                 onChange={e => setDom(e.target.value)}
+                 onBlur={() => { const v = parseInt(dom, 10); setDom(String(!isNaN(v) ? Math.min(31, Math.max(1, v)) : 1)); }} />
         </div>
       )}
       {freq === "weekly" && (
@@ -1918,8 +1951,8 @@ function PinModal({ pin, onSave, onClose }) {
 
       <textarea style={{ ...S.input, height:60, resize:"none" }} placeholder="Note" value={note} onChange={e => setNote(e.target.value)} />
       <button style={{ ...S.btn, background:"#0369a1", marginTop:12 }} onClick={() => {
-        const base = { id: pin?.id || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, note: note.trim(), freq };
-        if (freq === "monthly") base.day = dom;
+        const base = { id: pin?.id || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, category: type === "personal" ? (category || undefined) : undefined, note: note.trim(), freq };
+        if (freq === "monthly") base.day = Math.min(31, Math.max(1, parseInt(dom, 10) || 1));
         else if (freq === "weekly") base.day = dow;
         onSave(base);
       }}>Save</button>
@@ -1997,8 +2030,8 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
       </div>
 
       {/* Gross vs net — waterfall from what hit your cards down to what's actually yours. Shown
-          only when there's reimbursable (business or split) spend to make the distinction. */}
-      {reimbursableTotal > 0 && (
+          when there's reimbursable (business or split) spend, or credits, to make the distinction. */}
+      {(reimbursableTotal > 0 || totalCredits > 0) && (
         <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
           <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Gross vs net</div>
           {businessTotal > 0 && (
@@ -2021,6 +2054,12 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
             <span style={{ color:"var(--text-tertiary)" }}>Reimbursable spend</span>
             <span style={{ color:"var(--text-tertiary)", fontWeight:600 }}>− {fmt(reimbursableTotal)}</span>
           </div>
+          {totalCredits > 0 && (
+            <div style={{ display:"flex", justifyContent:"space-between", padding:"5px 0", fontSize:13 }}>
+              <span style={{ color:"#22c55e" }}>Credits</span>
+              <span style={{ color:"#22c55e", fontWeight:600 }}>+ {fmt(totalCredits)}</span>
+            </div>
+          )}
           <div style={{ borderTop:"1px solid var(--border)", marginTop:6, paddingTop:8, display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
             <span style={{ color:"var(--text-heading)", fontSize:13, fontWeight:700 }}>Net spend</span>
             <span style={{ color:"var(--text-heading)", fontWeight:800, fontSize:15 }}>{fmt(netTotal)}</span>
@@ -2093,14 +2132,6 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
             <span style={{ color:"#0369a1" }}>● Pinned costs {fmt(totalPinned)}</span>
             <span style={{ color:"#06b6d4" }}>Quick-logged {fmt(totalEntries)} ●</span>
           </div>
-        </div>
-      )}
-
-      {/* Credits */}
-      {totalCredits > 0 && (
-        <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px" }}>
-          <div style={{ fontSize:11, fontWeight:600, color:"#22c55e", marginBottom:8, textTransform:"uppercase" }}>Credits</div>
-          <div style={{ fontSize:20, fontWeight:800, color:"#22c55e" }}>+{fmt(totalCredits)}</div>
         </div>
       )}
 
@@ -2314,6 +2345,7 @@ const S = {
   appTitle: { fontSize:24, fontWeight:800, letterSpacing:"-1px", color:"var(--text-heading)" },
   appSub: { fontSize:12, color:"var(--text-secondary)", marginTop:2 },
   headerRight: { textAlign:"right" },
+  headerGearBtn: { background:"var(--surface)", border:"1px solid var(--border-strong)", color:"var(--text-secondary)", borderRadius:8, width:32, height:32, fontSize:16, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, padding:0 },
   remaining: { fontSize:28, fontWeight:800, letterSpacing:"-1px", lineHeight:1 },
   remainLabel: { fontSize:10, color:"var(--text-secondary)", textTransform:"uppercase" },
   pastBanner: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, background:"var(--surface-2)", borderBottom:"1px solid #f59e0b", padding:"8px 16px", fontSize:11, color:"var(--text-body)" },
