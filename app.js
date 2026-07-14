@@ -625,9 +625,11 @@ function App() {
                 React.createElement("div", { style: S.appSub },
                     effectiveData.monthLabel,
                     viewingPast ? " · past period" : "")),
-            React.createElement("div", { style: S.headerRight },
-                React.createElement("div", { style: { ...S.remaining, color: remainColor } }, fmt(remaining)),
-                React.createElement("div", { style: S.remainLabel }, "left"))),
+            React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 8 } },
+                React.createElement("div", { style: S.headerRight },
+                    React.createElement("div", { style: { ...S.remaining, color: remainColor } }, fmt(remaining)),
+                    React.createElement("div", { style: S.remainLabel }, "left")),
+                React.createElement("button", { style: S.headerGearBtn, "aria-label": "Settings", onClick: () => { setTab("settings"); setHelpNonce(0); } }, "\u2699"))),
         React.createElement("button", { style: S.helpFab, "aria-label": "Help", onClick: () => { setTab("settings"); setHelpNonce(n => n + 1); } }, "?"),
         viewingPast && (React.createElement("div", { style: S.pastBanner },
             React.createElement("span", null,
@@ -640,8 +642,7 @@ function App() {
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, flexShrink: 0 } },
                 React.createElement("button", { style: S.hintBtn, onClick: () => { dispatch({ type: "SETTINGS", patch: { helpHintSeen: true } }); setTab("settings"); setHelpNonce(n => n + 1); } }, "Show me"),
                 React.createElement("button", { style: S.hintDismiss, "aria-label": "Dismiss", onClick: () => dispatch({ type: "SETTINGS", patch: { helpHintSeen: true } }) }, "\u2715")))),
-        React.createElement("div", { style: S.tabs }, [["week", "Week"], ["pins", "Pinned"], ["savings", "Savings"], ["summary", "Summary"], ["settings", "⚙"]].map(([k, l]) => (React.createElement("button", { key: k, style: { ...S.tab, ...(tab === k ? S.tabActive : {}) }, onClick: () => { setTab(k); if (k === "settings")
-                setHelpNonce(0); } }, l)))),
+        React.createElement("div", { style: S.tabs }, [["week", "Week"], ["pins", "Pinned"], ["savings", "Savings"], ["summary", "Summary"]].map(([k, l]) => (React.createElement("button", { key: k, style: { ...S.tab, ...(tab === k ? S.tabActive : {}) }, onClick: () => setTab(k) }, l)))),
         tab === "week" && (React.createElement("div", { style: { padding: "12px 16px 80px" } },
             React.createElement("div", { style: S.weekNav }, weeks.map(w => (React.createElement("button", { key: w.index, style: { ...S.weekPill, ...(currentWeekObj && w.index === currentWeekObj.index ? S.weekPillCurrent : {}), ...(activeWeek === w.index ? S.weekPillActive : {}) }, onClick: () => setActiveWeek(w.index) },
                 "W",
@@ -728,6 +729,7 @@ function App() {
         })(),
         tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true) })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
+            React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 2, textTransform: "uppercase" } }, "Customisation"),
                 React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginBottom: 10 } }, "Appearance, payment types & spending categories"),
@@ -770,18 +772,12 @@ function App() {
                     ")")) : (React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: () => setViewingPastIndex(mostRecentArchiveIndex) },
                     "\u2190 Go back to ",
                     state.monthHistory[mostRecentArchiveIndex].monthLabel))) : (React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)" } }, "No previous period to go back to yet."))),
-            React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Move to another device"),
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Each browser keeps its own separate data \u2014 so Safari, Chrome and the home-screen app each start fresh. Export your account here, then import it in the other browser or on a new phone to carry everything across."),
                 React.createElement("div", { style: { display: "flex", gap: 8 } },
                     React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1 }, onClick: () => setShowBackup(true) }, "Export account"),
                     React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setShowImportAcct(true) }, "Import account"))),
-            React.createElement("div", { style: S.settingsCard },
-                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Security"),
-                React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Lock the app now and return to the passphrase screen. It also auto-locks after a couple of minutes in the background."),
-                React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: () => { if (window.SpendVault && window.SpendVault.requestLock)
-                        window.SpendVault.requestLock(); } }, "\uD83D\uDD12 Lock now")),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#f87171", marginBottom: 10, textTransform: "uppercase" } }, "Reset"),
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Erase everything on this device \u2014 budget, transactions, history and your passphrase \u2014 and start over from setup. This can't be undone."),
@@ -791,7 +787,7 @@ function App() {
                             window.SpendVault.wipe(); } }, "Erase everything")))))),
         !viewingPast && (React.createElement("button", { "aria-label": "Quick add spend", onClick: () => setShowEntryFor(todayWeekIndex(weeks)), style: S.quickAdd }, "+")),
         (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
-        (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, onSave: pin => { if (editPin)
+        (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
                 dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }, onClose: () => { setShowAddPin(false); setEditPin(null); } }),
@@ -839,6 +835,10 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
     for (const c of credits)
         units.push({ kind: "credit", id: c.id, order: effOrder(c), credit: c });
     units.sort((a, b) => b.order - a.order);
+    // Credits (and any non-personal entry) can't carry a category — matches bulkCategorize's own
+    // skip rule below — so the Categorise button should only appear when the selection actually has
+    // something categorisable, otherwise picking a category silently does nothing.
+    const categorisableSelectedCount = units.filter(u => selected.has(u.id) && ((u.kind === "single" && u.entry.type === "personal") || u.kind === "split")).length;
     // During a drag, render the live working order; otherwise the sorted order.
     const renderUnits = dragList || units;
     // Deleting one half of a split removes both halves, since a lone remainder is meaningless.
@@ -1048,7 +1048,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
                     React.createElement("select", { style: S.weekSelect, value: week.index, onChange: e => bulkMove(Number(e.target.value)), onBlur: () => setShowMove(false), autoFocus: true }, (weeks || []).map(w => React.createElement("option", { key: w.index, value: w.index },
                         "Week ",
                         w.index)))) : (React.createElement("button", { style: { ...S.editToggle, padding: "8px 10px", fontSize: 12 }, onClick: () => { setShowCategorize(false); setShowMove(true); } }, "Move")),
-                    React.createElement("button", { style: { ...S.editToggle, padding: "8px 10px", fontSize: 12 }, onClick: () => { setShowMove(false); setShowCategorize(c => !c); } }, "Categorise"))),
+                    categorisableSelectedCount > 0 && (React.createElement("button", { style: { ...S.editToggle, padding: "8px 10px", fontSize: 12 }, onClick: () => { setShowMove(false); setShowCategorize(c => !c); } }, "Categorise")))),
                 selected.size > 0 && (confirmBulk
                     ? React.createElement("button", { style: { ...S.btn, background: "#dc2626", padding: "10px 14px", fontSize: 13 }, onClick: bulkDelete },
                         "Delete ",
@@ -1136,15 +1136,19 @@ function PinCard({ pin, onEdit, onDelete }) {
     const isB = pin.type === "business";
     const isX = pin.type === "excluded";
     const col = isB ? "#f59e0b" : isX ? "#a855f7" : "var(--text-heading)";
+    const cat = pin.category && CATEGORY_BY_ID[pin.category];
     return (React.createElement("div", { style: S.pinCard },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
             React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[pin.method] || "var(--text-secondary)" } }),
             React.createElement("span", { style: { flex: 1, fontWeight: 600, fontSize: 14, color: col } },
                 pin.label,
                 isB && React.createElement("span", { style: { ...S.badge, background: chipColors("#f59e0b").bg, color: "#f59e0b" } }, " work"),
-                isX && React.createElement("span", { style: { ...S.badge, background: chipColors("#a855f7").bg, color: "#a855f7" } }, " split")),
-            React.createElement("button", { style: S.iconBtn, onClick: onEdit }, "\u270E"),
-            React.createElement(ConfirmDeleteButton, { onConfirm: onDelete, style: { ...S.iconBtn, color: "#ef4444" } })),
+                isX && React.createElement("span", { style: { ...S.badge, background: chipColors("#a855f7").bg, color: "#a855f7" } }, " split"),
+                cat && React.createElement("span", { style: { ...S.badge, background: chipColors(cat.color).bg, color: cat.color } },
+                    " ",
+                    cat.name)),
+            React.createElement("button", { style: { ...S.iconBtn, fontSize: 20, padding: "4px 6px" }, onClick: onEdit }, "\u270E"),
+            React.createElement(ConfirmDeleteButton, { onConfirm: onDelete, style: { ...S.iconBtn, color: "#ef4444", fontSize: 20, padding: "4px 6px" } })),
         React.createElement("div", { style: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: isB ? "#f59e0b" : isX ? "#a855f7" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom: 4 } }, pin.amount ? fmt(pin.amount) : "—"),
         isScheduledPin(pin) && React.createElement("div", { style: { fontSize: 11, color: "#38bdf8", marginTop: 2 } },
             "\uD83D\uDCCC ",
@@ -1363,14 +1367,14 @@ function CustomiseModal({ state, dispatch, onClose }) {
                             }
                             catch { }
                         } }))),
-            React.createElement(PaymentMethodsSettingsCard, { state: state, dispatch: dispatch }),
-            React.createElement(CategoriesSettingsCard, { state: state, dispatch: dispatch }),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 } },
                     React.createElement("div", null,
                         React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" } }, "Descriptions"),
                         React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginTop: 2 } }, "Show a description field when logging or editing a spend")),
-                    React.createElement(ToggleSwitch, { on: state.descriptionPrompt, onToggle: () => dispatch({ type: "SETTINGS", patch: { descriptionPrompt: !state.descriptionPrompt } }), ariaLabel: "Toggle description field", thumbOn: "\uD83D\uDCDD", thumbOff: "\u2715" }))))));
+                    React.createElement(ToggleSwitch, { on: state.descriptionPrompt, onToggle: () => dispatch({ type: "SETTINGS", patch: { descriptionPrompt: !state.descriptionPrompt } }), ariaLabel: "Toggle description field", thumbOn: "\uD83D\uDCDD", thumbOff: "\u2715" }))),
+            React.createElement(PaymentMethodsSettingsCard, { state: state, dispatch: dispatch }),
+            React.createElement(CategoriesSettingsCard, { state: state, dispatch: dispatch }))));
 }
 // ─── Category Picker ──────────────────────────────────────────────────────────
 // A Monzo-style grid of round category tiles (a white line-icon on a coloured circle). Shown in
@@ -1638,18 +1642,20 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
             ri === 0 && React.createElement("button", { style: { gridRow: "span 4", background: amount > 0 ? mc.bg : "var(--surface)", border: `1px solid ${amount > 0 ? mc.border : "var(--border)"}`, borderRadius: 8, color: amount > 0 ? mc.text : "var(--text-muted)", fontSize: 18, fontWeight: 800, cursor: amount > 0 ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: pressEnter }, enterGlyph)))))));
 }
 // ─── Pin Modal ────────────────────────────────────────────────────────────────
-function PinModal({ pin, onSave, onClose }) {
+function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
     var _a, _b, _c;
     const [label, setLabel] = useState((pin === null || pin === void 0 ? void 0 : pin.label) || "");
     const [amount, setAmount] = useState(((_a = pin === null || pin === void 0 ? void 0 : pin.amount) === null || _a === void 0 ? void 0 : _a.toString()) || "");
     const [method, setMethod] = useState(() => (pin && METHOD_NAME[pin.method]) ? pin.method : METHODS[0].id);
     const [type, setType] = useState((pin === null || pin === void 0 ? void 0 : pin.type) || "personal");
+    const [category, setCategory] = useState((pin === null || pin === void 0 ? void 0 : pin.category) || null);
+    const [pickCat, setPickCat] = useState(false);
     const [note, setNote] = useState((pin === null || pin === void 0 ? void 0 : pin.note) || "");
     // Scheduling. Keep the month-day and week-day choices in separate state so switching
     // frequency back and forth doesn't lose the other selection. `day` on the saved pin is
     // the day-of-month for monthly and the day-of-week (0=Sun) for weekly.
     const [freq, setFreq] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) || "none");
-    const [dom, setDom] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) === "monthly" ? ((_b = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _b !== void 0 ? _b : 1) : 1);
+    const [dom, setDom] = useState(String((pin === null || pin === void 0 ? void 0 : pin.freq) === "monthly" ? ((_b = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _b !== void 0 ? _b : 1) : 1));
     const [dow, setDow] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) === "weekly" ? ((_c = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _c !== void 0 ? _c : 1) : 1);
     const segBtn = (on) => ({ flex: 1, background: on ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
     const dayBtn = (on) => ({ flex: 1, background: on ? chipColors("#38bdf8").bg : "var(--surface)", border: `1px solid ${on ? "#0369a1" : "var(--border)"}`, borderRadius: 8, color: on ? "#38bdf8" : "var(--text-muted)", padding: "7px 2px", fontSize: 11, fontWeight: 600, cursor: "pointer" });
@@ -1659,19 +1665,30 @@ function PinModal({ pin, onSave, onClose }) {
         React.createElement("input", { style: { ...S.input, marginBottom: 10 }, type: "number", inputMode: "decimal", placeholder: "Amount", value: amount, onChange: e => setAmount(e.target.value) }),
         React.createElement(MethodSelector, { value: method, onChange: setMethod }),
         React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["personal", "Personal"], ["business", "Work"], ["excluded", "Split"]].map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "excluded" ? "#a855f7" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" }, onClick: () => setType(v) }, l))),
+        type === "personal" && (React.createElement(React.Fragment, null,
+            React.createElement("div", { style: hint }, "Category"),
+            pickCat ? (React.createElement("div", { style: { marginBottom: 10 } },
+                React.createElement(CategoryPicker, { categories: categories, value: category, onPick: (id) => { setCategory(id); setPickCat(false); }, onCreate: onAddCategory, onBack: () => setPickCat(false) }))) : (React.createElement("button", { onClick: () => setPickCat(true), style: { display: "flex", alignItems: "center", gap: 8, width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px", marginBottom: 10, cursor: "pointer", color: "var(--text-heading)", fontSize: 13 } },
+                category && CATEGORY_BY_ID[category]
+                    ? React.createElement(React.Fragment, null,
+                        React.createElement("span", { style: { width: 20, height: 20, borderRadius: "50%", background: CATEGORY_BY_ID[category].color, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
+                            React.createElement(CategoryIcon, { icon: CATEGORY_BY_ID[category].icon, size: 12, color: "#fff" })),
+                        CATEGORY_BY_ID[category].name)
+                    : React.createElement("span", { style: { color: "var(--text-muted)" } }, "None"),
+                React.createElement("span", { style: { marginLeft: "auto", color: "var(--text-tertiary)" } }, "Change \u25B8"))))),
         React.createElement("div", { style: hint }, "Populate into the week log"),
         React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["none", "One-off"], ["monthly", "Monthly"], ["weekly", "Weekly"]].map(([v, l]) => React.createElement("button", { key: v, style: segBtn(freq === v), onClick: () => setFreq(v) }, l))),
         freq === "monthly" && (React.createElement("div", { style: { marginBottom: 10 } },
             React.createElement("div", { style: hint }, "On day of the month it falls"),
-            React.createElement("input", { style: { ...S.input, marginBottom: 0 }, type: "number", inputMode: "numeric", min: "1", max: "31", value: dom, onChange: e => setDom(Math.min(31, Math.max(1, parseInt(e.target.value, 10) || 1))) }))),
+            React.createElement("input", { style: { ...S.input, marginBottom: 0 }, type: "number", inputMode: "numeric", min: "1", max: "31", value: dom, onChange: e => setDom(e.target.value), onBlur: () => { const v = parseInt(dom, 10); setDom(String(!isNaN(v) ? Math.min(31, Math.max(1, v)) : 1)); } }))),
         freq === "weekly" && (React.createElement("div", { style: { marginBottom: 10 } },
             React.createElement("div", { style: hint }, "On this day, every week"),
             React.createElement("div", { style: { display: "flex", gap: 4 } }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => React.createElement("button", { key: i, style: dayBtn(dow === i), onClick: () => setDow(i) }, d))))),
         React.createElement("textarea", { style: { ...S.input, height: 60, resize: "none" }, placeholder: "Note", value: note, onChange: e => setNote(e.target.value) }),
         React.createElement("button", { style: { ...S.btn, background: "#0369a1", marginTop: 12 }, onClick: () => {
-                const base = { id: (pin === null || pin === void 0 ? void 0 : pin.id) || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, note: note.trim(), freq };
+                const base = { id: (pin === null || pin === void 0 ? void 0 : pin.id) || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, category: type === "personal" ? (category || undefined) : undefined, note: note.trim(), freq };
                 if (freq === "monthly")
-                    base.day = dom;
+                    base.day = Math.min(31, Math.max(1, parseInt(dom, 10) || 1));
                 else if (freq === "weekly")
                     base.day = dow;
                 onSave(base);
@@ -1740,7 +1757,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                 fmt(totalSpent),
                 " spent of ",
                 fmt(state.monthlyBudget))),
-        reimbursableTotal > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+        (reimbursableTotal > 0 || totalCredits > 0) && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Gross vs net"),
             businessTotal > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
                 React.createElement("span", { style: { color: "#f59e0b" } }, "Business spend"),
@@ -1756,6 +1773,11 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                 React.createElement("span", { style: { color: "var(--text-tertiary)", fontWeight: 600 } },
                     "\u2212 ",
                     fmt(reimbursableTotal))),
+            totalCredits > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
+                React.createElement("span", { style: { color: "#22c55e" } }, "Credits"),
+                React.createElement("span", { style: { color: "#22c55e", fontWeight: 600 } },
+                    "+ ",
+                    fmt(totalCredits)))),
             React.createElement("div", { style: { borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "baseline" } },
                 React.createElement("span", { style: { color: "var(--text-heading)", fontSize: 13, fontWeight: 700 } }, "Net spend"),
                 React.createElement("span", { style: { color: "var(--text-heading)", fontWeight: 800, fontSize: 15 } }, fmt(netTotal))))),
@@ -1809,11 +1831,6 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                     "Quick-logged ",
                     fmt(totalEntries),
                     " \u25CF")))),
-        totalCredits > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px" } },
-            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#22c55e", marginBottom: 8, textTransform: "uppercase" } }, "Credits"),
-            React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: "#22c55e" } },
-                "+",
-                fmt(totalCredits)))),
         methodDetail && (React.createElement(MethodDetailModal, { method: methodDetail, transactions: transactionsFor(methodDetail), gross: grossByMethod[methodDetail], net: methodTotals[methodDetail], onClose: () => setMethodDetail(null) }))));
 }
 // ─── Method Detail Modal ──────────────────────────────────────────────────────
@@ -2000,6 +2017,7 @@ const S = {
     appTitle: { fontSize: 24, fontWeight: 800, letterSpacing: "-1px", color: "var(--text-heading)" },
     appSub: { fontSize: 12, color: "var(--text-secondary)", marginTop: 2 },
     headerRight: { textAlign: "right" },
+    headerGearBtn: { background: "var(--surface)", border: "1px solid var(--border-strong)", color: "var(--text-secondary)", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, padding: 0 },
     remaining: { fontSize: 28, fontWeight: 800, letterSpacing: "-1px", lineHeight: 1 },
     remainLabel: { fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase" },
     pastBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "var(--surface-2)", borderBottom: "1px solid #f59e0b", padding: "8px 16px", fontSize: 11, color: "var(--text-body)" },
