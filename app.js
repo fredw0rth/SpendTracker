@@ -176,7 +176,7 @@ function isScheduledPin(p) {
 }
 function makePinEntry(pin, weekIndex, date) {
     return {
-        id: "pin-" + pin.id + "-" + weekIndex,
+        id: "pin-" + pin.id + "-" + weekIndex + "-" + date.getDate() + "-" + date.getMonth(),
         amount: pin.amount || 0,
         label: pin.label,
         note: pin.note || "",
@@ -226,6 +226,13 @@ function expandScheduledPins(pins, weeks) {
             }
             if (target)
                 out.push(makePinEntry(p, targetWeek, target));
+        }
+        else if (p.freq === "daily") {
+            // One occurrence per calendar day in the period, in every week.
+            for (const w of weeks) {
+                for (const d of w.days)
+                    out.push(makePinEntry(p, w.index, d));
+            }
         }
     }
     return out;
@@ -1152,7 +1159,7 @@ function PinCard({ pin, onEdit, onDelete }) {
         React.createElement("div", { style: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: isB ? "#f59e0b" : isX ? "#a855f7" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom: 4 } }, pin.amount ? fmt(pin.amount) : "—"),
         isScheduledPin(pin) && React.createElement("div", { style: { fontSize: 11, color: "#38bdf8", marginTop: 2 } },
             "\uD83D\uDCCC ",
-            pin.freq === "weekly" ? `Every ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][pin.day]}` : `Monthly · day ${pin.day}`,
+            pin.freq === "weekly" ? `Every ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][pin.day]}` : pin.freq === "daily" ? "Every day" : `Monthly · day ${pin.day}`,
             " \u00B7 in week log"),
         pin.note && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 4 } }, pin.note)));
 }
@@ -1677,7 +1684,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
                     : React.createElement("span", { style: { color: "var(--text-muted)" } }, "None"),
                 React.createElement("span", { style: { marginLeft: "auto", color: "var(--text-tertiary)" } }, "Change \u25B8"))))),
         React.createElement("div", { style: hint }, "Populate into the week log"),
-        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["none", "One-off"], ["monthly", "Monthly"], ["weekly", "Weekly"]].map(([v, l]) => React.createElement("button", { key: v, style: segBtn(freq === v), onClick: () => setFreq(v) }, l))),
+        React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["none", "One-off"], ["monthly", "Monthly"], ["weekly", "Weekly"], ["daily", "Daily"]].map(([v, l]) => React.createElement("button", { key: v, style: segBtn(freq === v), onClick: () => setFreq(v) }, l))),
         freq === "monthly" && (React.createElement("div", { style: { marginBottom: 10 } },
             React.createElement("div", { style: hint }, "On day of the month it falls"),
             React.createElement("input", { style: { ...S.input, marginBottom: 0 }, type: "number", inputMode: "numeric", min: "1", max: "31", value: dom, onChange: e => setDom(e.target.value), onBlur: () => { const v = parseInt(dom, 10); setDom(String(!isNaN(v) ? Math.min(31, Math.max(1, v)) : 1)); } }))),

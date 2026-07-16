@@ -176,7 +176,7 @@ function isScheduledPin(p) {
 
 function makePinEntry(pin, weekIndex, date) {
   return {
-    id: "pin-" + pin.id + "-" + weekIndex,
+    id: "pin-" + pin.id + "-" + weekIndex + "-" + date.getDate() + "-" + date.getMonth(),
     amount: pin.amount || 0,
     label: pin.label,
     note: pin.note || "",
@@ -216,6 +216,11 @@ function expandScheduledPins(pins, weeks) {
         if (lastWeek) { target = lastWeek.days[lastWeek.days.length - 1]; targetWeek = lastWeek.index; }
       }
       if (target) out.push(makePinEntry(p, targetWeek, target));
+    } else if (p.freq === "daily") {
+      // One occurrence per calendar day in the period, in every week.
+      for (const w of weeks) {
+        for (const d of w.days) out.push(makePinEntry(p, w.index, d));
+      }
     }
   }
   return out;
@@ -1278,7 +1283,7 @@ function PinCard({ pin, onEdit, onDelete }) {
         <ConfirmDeleteButton onConfirm={onDelete} style={{ ...S.iconBtn, color:"#ef4444", fontSize:20, padding:"4px 6px" }} />
       </div>
       <div style={{ fontSize:22, fontWeight:800, letterSpacing:"-1px", color: isB ? "#f59e0b" : isX ? "#a855f7" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom:4 }}>{pin.amount ? fmt(pin.amount) : "—"}</div>
-      {isScheduledPin(pin) && <div style={{ fontSize:11, color:"#38bdf8", marginTop:2 }}>📌 {pin.freq === "weekly" ? `Every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][pin.day]}` : `Monthly · day ${pin.day}`} · in week log</div>}
+      {isScheduledPin(pin) && <div style={{ fontSize:11, color:"#38bdf8", marginTop:2 }}>📌 {pin.freq === "weekly" ? `Every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][pin.day]}` : pin.freq === "daily" ? "Every day" : `Monthly · day ${pin.day}`} · in week log</div>}
       {pin.note && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:4 }}>{pin.note}</div>}
     </div>
   );
@@ -1930,7 +1935,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
 
       <div style={hint}>Populate into the week log</div>
       <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-        {[["none","One-off"],["monthly","Monthly"],["weekly","Weekly"]].map(([v,l]) => <button key={v} style={segBtn(freq===v)} onClick={() => setFreq(v)}>{l}</button>)}
+        {[["none","One-off"],["monthly","Monthly"],["weekly","Weekly"],["daily","Daily"]].map(([v,l]) => <button key={v} style={segBtn(freq===v)} onClick={() => setFreq(v)}>{l}</button>)}
       </div>
       {freq === "monthly" && (
         <div style={{ marginBottom:10 }}>
