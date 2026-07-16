@@ -43,14 +43,85 @@ let METHOD_NAME = Object.fromEntries(DEFAULT_METHODS.map(m => [m.id, m.name])); 
 // Category views, refreshed from state.categories in App() the same way (see App()).
 let CATEGORIES = DEFAULT_CATEGORIES;                               // [{id,name,emoji,color}]
 let CATEGORY_BY_ID = Object.fromEntries(DEFAULT_CATEGORIES.map(c => [c.id, c])); // id -> {name,emoji,color}
+
+// ─── Colour contrast helpers ───────────────────────────────────────────────────
+// Categories and payment methods let the user pick any colour via a bare <input type="color">,
+// with nothing stopping them picking white/near-white (or black/near-black) — which then breaks
+// wherever that colour is rendered as a hardcoded-white icon's background, or echoed raw as text.
+// These helpers derive a *readable* variant of a user colour instead of trusting it outright.
+function hexToRgb(hex) {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map(c => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+function relativeLuminance(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const chan = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  return 0.2126 * chan(r) + 0.7152 * chan(g) + 0.0722 * chan(b);
+}
+// Black-or-white swap for an icon/glyph sat on a solid, arbitrary background colour — the
+// standard "which text reads better on this swatch" contrast check.
+function readableIconColor(bgHex) {
+  return relativeLuminance(bgHex) > 0.55 ? "#111827" : "#fff";
+}
+function hexToHsl(hex) {
+  let { r, g, b } = hexToRgb(hex);
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+  if (max === min) { h = s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      default: h = (r - g) / d + 4;
+    }
+    h /= 6;
+  }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+}
+function hslToHex(h, s, l) {
+  h /= 360; s /= 100; l /= 100;
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if (t < 0) t += 1;
+      if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1 / 3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1 / 3);
+  }
+  const toHex = (v) => Math.round(v * 255).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+// Clamps a colour's lightness into a band that reads on both light and dark surfaces, keeping
+// its hue/saturation intact — mirrors where the app's own hand-picked semantic colours
+// (business amber, split purple, credit green, etc.) already naturally sit.
+function readableChipColor(hex) {
+  const { h, s, l } = hexToHsl(hex);
+  return hslToHex(h, s, Math.min(65, Math.max(30, l)));
+}
 // Derive a coherent chip palette (used by the selectors) from a single method colour. Reads the
 // live theme at call time (not cached) so every caller — inline in a component's render, never
 // baked into the static S style object below, which only evaluates once — stays correct across
 // an in-app theme toggle. Light mode uses a lower alpha for a properly pastel tint; dark mode
-// keeps the original strength.
+// keeps the original strength. text/border are clamped to a readable lightness band so a
+// near-white or near-black user colour can't collapse into invisible text (see readableChipColor).
 const chipColors = (c) => {
   const light = document.documentElement.dataset.theme === "light";
-  return { bg: c + (light ? "14" : "22"), border: c, text: c };
+  const safe = readableChipColor(c);
+  return { bg: c + (light ? "14" : "22"), border: safe, text: safe };
 };
 const STORAGE_KEY = "spendtracker_v6";
 
@@ -176,7 +247,7 @@ function isScheduledPin(p) {
 
 function makePinEntry(pin, weekIndex, date) {
   return {
-    id: "pin-" + pin.id + "-" + weekIndex,
+    id: "pin-" + pin.id + "-" + weekIndex + "-" + date.getDate() + "-" + date.getMonth(),
     amount: pin.amount || 0,
     label: pin.label,
     note: pin.note || "",
@@ -216,6 +287,11 @@ function expandScheduledPins(pins, weeks) {
         if (lastWeek) { target = lastWeek.days[lastWeek.days.length - 1]; targetWeek = lastWeek.index; }
       }
       if (target) out.push(makePinEntry(p, targetWeek, target));
+    } else if (p.freq === "daily") {
+      // One occurrence per calendar day in the period, in every week.
+      for (const w of weeks) {
+        for (const d of w.days) out.push(makePinEntry(p, w.index, d));
+      }
     }
   }
   return out;
@@ -1233,7 +1309,7 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
     <div onClick={onEdit} style={{ ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom:"none" } : {}), cursor: onEdit ? "pointer" : "default" }}>
       <span style={{ ...S.dot, background: METHOD_COLOR[entry.method] || "var(--text-secondary)" }} />
       <span style={{ flex:1, color:col, fontSize:13 }}>
-        {cat && <span title={cat.name} style={{ display:"inline-flex", verticalAlign:"-2px", marginRight:5, width:16, height:16, borderRadius:"50%", background:cat.color, alignItems:"center", justifyContent:"center" }}><CategoryIcon icon={cat.icon} size={10} color="#fff" /></span>}
+        {cat && <span title={cat.name} style={{ display:"inline-flex", verticalAlign:"-2px", marginRight:5, width:16, height:16, borderRadius:"50%", background:cat.color, alignItems:"center", justifyContent:"center" }}><CategoryIcon icon={cat.icon} size={10} color={readableIconColor(cat.color)} /></span>}
         {entry.label || METHOD_NAME[entry.method] || entry.method}
         {entry.pinned && <span style={{ ...S.badge, background:chipColors("#38bdf8").bg, color:"#38bdf8" }}> 📌 fixed</span>}
         {entry.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
@@ -1278,7 +1354,7 @@ function PinCard({ pin, onEdit, onDelete }) {
         <ConfirmDeleteButton onConfirm={onDelete} style={{ ...S.iconBtn, color:"#ef4444", fontSize:20, padding:"4px 6px" }} />
       </div>
       <div style={{ fontSize:22, fontWeight:800, letterSpacing:"-1px", color: isB ? "#f59e0b" : isX ? "#a855f7" : METHOD_COLOR[pin.method] || "var(--text-primary)", marginBottom:4 }}>{pin.amount ? fmt(pin.amount) : "—"}</div>
-      {isScheduledPin(pin) && <div style={{ fontSize:11, color:"#38bdf8", marginTop:2 }}>📌 {pin.freq === "weekly" ? `Every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][pin.day]}` : `Monthly · day ${pin.day}`} · in week log</div>}
+      {isScheduledPin(pin) && <div style={{ fontSize:11, color:"#38bdf8", marginTop:2 }}>📌 {pin.freq === "weekly" ? `Every ${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][pin.day]}` : pin.freq === "daily" ? "Every day" : `Monthly · day ${pin.day}`} · in week log</div>}
       {pin.note && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:4 }}>{pin.note}</div>}
     </div>
   );
@@ -1355,7 +1431,7 @@ function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdat
           style={{ width:34, height:34, padding:2, border:"1px solid var(--border)", borderRadius:8, background:"var(--surface)", cursor:"pointer", flexShrink:0 }} />
         <button onClick={onToggle} title="Choose icon" aria-label={`${cat.name} icon`}
           style={{ width:34, height:34, borderRadius:"50%", background:cat.color, border:open?"2px solid var(--text-heading)":"1px solid var(--border)", display:"flex", alignItems:"center", justifyContent:"center", cursor:"pointer", flexShrink:0, padding:0 }}>
-          <CategoryIcon icon={cat.icon} size={18} color="#fff" />
+          <CategoryIcon icon={cat.icon} size={18} color={readableIconColor(cat.color)} />
         </button>
         <input key={`cname-${cat.id}-${cat.name}`} defaultValue={cat.name} placeholder="Name"
           onBlur={e => { const v = e.target.value.trim(); if (v && v !== cat.name) onUpdate({ name: v }); else if (!v) e.target.value = cat.name; }}
@@ -1590,7 +1666,7 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
         <div style={{ fontSize:12, color:"var(--text-secondary)", fontWeight:600, marginBottom:10 }}>New category</div>
         <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:10 }}>
           {/* Live preview of the chosen icon on the chosen colour */}
-          <span style={{ width:40, height:40, borderRadius:"50%", background:color, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><CategoryIcon icon={icon} size={22} color="#fff" /></span>
+          <span style={{ width:40, height:40, borderRadius:"50%", background:color, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><CategoryIcon icon={icon} size={22} color={readableIconColor(color)} /></span>
           <input type="color" value={color} onChange={e => setColor(e.target.value)} aria-label="Category colour"
             style={{ width:34, height:34, padding:2, border:"1px solid var(--border)", borderRadius:8, background:"var(--surface)", cursor:"pointer", flexShrink:0 }} />
           <input value={name} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") createCategory(); }} placeholder="Name e.g. Coffee" autoFocus
@@ -1611,7 +1687,7 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
     <div>
       <div style={{ display:"grid", gridTemplateColumns:"repeat(4, 1fr)", gap:12, justifyItems:"center", maxHeight:300, overflowY:"auto" }}>
         {tile("var(--surface)", "var(--border-strong)", <span style={{ color:"var(--text-muted)", fontSize:20 }}>∅</span>, "None", value == null, () => onPick(null), "none")}
-        {categories.map(c => tile(c.color, c.color, <CategoryIcon icon={c.icon} size={26} color="#fff" />, c.name, value === c.id, () => onPick(c.id), c.id))}
+        {categories.map(c => tile(c.color, c.color, <CategoryIcon icon={c.icon} size={26} color={readableIconColor(c.color)} />, c.name, value === c.id, () => onPick(c.id), c.id))}
         {!full && tile("var(--surface)", "var(--border-strong)", <span style={{ color:"var(--text-secondary)", fontSize:26, fontWeight:300 }}>+</span>, "Create", false, () => setCreating(true), "create")}
       </div>
       {onBack && <button style={{ background:"none", border:"none", color:"var(--text-secondary)", fontSize:13, cursor:"pointer", padding:"12px 0 0", width:"100%" }} onClick={onBack}>← Back</button>}
@@ -1846,7 +1922,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
             <button onClick={() => setEditPickCat(true)}
               style={{ display:"flex", alignItems:"center", gap:8, width:"100%", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", marginBottom:10, cursor:"pointer", color:"var(--text-heading)", fontSize:13 }}>
               {catRow
-                ? <><span style={{ width:20, height:20, borderRadius:"50%", background:catRow.color, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><CategoryIcon icon={catRow.icon} size={12} color="#fff" /></span>{catRow.name}</>
+                ? <><span style={{ width:20, height:20, borderRadius:"50%", background:catRow.color, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><CategoryIcon icon={catRow.icon} size={12} color={readableIconColor(catRow.color)} /></span>{catRow.name}</>
                 : <span style={{ color:"var(--text-muted)" }}>None</span>}
               <span style={{ marginLeft:"auto", color:"var(--text-tertiary)" }}>Change ▸</span>
             </button>
@@ -1920,7 +1996,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
             <button onClick={() => setPickCat(true)}
               style={{ display:"flex", alignItems:"center", gap:8, width:"100%", background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"9px 12px", marginBottom:10, cursor:"pointer", color:"var(--text-heading)", fontSize:13 }}>
               {category && CATEGORY_BY_ID[category]
-                ? <><span style={{ width:20, height:20, borderRadius:"50%", background:CATEGORY_BY_ID[category].color, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><CategoryIcon icon={CATEGORY_BY_ID[category].icon} size={12} color="#fff" /></span>{CATEGORY_BY_ID[category].name}</>
+                ? <><span style={{ width:20, height:20, borderRadius:"50%", background:CATEGORY_BY_ID[category].color, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><CategoryIcon icon={CATEGORY_BY_ID[category].icon} size={12} color={readableIconColor(CATEGORY_BY_ID[category].color)} /></span>{CATEGORY_BY_ID[category].name}</>
                 : <span style={{ color:"var(--text-muted)" }}>None</span>}
               <span style={{ marginLeft:"auto", color:"var(--text-tertiary)" }}>Change ▸</span>
             </button>
@@ -1930,7 +2006,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
 
       <div style={hint}>Populate into the week log</div>
       <div style={{ display:"flex", gap:8, marginBottom:10 }}>
-        {[["none","One-off"],["monthly","Monthly"],["weekly","Weekly"]].map(([v,l]) => <button key={v} style={segBtn(freq===v)} onClick={() => setFreq(v)}>{l}</button>)}
+        {[["none","One-off"],["monthly","Monthly"],["weekly","Weekly"],["daily","Daily"]].map(([v,l]) => <button key={v} style={segBtn(freq===v)} onClick={() => setFreq(v)}>{l}</button>)}
       </div>
       {freq === "monthly" && (
         <div style={{ marginBottom:10 }}>
