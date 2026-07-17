@@ -1166,7 +1166,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
         {(units.length > 0 || lastDeleted) && (
           <div style={{ display:"flex", gap:6 }}>
             {lastDeleted && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={onUndo}>Undo</button>}
-            {units.length > 0 && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => setEditMode(true)}>Edit</button>}
+            {units.length > 0 && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => editMode ? exitEdit() : setEditMode(true)}>{editMode ? "Done" : "Edit"}</button>}
           </div>
         )}
       </div>
@@ -1312,10 +1312,10 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
       <span style={{ flex:1, color:col, fontSize:13 }}>
         {cat && <span title={cat.name} style={{ display:"inline-flex", verticalAlign:"-2px", marginRight:5 }}><CategoryIcon icon={cat.icon} size={13} color="var(--text-tertiary)" /></span>}
         {entry.label || METHOD_NAME[entry.method] || entry.method}
-        {entry.pinned && <span style={{ ...S.badge, background:chipColors("#38bdf8").bg, color:"#38bdf8" }}> 📌 fixed</span>}
-        {entry.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
-        {entry.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> reimbursable</span>}
-        {entry.splitGroupId && entry.type === "personal" && <span style={{ ...S.badge, background:"var(--surface-2)", color:"var(--text-tertiary)" }}> split</span>}
+        {entry.pinned && <span style={{ ...S.badge, background:chipColors("#38bdf8").bg, color:"#38bdf8" }}>📌 fixed</span>}
+        {entry.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
+        {entry.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}>reimbursable</span>}
+        {entry.splitGroupId && entry.type === "personal" && <span style={{ ...S.badge, background:"var(--surface-2)", color:"var(--text-tertiary)" }}>split</span>}
       </span>
       <span style={{ color:col, fontWeight:600, fontSize:13 }}>{fmt(entry.amount)}</span>
       {!hideDelete && <ConfirmDeleteButton onConfirm={onDel} style={S.delBtn} />}
@@ -1347,8 +1347,8 @@ function PinCard({ pin, onEdit, onDelete }) {
         <span style={{ ...S.dot, background: METHOD_COLOR[pin.method] || "var(--text-secondary)" }} />
         <span style={{ flex:1, fontWeight:600, fontSize:14, color:col }}>
           {pin.label}
-          {isB && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
-          {isX && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> split</span>}
+          {isB && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
+          {isX && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}>split</span>}
           {cat && <span title={cat.name} style={{ display:"inline-flex", verticalAlign:"-2px", marginLeft:6 }}><CategoryIcon icon={cat.icon} size={13} color="var(--text-tertiary)" /></span>}
         </span>
         <button style={{ ...S.iconBtn, fontSize:20, padding:"4px 6px" }} onClick={onEdit}>✎</button>
@@ -2244,7 +2244,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
           {allSpendItems.map((item, i) => (
             <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid var(--border)" : "none" }}>
               <span style={{ ...S.dot, background: METHOD_COLOR[item.method] || "var(--text-secondary)" }} />
-              <span style={{ flex:1, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" }}>{item.desc}{item.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}</span>
+              <span style={{ flex:1, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" }}>{item.desc}{item.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}</span>
               <span style={{ fontWeight:600, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-primary)" }}>{fmt(item.amount)}</span>
             </div>
           ))}
@@ -2308,8 +2308,8 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
             <div style={{ flex:1 }}>
               <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : "var(--text-primary)" }}>
                 {t.desc}
-                {t.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
-                {t.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> reimbursable</span>}
+                {t.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
+                {t.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}>reimbursable</span>}
               </div>
               {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
             </div>
