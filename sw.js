@@ -1,6 +1,6 @@
 // Cache name includes a version number — bump this any time index.html or app.jsx changes,
 // so returning users get the update instead of a stale cached copy.
-const CACHE_NAME = "spendtracker-v36";
+const CACHE_NAME = "spendtracker-v37";
 const CACHED_FILES = [
   "./",
   "./index.html",
