@@ -34,7 +34,7 @@ TypeScript's compiler, targeting an older Safari so optional-chaining/`??` are l
 while everything else stays as-is:
 
 ```
-npx typescript@4.9.5 app.jsx --jsx react --target es2019 --module none \
+npx -y -p typescript@4.9.5 tsc app.jsx --allowJs --jsx react --target es2019 --module none \
   --strict false --alwaysStrict --skipLibCheck --noEmitOnError false --outDir .
 ```
 

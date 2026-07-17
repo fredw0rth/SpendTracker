@@ -253,6 +253,7 @@ function makePinEntry(pin, weekIndex, date) {
     note: pin.note || "",
     method: pin.method,
     type: pin.type,            // personal / business / excluded — mapped straight through
+    category: pin.category,    // carried so week-log rows and the category summary see it
     weekIndex,
     date: date.toISOString(),
     order: date.getTime(),
@@ -1165,7 +1166,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
         {(units.length > 0 || lastDeleted) && (
           <div style={{ display:"flex", gap:6 }}>
             {lastDeleted && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={onUndo}>Undo</button>}
-            {units.length > 0 && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => setEditMode(true)}>Edit</button>}
+            {units.length > 0 && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => editMode ? exitEdit() : setEditMode(true)}>{editMode ? "Done" : "Edit"}</button>}
           </div>
         )}
       </div>
@@ -1309,12 +1310,12 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
     <div onClick={onEdit} style={{ ...S.entryRow, ...(grouped ? S.entryRowGrouped : {}), ...(grouped && last ? { borderBottom:"none" } : {}), cursor: onEdit ? "pointer" : "default" }}>
       <span style={{ ...S.dot, background: METHOD_COLOR[entry.method] || "var(--text-secondary)" }} />
       <span style={{ flex:1, color:col, fontSize:13 }}>
-        {cat && <span title={cat.name} style={{ display:"inline-flex", verticalAlign:"-2px", marginRight:5, width:16, height:16, borderRadius:"50%", background:cat.color, alignItems:"center", justifyContent:"center" }}><CategoryIcon icon={cat.icon} size={10} color={readableIconColor(cat.color)} /></span>}
+        {cat && <span title={cat.name} style={{ display:"inline-flex", verticalAlign:"-2px", marginRight:5 }}><CategoryIcon icon={cat.icon} size={13} color="var(--text-tertiary)" /></span>}
         {entry.label || METHOD_NAME[entry.method] || entry.method}
-        {entry.pinned && <span style={{ ...S.badge, background:chipColors("#38bdf8").bg, color:"#38bdf8" }}> 📌 fixed</span>}
-        {entry.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
-        {entry.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> reimbursable</span>}
-        {entry.splitGroupId && entry.type === "personal" && <span style={{ ...S.badge, background:"var(--surface-2)", color:"var(--text-tertiary)" }}> split</span>}
+        {entry.pinned && <span style={{ ...S.badge, background:chipColors("#38bdf8").bg, color:"#38bdf8" }}>📌 fixed</span>}
+        {entry.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
+        {entry.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}>reimbursable</span>}
+        {entry.splitGroupId && entry.type === "personal" && <span style={{ ...S.badge, background:"var(--surface-2)", color:"var(--text-tertiary)" }}>split</span>}
       </span>
       <span style={{ color:col, fontWeight:600, fontSize:13 }}>{fmt(entry.amount)}</span>
       {!hideDelete && <ConfirmDeleteButton onConfirm={onDel} style={S.delBtn} />}
@@ -1346,9 +1347,9 @@ function PinCard({ pin, onEdit, onDelete }) {
         <span style={{ ...S.dot, background: METHOD_COLOR[pin.method] || "var(--text-secondary)" }} />
         <span style={{ flex:1, fontWeight:600, fontSize:14, color:col }}>
           {pin.label}
-          {isB && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
-          {isX && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> split</span>}
-          {cat && <span style={{ ...S.badge, background:chipColors(cat.color).bg, color:cat.color }}> {cat.name}</span>}
+          {isB && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
+          {isX && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}>split</span>}
+          {cat && <span title={cat.name} style={{ display:"inline-flex", verticalAlign:"-2px", marginLeft:6 }}><CategoryIcon icon={cat.icon} size={13} color="var(--text-tertiary)" /></span>}
         </span>
         <button style={{ ...S.iconBtn, fontSize:20, padding:"4px 6px" }} onClick={onEdit}>✎</button>
         <ConfirmDeleteButton onConfirm={onDelete} style={{ ...S.iconBtn, color:"#ef4444", fontSize:20, padding:"4px 6px" }} />
@@ -2039,6 +2040,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
 // ─── Summary View ─────────────────────────────────────────────────────────────
 function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport }) {
   const [methodDetail, setMethodDetail] = useState(null); // method name or null
+  const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
 
   // Gross (as charged) per card = everything that hit each card — all entries + all pins.
   // This matches the card's own statement (Amex app etc.), since work and full split amounts
@@ -2058,6 +2060,23 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
   const reimbursableTotal = grossSpend - netTotal;      // business + split (entries + pins)
   const splitTotal = reimbursableTotal - businessTotal; // excluded entries + any "split" pins
 
+  // Net personal spend per category (entries + pins, mirroring grossByMethod's inclusion of pins).
+  // Only personal items ever carry a category. A dangling id (category deleted after logging —
+  // possible via pins, whose references don't lock a category in Settings) folds into
+  // Uncategorised, matching how CATEGORY_BY_ID misses render everywhere else.
+  const byCategory = {};
+  let uncategorisedTotal = 0;
+  const addCat = (id, amt) => {
+    if (id && CATEGORY_BY_ID[id]) byCategory[id] = (byCategory[id] || 0) + amt;
+    else uncategorisedTotal += amt;
+  };
+  state.entries.filter(e => e.type === "personal").forEach(e => addCat(e.category, e.amount));
+  state.pins.filter(p => p.type !== "business" && p.type !== "excluded").forEach(p => addCat(p.category, p.amount || 0));
+  const categoryRows = [
+    ...CATEGORIES.map(c => ({ cat: c, total: byCategory[c.id] || 0 })),
+    { cat: null, total: uncategorisedTotal }, // null = Uncategorised
+  ].filter(r => r.total > 0).sort((a, b) => b.total - a.total);
+
   // Per-week, per-method breakdown
   const weekRows = weeks.map(w => {
     const wEntries = state.entries.filter(e => e.weekIndex === w.index && e.type === "personal");
@@ -2076,6 +2095,23 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     const fromPins = state.pins
       .filter(p => p.method === method)
       .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", type: p.type === "business" ? "business" : p.type === "excluded" ? "excluded" : "personal" }));
+    return [...fromEntries, ...fromPins].sort((a, b) => {
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return new Date(b.date) - new Date(a.date);
+    });
+  }
+
+  // All personal transactions for a category (entries + pins), for the category drill-down;
+  // catId null = uncategorised (no category, or one that no longer exists).
+  function transactionsForCategory(catId) {
+    const match = (c) => catId ? c === catId : !(c && CATEGORY_BY_ID[c]);
+    const fromEntries = state.entries
+      .filter(e => e.type === "personal" && match(e.category))
+      .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method }));
+    const fromPins = state.pins
+      .filter(p => p.type !== "business" && p.type !== "excluded" && match(p.category))
+      .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", method: p.method }));
     return [...fromEntries, ...fromPins].sort((a, b) => {
       if (!a.date) return 1;
       if (!b.date) return -1;
@@ -2159,6 +2195,25 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         {METHODS.every(m => grossByMethod[m.id] === 0) && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"4px 0" }}>No spend logged yet</div>}
       </div>
 
+      {/* By category — where net personal spend went. Colour is functional here (it keys each
+          row to the picker's tiles), unlike the week/pin lists, which are monochrome. */}
+      <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
+        <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:2, textTransform:"uppercase" }}>By category</div>
+        <div style={{ fontSize:11, color:"var(--text-muted)", marginBottom:10 }}>Personal spend only</div>
+        {categoryRows.map(r => (
+          <button key={r.cat ? r.cat.id : "uncat"} onClick={() => setCategoryDetail(r.cat ? r.cat.id : "uncat")}
+            style={{ width:"100%", display:"flex", alignItems:"center", gap:10, padding:"7px 0", background:"none", border:"none", borderBottom:"1px solid var(--border)", cursor:"pointer", textAlign:"left" }}>
+            {r.cat
+              ? <span style={{ width:22, height:22, borderRadius:"50%", background:r.cat.color, display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><CategoryIcon icon={r.cat.icon} size={13} color={readableIconColor(r.cat.color)} /></span>
+              : <span style={{ width:22, height:22, borderRadius:"50%", background:"var(--surface-2)", display:"inline-flex", alignItems:"center", justifyContent:"center", flexShrink:0, color:"var(--text-muted)", fontSize:13 }}>∅</span>}
+            <span style={{ flex:1, fontSize:13, color: r.cat ? "var(--text-body)" : "var(--text-tertiary)" }}>{r.cat ? r.cat.name : "Uncategorised"}</span>
+            <span style={{ fontWeight:600, color: r.cat ? readableChipColor(r.cat.color) : "var(--text-tertiary)", fontSize:13 }}>{fmt(r.total)}</span>
+            <span style={{ color:"var(--text-tertiary)", fontSize:20, fontWeight:700, lineHeight:1 }}>›</span>
+          </button>
+        ))}
+        {categoryRows.length === 0 && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"4px 0" }}>No personal spend logged yet</div>}
+      </div>
+
       {/* Weekly breakdown */}
       <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
         <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Weekly breakdown</div>
@@ -2189,7 +2244,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
           {allSpendItems.map((item, i) => (
             <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid var(--border)" : "none" }}>
               <span style={{ ...S.dot, background: METHOD_COLOR[item.method] || "var(--text-secondary)" }} />
-              <span style={{ flex:1, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" }}>{item.desc}{item.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}</span>
+              <span style={{ flex:1, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" }}>{item.desc}{item.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}</span>
               <span style={{ fontWeight:600, fontSize:13, color: item.type === "business" ? "#f59e0b" : "var(--text-primary)" }}>{fmt(item.amount)}</span>
             </div>
           ))}
@@ -2213,6 +2268,13 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 
       {methodDetail && (
         <MethodDetailModal method={methodDetail} transactions={transactionsFor(methodDetail)} gross={grossByMethod[methodDetail]} net={methodTotals[methodDetail]} onClose={() => setMethodDetail(null)} />
+      )}
+      {categoryDetail && (
+        <CategoryDetailModal
+          cat={categoryDetail === "uncat" ? null : CATEGORY_BY_ID[categoryDetail]}
+          transactions={transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail)}
+          total={categoryDetail === "uncat" ? uncategorisedTotal : (byCategory[categoryDetail] || 0)}
+          onClose={() => setCategoryDetail(null)} />
       )}
     </div>
   );
@@ -2246,12 +2308,45 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
             <div style={{ flex:1 }}>
               <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : "var(--text-primary)" }}>
                 {t.desc}
-                {t.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}> work</span>}
-                {t.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}> reimbursable</span>}
+                {t.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
+                {t.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}>reimbursable</span>}
               </div>
               {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
             </div>
             <span style={{ fontWeight:600, fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : col }}>{fmt(t.amount)}</span>
+          </div>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Category Detail Modal ────────────────────────────────────────────────────
+// Drill-down from the Summary "By category" card: the personal transactions (entries + pins)
+// behind one category's total. `cat` is a category object, or null for Uncategorised.
+function CategoryDetailModal({ cat, transactions, total, onClose }) {
+  const name = cat ? cat.name : "Uncategorised";
+  return (
+    <Modal onClose={onClose} title={`${name} spend`}>
+      <div style={{ display:"flex", alignItems:"center", gap:10, background:"var(--surface-2)", borderRadius:8, padding:"10px 12px", marginBottom:14 }}>
+        {cat
+          ? <span style={{ width:34, height:34, borderRadius:"50%", background:cat.color, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}><CategoryIcon icon={cat.icon} size={18} color={readableIconColor(cat.color)} /></span>
+          : <span style={{ width:34, height:34, borderRadius:"50%", background:"var(--surface)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, color:"var(--text-muted)", fontSize:18 }}>∅</span>}
+        <div>
+          <div style={{ fontSize:17, fontWeight:800, color:"var(--text-heading)" }}>{fmt(total)}</div>
+          <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{transactions.length} transaction{transactions.length === 1 ? "" : "s"}</div>
+        </div>
+      </div>
+      <div style={{ maxHeight:360, overflowY:"auto" }}>
+        {transactions.length === 0 && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>No transactions yet</div>}
+        {transactions.map((t, i) => (
+          <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none" }}>
+            <span style={{ ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" }} />
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:13, color:"var(--text-primary)" }}>{t.desc}</div>
+              {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
+            </div>
+            <span style={{ fontWeight:600, fontSize:13, color:"var(--text-primary)" }}>{fmt(t.amount)}</span>
           </div>
         ))}
       </div>
