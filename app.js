@@ -693,6 +693,23 @@ function App() {
         else
             dispatch({ type: "UPD_CREDIT", credit });
     }
+    // Opens the edit sheet for a tapped entry. A split (any half) opens the *whole* group in one
+    // unified editor — collecting both halves by splitGroupId — so its description, category, payment
+    // type and amounts are edited in a single place. Non-split entries edit as themselves. Used by
+    // both the week list and the Summary → By Category drill-down.
+    function openEditEntry(entry) {
+        if (entry.splitGroupId) {
+            const group = effectiveData.entries.filter(e => e.splitGroupId === entry.splitGroupId);
+            setEditTarget({ kind: "split", weekIndex: entry.weekIndex, data: {
+                    groupId: entry.splitGroupId,
+                    your: group.find(e => e.type === "personal") || null,
+                    their: group.find(e => e.type === "excluded") || null,
+                } });
+        }
+        else {
+            setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex });
+        }
+    }
     // Restores the most recently deleted entry/credit (or split pair) verbatim — same id/order/
     // weekIndex, so it reappears in its original week and position. Global, not per-week, so it
     // survives switching tabs/weeks; plain useState (not persisted `state`) so it clears on reload.
@@ -757,7 +774,7 @@ function App() {
                         "d left")))),
             weeks.filter(w => w.index === activeWeek).map(week => {
                 var _a;
-                return (React.createElement(WeekPanel, { key: week.index, week: week, weeks: weeks, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit, onEditEntry: (entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex }), onEditCredit: (credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex }), onUpdEntry: updEntry, onUpdCredit: updCredit, onCapture: setLastDeleted, lastDeleted: lastDeleted, onUndo: undoLastDeleted }));
+                return (React.createElement(WeekPanel, { key: week.index, week: week, weeks: weeks, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit, onEditEntry: openEditEntry, onEditCredit: (credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex }), onUpdEntry: updEntry, onUpdCredit: updCredit, onCapture: setLastDeleted, lastDeleted: lastDeleted, onUndo: undoLastDeleted }));
             }))),
         tab === "pins" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
@@ -822,7 +839,7 @@ function App() {
                                 fmt(r.budget))),
                         React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#22c55e" : "#f87171" } }, signed(r.saved))))))));
         })(),
-        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onEditEntry: (entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex }) })),
+        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onEditEntry: openEditEntry })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
@@ -881,7 +898,7 @@ function App() {
                     React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe)
                             window.SpendVault.wipe(); } }, "Erase everything")))))),
         !viewingPast && (React.createElement("button", { "aria-label": "Quick add spend", onClick: () => setShowEntryFor(todayWeekIndex(weeks)), style: S.quickAdd }, "+")),
-        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
+        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onDeleteEntry: delEntry, onClose: () => { setShowEntryFor(null); setEditTarget(null); } }),
         (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
@@ -1117,7 +1134,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
     }
     function renderUnitContent(unit) {
         if (unit.kind === "split")
-            return (React.createElement("div", { style: S.splitGroup }, unit.group.map((e, i) => React.createElement(EntryLine, { key: e.id, entry: e, onDel: () => handleDelete(e), onEdit: () => onEditEntry(e), grouped: true, last: i === unit.group.length - 1, hideDelete: editMode }))));
+            return (React.createElement(SplitLine, { group: unit.group, onEdit: () => onEditEntry(unit.group[0]), onDel: () => handleDelete(unit.group[0]), hideDelete: editMode }));
         if (unit.kind === "credit")
             return React.createElement(CreditLine, { credit: unit.credit, onDel: () => onDelCredit(unit.credit.id), onEdit: () => onEditCredit(unit.credit), hideDelete: editMode });
         // Scheduled-pin rows are read-only here (managed from the Pinned tab): no edit tap, no delete.
@@ -1255,6 +1272,36 @@ function EntryLine({ entry, onDel, onEdit, grouped, last, hideDelete }) {
             entry.splitGroupId && entry.type === "personal" && React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, "split")),
         React.createElement("span", { style: { color: col, fontWeight: 600, fontSize: 13 } }, fmt(entry.amount)),
         !hideDelete && React.createElement(ConfirmDeleteButton, { onConfirm: onDel, style: S.delBtn })));
+}
+// ─── Split Line ───────────────────────────────────────────────────────────────
+// A split is one purchase stored as two entries (your personal share + the excluded "not yours"
+// portion). It renders as a single row: the shared name once, your share as the headline amount
+// (that's what hits the budget), with the not-yours/total split beneath. Tapping opens the unified
+// split editor; one delete removes the whole group.
+function SplitLine({ group, onEdit, onDel, hideDelete }) {
+    const your = group.find(e => e.type === "personal") || null;
+    const their = group.find(e => e.type === "excluded") || null;
+    const ref = your || their;
+    const yourShare = your ? your.amount : 0;
+    const theirShare = their ? their.amount : 0;
+    const total = yourShare + theirShare;
+    const cat = your && your.category && CATEGORY_BY_ID[your.category];
+    return (React.createElement("div", { style: S.splitGroup },
+        React.createElement("div", { onClick: onEdit, style: { ...S.entryRow, borderBottom: "none", cursor: onEdit ? "pointer" : "default" } },
+            React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[ref.method] || "var(--text-secondary)" } }),
+            React.createElement("span", { style: { flex: 1, minWidth: 0, color: "var(--text-primary)", fontSize: 13 } },
+                cat && React.createElement("span", { title: cat.name, style: { display: "inline-flex", verticalAlign: "-2px", marginRight: 5 } },
+                    React.createElement(CategoryIcon, { icon: cat.icon, size: 13, color: "var(--text-tertiary)" })),
+                ref.label || METHOD_NAME[ref.method] || ref.method,
+                React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, "split")),
+            React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } },
+                React.createElement("div", { style: { color: "var(--text-primary)", fontWeight: 600, fontSize: 13 } }, fmt(yourShare)),
+                React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 10, marginTop: 1 } },
+                    fmt(theirShare),
+                    " not yours \u00B7 ",
+                    fmt(total),
+                    " total")),
+            !hideDelete && React.createElement(ConfirmDeleteButton, { onConfirm: onDel, style: S.delBtn }))));
 }
 // ─── Credit Line ───────────────────────────────────────────────────────────────
 function CreditLine({ credit, onDel, onEdit, hideDelete }) {
@@ -1561,9 +1608,12 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
         onBack && React.createElement("button", { style: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", padding: "12px 0 0", width: "100%" }, onClick: onBack }, "\u2190 Back")));
 }
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categoryPrompt, descriptionPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categoryPrompt, descriptionPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
     const editEntry = edit && edit.kind === "entry" ? edit.data : null;
     const editCredit = edit && edit.kind === "credit" ? edit.data : null;
+    // A split (both halves) edited as one unit — its own self-contained editor further down.
+    const editSplit = edit && edit.kind === "split" ? edit.data : null;
+    const splitRef = editSplit ? (editSplit.your || editSplit.their) : null; // for seeding shared fields
     const editData = editEntry || editCredit;
     const isEdit = !!editData;
     // A split's two halves must keep summing to the original total, so editing one can't change
@@ -1578,14 +1628,14 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
     const [selectedWeek, setSelectedWeek] = useState(weekIndex);
     // Fall back to the first method if the seeded id no longer exists (e.g. its type was removed).
     const [method, setMethod] = useState(() => {
-        const seed = editEntry ? editEntry.method : defaultMethod;
+        const seed = editEntry ? editEntry.method : (splitRef ? splitRef.method : defaultMethod);
         return METHOD_NAME[seed] ? seed : METHODS[0].id;
     });
     const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : "personal"));
-    const [note, setNote] = useState(() => editData ? (editData.label || "") : "");
+    const [note, setNote] = useState(() => editData ? (editData.label || "") : (splitRef ? (splitRef.label || "") : ""));
     const [flash, setFlash] = useState(null);
-    // The chosen category id (or null = None). Seeds from the edited entry when editing.
-    const [category, setCategory] = useState(() => (editEntry && editEntry.category) || null);
+    // The chosen category id (or null = None). Seeds from the edited entry (or a split's personal half).
+    const [category, setCategory] = useState(() => (editEntry && editEntry.category) || (editSplit && editSplit.your && editSplit.your.category) || null);
     // After ↵ on a categorisable spend, we stash the built entry here and swap the keypad for the
     // category grid; selecting a category commits the save. Null the rest of the time.
     const [pendingSave, setPendingSave] = useState(null);
@@ -1594,6 +1644,11 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
     // Split flow: null (not splitting) → "total" (entering the full amount) → "theirs" (entering the portion that isn't yours)
     const [splitStage, setSplitStage] = useState(null);
     const [splitTotal, setSplitTotal] = useState(0);
+    // Unified split editor: the whole total and the "not yours" portion are both editable (your share
+    // is derived), sharing one keypad via the active field. Seeded from the two existing halves.
+    const [totalCents, setTotalCents] = useState(() => editSplit ? Math.round(((editSplit.your ? editSplit.your.amount : 0) + (editSplit.their ? editSplit.their.amount : 0)) * 100) : 0);
+    const [theirsCents, setTheirsCents] = useState(() => editSplit ? Math.round((editSplit.their ? editSplit.their.amount : 0) * 100) : 0);
+    const [activeField, setActiveField] = useState("total"); // "total" | "theirs"
     // Preserve the page's scroll position across the edit. The window is what scrolls (the week/summary
     // list isn't its own scroll container), and opening/closing this fixed bottom-sheet otherwise leaves
     // the browser scrolled to the bottom. Pin the body while the sheet is open, then restore the exact
@@ -1633,6 +1688,60 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
         if (isSplitEdit)
             return;
         setCents(prev => Math.floor(prev / 10));
+    }
+    // Split editor: digits/delete drive whichever amount field is active (Total or Not yours).
+    function splitPress(d) {
+        const set = activeField === "theirs" ? setTheirsCents : setTotalCents;
+        set(prev => { const next = d === "00" ? prev * 100 : prev * 10 + Number(d); return next > 99999999 ? prev : next; });
+    }
+    function splitDelete() {
+        const set = activeField === "theirs" ? setTheirsCents : setTotalCents;
+        set(prev => Math.floor(prev / 10));
+    }
+    // Save the unified split editor. Recomputes your share from total − theirs and writes both halves.
+    // Degenerate results collapse cleanly: theirs = 0 → a plain personal entry; theirs = total → a
+    // plain excluded entry (the splitGroupId is dropped so it stops rendering as a split).
+    function saveSplit() {
+        const total = totalCents / 100;
+        if (total <= 0)
+            return;
+        const theirs = +(Math.min(theirsCents, totalCents) / 100).toFixed(2);
+        const yours = +(total - theirs).toFixed(2);
+        const g = editSplit;
+        const label = note.trim();
+        const base = g.their || g.your; // reuse the group's week/date/order/id
+        const stripSplit = (e) => { const { splitGroupId, ...rest } = e; return rest; };
+        const mkHalf = (t, amt, cat) => ({ id: genId(), amount: amt, label, note: label, method, type: t, weekIndex: base.weekIndex, date: base.date, order: base.order, splitGroupId: g.groupId, ...(cat ? { category: cat } : {}) });
+        if (yours > 0 && theirs > 0) {
+            // A genuine split: keep both halves under the group id.
+            if (g.their)
+                onUpdate({ ...g.their, amount: theirs, label, note: label, method });
+            else
+                onSave(mkHalf("excluded", theirs));
+            if (g.your)
+                onUpdate({ ...g.your, amount: yours, label, note: label, method, category: category || undefined });
+            else
+                onSave(mkHalf("personal", yours, category || undefined));
+        }
+        else if (theirs === 0) {
+            // Whole amount is yours now → collapse to a single personal entry.
+            if (g.their)
+                onDeleteEntry(g.their.id);
+            if (g.your)
+                onUpdate({ ...stripSplit(g.your), amount: total, label, note: label, method, type: "personal", category: category || undefined });
+            else
+                onSave({ id: genId(), amount: total, label, note: label, method, type: "personal", weekIndex: base.weekIndex, date: base.date, order: base.order, ...(category ? { category } : {}) });
+        }
+        else {
+            // Whole amount is someone else's → collapse to a single excluded (reimbursable) entry.
+            if (g.your)
+                onDeleteEntry(g.your.id);
+            if (g.their)
+                onUpdate({ ...stripSplit(g.their), amount: total, label, note: label, method, type: "excluded" });
+            else
+                onSave({ id: genId(), amount: total, label, note: label, method, type: "excluded", weekIndex: base.weekIndex, date: base.date, order: base.order });
+        }
+        onClose();
     }
     function resetAfterSave() {
         setCents(0);
@@ -1770,6 +1879,45 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
             React.createElement(CategoryPicker, { categories: categories, value: null, onPick: (id) => commitPending(pendingSave, id), onCreate: onAddCategory, onBack: () => setPendingSave(null) })));
     }
     const catRow = category && CATEGORY_BY_ID[category];
+    // ── Unified split editor: one screen for the whole split (both halves) ──
+    if (editSplit) {
+        const sTotal = totalCents / 100;
+        const sTheirs = Math.min(theirsCents, totalCents) / 100;
+        const sYours = +(sTotal - sTheirs).toFixed(2);
+        const amountBox = (fieldKey, lbl, val) => (React.createElement("button", { onClick: () => setActiveField(fieldKey), style: { flex: 1, textAlign: "center", background: "var(--surface-2)", borderRadius: 12, padding: "12px 8px", border: `2px solid ${activeField === fieldKey ? "#a855f7" : "var(--border-strong)"}`, cursor: "pointer" } },
+            React.createElement("div", { style: { fontSize: 10, color: activeField === fieldKey ? "#a855f7" : "var(--text-secondary)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 } }, lbl),
+            React.createElement("div", { style: { fontSize: 24, fontWeight: 800, color: "var(--text-heading)" } },
+                "\u00A3",
+                val.toFixed(2))));
+        return (React.createElement(Modal, { onClose: onClose, title: "Edit split" },
+            React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 8 } },
+                amountBox("total", "Total", sTotal),
+                amountBox("theirs", "Not yours", sTheirs)),
+            React.createElement("div", { style: { textAlign: "center", fontSize: 12, color: "#a855f7", fontWeight: 600, marginBottom: 12 } },
+                "Your share \u00A3",
+                sYours.toFixed(2),
+                " ",
+                React.createElement("span", { style: { color: "var(--text-muted)", fontWeight: 400 } }, "\u00B7 counts to your budget")),
+            React.createElement("div", { style: subheading }, "Payment type"),
+            React.createElement(MethodSelector, { value: method, onChange: setMethod }),
+            sYours > 0 && (React.createElement(React.Fragment, null,
+                React.createElement("div", { style: subheading }, "Category"),
+                editPickCat ? (React.createElement("div", { style: { marginBottom: 10 } },
+                    React.createElement(CategoryPicker, { categories: categories, value: category, onPick: (id) => { setCategory(id); setEditPickCat(false); }, onCreate: onAddCategory, onBack: () => setEditPickCat(false) }))) : (React.createElement("button", { onClick: () => setEditPickCat(true), style: { display: "flex", alignItems: "center", gap: 8, width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "9px 12px", marginBottom: 10, cursor: "pointer", color: "var(--text-heading)", fontSize: 13 } },
+                    catRow
+                        ? React.createElement(React.Fragment, null,
+                            React.createElement("span", { style: { width: 20, height: 20, borderRadius: "50%", background: catRow.color, display: "inline-flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } },
+                                React.createElement(CategoryIcon, { icon: catRow.icon, size: 12, color: readableIconColor(catRow.color) })),
+                            catRow.name)
+                        : React.createElement("span", { style: { color: "var(--text-muted)" } }, "None"),
+                    React.createElement("span", { style: { marginLeft: "auto", color: "var(--text-tertiary)" } }, "Change \u25B8"))))),
+            descriptionPrompt && (React.createElement(React.Fragment, null,
+                React.createElement("div", { style: subheading }, "Description"),
+                React.createElement("input", { style: { width: "100%", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text-heading)", padding: "9px 12px", marginBottom: 10, fontSize: 13, boxSizing: "border-box", outline: "none" }, placeholder: "Tap to add a description", value: note, onChange: e => setNote(e.target.value) }))),
+            React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6 } }, digits.map((row, ri) => (React.createElement(React.Fragment, null,
+                row.map((d, i) => React.createElement("button", { key: `${ri}-${i}`, style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, color: d === "⌫" ? "#ef4444" : "var(--text-body)", fontSize: d === "⌫" ? 18 : 20, fontWeight: 600, padding: "14px 0", cursor: "pointer" }, onClick: () => d === "⌫" ? splitDelete() : splitPress(d) }, d)),
+                ri === 0 && React.createElement("button", { style: { gridRow: "span 4", background: totalCents > 0 ? splitColors.bg : "var(--surface)", border: `1px solid ${totalCents > 0 ? splitColors.border : "var(--border)"}`, borderRadius: 8, color: totalCents > 0 ? splitColors.text : "var(--text-muted)", fontSize: 18, fontWeight: 800, cursor: totalCents > 0 ? "pointer" : "default", display: "flex", alignItems: "center", justifyContent: "center" }, onClick: saveSplit }, "\u21B5")))))));
+    }
     return (React.createElement(Modal, { onClose: onClose, title: title },
         React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "var(--border-strong)"}`, opacity: isSplitEdit ? 0.7 : 1 } },
             displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a855f7", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
