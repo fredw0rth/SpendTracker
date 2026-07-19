@@ -1783,6 +1783,29 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
   const [splitStage, setSplitStage] = useState(null);
   const [splitTotal, setSplitTotal] = useState(0);
 
+  // Preserve the page's scroll position across the edit. The window is what scrolls (the week/summary
+  // list isn't its own scroll container), and opening/closing this fixed bottom-sheet otherwise leaves
+  // the browser scrolled to the bottom. Pin the body while the sheet is open, then restore the exact
+  // offset on close. useLayoutEffect captures scrollY before paint, i.e. before any native jump.
+  useLayoutEffect(() => {
+    const scrollY = window.scrollY;
+    const body = document.body;
+    const prev = { position: body.style.position, top: body.style.top, left: body.style.left, right: body.style.right, width: body.style.width };
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    return () => {
+      body.style.position = prev.position;
+      body.style.top = prev.top;
+      body.style.left = prev.left;
+      body.style.right = prev.right;
+      body.style.width = prev.width;
+      window.scrollTo(0, scrollY);
+    };
+  }, []);
+
   const amount = cents / 100;
   const displayStr = amount.toFixed(2);
   const creditColors = chipColors("#22c55e");
