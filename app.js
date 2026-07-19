@@ -822,7 +822,7 @@ function App() {
                                 fmt(r.budget))),
                         React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#22c55e" : "#f87171" } }, signed(r.saved))))))));
         })(),
-        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true) })),
+        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onEditEntry: (entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex }) })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
@@ -898,6 +898,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
     const over = spent - weeklyBudget;
     const pct = weeklyBudget > 0 ? Math.min((spent / weeklyBudget) * 100, 100) : 0;
     const [editMode, setEditMode] = useState(false);
+    const [methodFilter, setMethodFilter] = useState(null); // payment-type id to show only, or null for all
     const [selected, setSelected] = useState(() => new Set());
     const [confirmBulk, setConfirmBulk] = useState(false);
     const [showMove, setShowMove] = useState(false);
@@ -930,12 +931,37 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
     for (const c of credits)
         units.push({ kind: "credit", id: c.id, order: effOrder(c), credit: c });
     units.sort((a, b) => b.order - a.order);
+    // Payment types actually used by this week's entries (any classification). The filter is only
+    // worth offering when there's more than one — otherwise it's noise. Kept in state.methods order.
+    const usedMethods = METHODS.filter(m => entries.some(e => e.method === m.id));
+    // If the active filter's payment type is no longer present this week (e.g. its last txn was
+    // moved/deleted, or the week was switched), drop back to showing everything.
+    useEffect(() => {
+        if (methodFilter && !usedMethods.some(m => m.id === methodFilter))
+            setMethodFilter(null);
+    }, [methodFilter, usedMethods.map(m => m.id).join(",")]);
+    // A filter keeps every charge on the chosen card — personal, work and both halves of a split
+    // (all of which hit the statement) — and hides credits (income, not a card charge). This mirrors
+    // the Summary's "gross · as charged" view, so the running total below reconciles with a statement.
+    const matchesFilter = (u) => {
+        if (u.kind === "credit")
+            return false;
+        if (u.kind === "split")
+            return u.group.some(e => e.method === methodFilter);
+        return u.entry.method === methodFilter;
+    };
+    const filteredUnits = methodFilter ? units.filter(matchesFilter) : units;
+    // Gross total of the visible charges (both split halves count, as both appear on the statement).
+    const filterTotal = methodFilter
+        ? filteredUnits.reduce((s, u) => s + (u.kind === "split" ? u.group.reduce((g, e) => g + e.amount, 0) : u.entry.amount), 0)
+        : 0;
     // Credits (and any non-personal entry) can't carry a category — matches bulkCategorize's own
     // skip rule below — so the Categorise button should only appear when the selection actually has
     // something categorisable, otherwise picking a category silently does nothing.
     const categorisableSelectedCount = units.filter(u => selected.has(u.id) && ((u.kind === "single" && u.entry.type === "personal") || u.kind === "split")).length;
-    // During a drag, render the live working order; otherwise the sorted order.
-    const renderUnits = dragList || units;
+    // During a drag, render the live working order; otherwise the (optionally filtered) sorted order.
+    // Dragging only happens in edit mode, which clears any filter, so the two never overlap.
+    const renderUnits = dragList || filteredUnits;
     // Deleting one half of a split removes both halves, since a lone remainder is meaningless.
     // Captures the full object(s) via onCapture before deleting, so Undo can restore them —
     // DEL_ENTRY/DEL_CREDIT only take an id and the object is gone from state once deleted.
@@ -955,6 +981,9 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
         setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
     }
     function exitEdit() { setEditMode(false); setSelected(new Set()); setConfirmBulk(false); setShowMove(false); setShowCategorize(false); }
+    // Entering edit mode clears any active filter — reorder redistributes order values across the
+    // rendered rows, which a partial (filtered) list would corrupt, so the two are kept exclusive.
+    function enterEdit() { setMethodFilter(null); setEditMode(true); }
     // Bulk delete every selected unit, expanding split groups to both halves (like handleDelete).
     // Only captures for Undo when exactly one unit was selected — a bulk delete of many has no
     // single sensible "last deleted" for one Undo button to restore.
@@ -1104,7 +1133,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
                 dateStr(week.end)),
             (units.length > 0 || lastDeleted) && (React.createElement("div", { style: { display: "flex", gap: 6 } },
                 lastDeleted && React.createElement("button", { style: { ...S.editToggle, padding: "5px 10px", fontSize: 12 }, onClick: onUndo }, "Undo"),
-                units.length > 0 && React.createElement("button", { style: { ...S.editToggle, padding: "5px 10px", fontSize: 12 }, onClick: () => editMode ? exitEdit() : setEditMode(true) }, editMode ? "Done" : "Edit")))),
+                units.length > 0 && React.createElement("button", { style: { ...S.editToggle, padding: "5px 10px", fontSize: 12 }, onClick: () => editMode ? exitEdit() : enterEdit() }, editMode ? "Done" : "Edit")))),
         React.createElement("div", { style: S.budgetCard },
             React.createElement("div", { style: S.bar },
                 React.createElement("div", { style: { ...S.barFill, width: pct + "%", background: over > 0 ? "#ef4444" : "#06b6d4" } })),
@@ -1119,6 +1148,20 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
                 "\u2193 ",
                 fmt(over),
                 " over")),
+        !editMode && usedMethods.length >= 2 && (React.createElement("div", { style: { marginTop: 12 } },
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6 } },
+                React.createElement("button", { style: { ...S.weekPill, ...(methodFilter === null ? S.weekPillActive : {}) }, onClick: () => setMethodFilter(null) }, "All"),
+                usedMethods.map(m => (React.createElement("button", { key: m.id, style: { ...S.weekPill, display: "inline-flex", alignItems: "center", gap: 6, ...(methodFilter === m.id ? S.weekPillActive : {}) }, onClick: () => setMethodFilter(m.id) },
+                    React.createElement("span", { style: { ...S.dot, background: m.color } }),
+                    m.name)))),
+            methodFilter && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 8 } },
+                filteredUnits.length,
+                " transaction",
+                filteredUnits.length === 1 ? "" : "s",
+                " \u00B7 ",
+                fmt(filterTotal),
+                " ",
+                React.createElement("span", { style: { color: "var(--text-muted)" } }, "as charged"))))),
         React.createElement("div", { style: { marginTop: 12 } },
             renderUnits.map(unit => (React.createElement("div", { key: unit.id, ref: el => { if (el)
                     rowRefs.current[unit.id] = el;
@@ -1129,11 +1172,12 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
                     : React.createElement("button", { style: { ...S.checkbox, ...(selected.has(unit.id) ? { background: chipColors("#22c55e").bg, borderColor: "#22c55e" } : {}) }, onClick: () => toggleSelect(unit.id) }, selected.has(unit.id) ? "✓" : "")),
                 React.createElement("div", { style: { flex: 1, minWidth: 0 } }, renderUnitContent(unit)),
                 editMode && !unit.pinned && (React.createElement("button", { style: S.dragHandle, "aria-label": "Drag to reorder", onMouseDown: (e) => { e.preventDefault(); e.stopPropagation(); beginDrag(e.clientY, unit, false); }, onTouchStart: (e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, unit, true); } }, "\u2261"))))),
-            units.length === 0 && React.createElement("div", { style: { color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" } }, "Nothing logged")),
+            units.length === 0 && React.createElement("div", { style: { color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" } }, "Nothing logged"),
+            units.length > 0 && renderUnits.length === 0 && React.createElement("div", { style: { color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" } }, "No transactions on this payment type")),
         !editMode ? (React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
             React.createElement("button", { style: { ...S.actionBtn, flex: 1 }, onClick: onAddEntry }, "Log spend"),
             lastDeleted && React.createElement("button", { style: S.editToggle, onClick: onUndo }, "Undo"),
-            units.length > 0 && React.createElement("button", { style: S.editToggle, onClick: () => setEditMode(true) }, "Edit"))) : (React.createElement(React.Fragment, null,
+            units.length > 0 && React.createElement("button", { style: S.editToggle, onClick: enterEdit }, "Edit"))) : (React.createElement(React.Fragment, null,
             React.createElement("div", { style: S.bulkDelBar },
                 React.createElement("button", { style: S.editToggle, onClick: exitEdit }, "Done"),
                 selected.size === 0 ? (React.createElement("div", { style: { flex: 1, fontSize: 12, color: "var(--text-secondary)", textAlign: "center" } }, "Drag \u2261 to reorder")) : (React.createElement("div", { style: { flex: 1, display: "flex", gap: 6, justifyContent: "center" } },
@@ -1789,7 +1833,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
             } }, "Save")));
 }
 // ─── Summary View ─────────────────────────────────────────────────────────────
-function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport }) {
+function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onEditEntry }) {
     const [methodDetail, setMethodDetail] = useState(null); // method name or null
     const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
     // Gross (as charged) per card = everything that hit each card — all entries + all pins.
@@ -1859,10 +1903,10 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         const match = (c) => catId ? c === catId : !(c && CATEGORY_BY_ID[c]);
         const fromEntries = state.entries
             .filter(e => e.type === "personal" && match(e.category))
-            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method }));
+            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method, entry: e }));
         const fromPins = state.pins
             .filter(p => p.type !== "business" && p.type !== "excluded" && match(p.category))
-            .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", method: p.method }));
+            .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", method: p.method, pinned: true }));
         return [...fromEntries, ...fromPins].sort((a, b) => {
             if (!a.date)
                 return 1;
@@ -1975,7 +2019,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                     fmt(totalEntries),
                     " \u25CF")))),
         methodDetail && (React.createElement(MethodDetailModal, { method: methodDetail, transactions: transactionsFor(methodDetail), gross: grossByMethod[methodDetail], net: methodTotals[methodDetail], onClose: () => setMethodDetail(null) })),
-        categoryDetail && (React.createElement(CategoryDetailModal, { cat: categoryDetail === "uncat" ? null : CATEGORY_BY_ID[categoryDetail], transactions: transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail), total: categoryDetail === "uncat" ? uncategorisedTotal : (byCategory[categoryDetail] || 0), onClose: () => setCategoryDetail(null) }))));
+        categoryDetail && (React.createElement(CategoryDetailModal, { cat: categoryDetail === "uncat" ? null : CATEGORY_BY_ID[categoryDetail], transactions: transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail), total: categoryDetail === "uncat" ? uncategorisedTotal : (byCategory[categoryDetail] || 0), onEditEntry: onEditEntry ? (entry) => { setCategoryDetail(null); onEditEntry(entry); } : null, onClose: () => setCategoryDetail(null) }))));
 }
 // ─── Method Detail Modal ──────────────────────────────────────────────────────
 function MethodDetailModal({ method, transactions, gross, net, onClose }) {
@@ -2011,7 +2055,7 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
 // ─── Category Detail Modal ────────────────────────────────────────────────────
 // Drill-down from the Summary "By category" card: the personal transactions (entries + pins)
 // behind one category's total. `cat` is a category object, or null for Uncategorised.
-function CategoryDetailModal({ cat, transactions, total, onClose }) {
+function CategoryDetailModal({ cat, transactions, total, onEditEntry, onClose }) {
     const name = cat ? cat.name : "Uncategorised";
     return (React.createElement(Modal, { onClose: onClose, title: `${name} spend` },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 10, background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px", marginBottom: 14 } },
@@ -2027,12 +2071,18 @@ function CategoryDetailModal({ cat, transactions, total, onClose }) {
                     transactions.length === 1 ? "" : "s"))),
         React.createElement("div", { style: { maxHeight: 360, overflowY: "auto" } },
             transactions.length === 0 && React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "12px 0", textAlign: "center" } }, "No transactions yet"),
-            transactions.map((t, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none" } },
-                React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" } }),
-                React.createElement("div", { style: { flex: 1 } },
-                    React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)" } }, t.desc),
-                    t.date && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } }, dateStr(new Date(t.date)))),
-                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: "var(--text-primary)" } }, fmt(t.amount))))))));
+            transactions.map((t, i) => {
+                // Entry-backed rows are tappable to edit (mainly to re-categorise) via the standard
+                // Edit spend modal. Pinned rows stay read-only here — they're managed on the Pinned tab.
+                const editable = t.entry && onEditEntry;
+                return (React.createElement("div", { key: i, onClick: editable ? () => onEditEntry(t.entry) : undefined, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" } },
+                    React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" } }),
+                    React.createElement("div", { style: { flex: 1 } },
+                        React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)" } }, t.desc),
+                        t.date && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } }, dateStr(new Date(t.date)))),
+                    React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: "var(--text-primary)" } }, fmt(t.amount)),
+                    editable && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15, marginLeft: 2 } }, "\u203A")));
+            }))));
 }
 // ─── Export Modal ─────────────────────────────────────────────────────────────
 function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, totalCredits, methodTotals, onClose }) {
