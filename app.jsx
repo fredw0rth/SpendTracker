@@ -856,6 +856,7 @@ function App() {
           methodTotals={methodTotals}
           businessEntries={businessEntries}
           onExport={() => setShowExport(true)}
+          onEditEntry={(entry) => setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex })}
         />
       )}
 
@@ -975,6 +976,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
   const pct = weeklyBudget > 0 ? Math.min((spent / weeklyBudget) * 100, 100) : 0;
 
   const [editMode, setEditMode] = useState(false);
+  const [methodFilter, setMethodFilter] = useState(null); // payment-type id to show only, or null for all
   const [selected, setSelected] = useState(() => new Set());
   const [confirmBulk, setConfirmBulk] = useState(false);
   const [showMove, setShowMove] = useState(false);
@@ -1007,6 +1009,29 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
   for (const c of credits) units.push({ kind: "credit", id: c.id, order: effOrder(c), credit: c });
   units.sort((a, b) => b.order - a.order);
 
+  // Payment types actually used by this week's entries (any classification). The filter is only
+  // worth offering when there's more than one — otherwise it's noise. Kept in state.methods order.
+  const usedMethods = METHODS.filter(m => entries.some(e => e.method === m.id));
+  // If the active filter's payment type is no longer present this week (e.g. its last txn was
+  // moved/deleted, or the week was switched), drop back to showing everything.
+  useEffect(() => {
+    if (methodFilter && !usedMethods.some(m => m.id === methodFilter)) setMethodFilter(null);
+  }, [methodFilter, usedMethods.map(m => m.id).join(",")]);
+
+  // A filter keeps every charge on the chosen card — personal, work and both halves of a split
+  // (all of which hit the statement) — and hides credits (income, not a card charge). This mirrors
+  // the Summary's "gross · as charged" view, so the running total below reconciles with a statement.
+  const matchesFilter = (u) => {
+    if (u.kind === "credit") return false;
+    if (u.kind === "split") return u.group.some(e => e.method === methodFilter);
+    return u.entry.method === methodFilter;
+  };
+  const filteredUnits = methodFilter ? units.filter(matchesFilter) : units;
+  // Gross total of the visible charges (both split halves count, as both appear on the statement).
+  const filterTotal = methodFilter
+    ? filteredUnits.reduce((s, u) => s + (u.kind === "split" ? u.group.reduce((g, e) => g + e.amount, 0) : u.entry.amount), 0)
+    : 0;
+
   // Credits (and any non-personal entry) can't carry a category — matches bulkCategorize's own
   // skip rule below — so the Categorise button should only appear when the selection actually has
   // something categorisable, otherwise picking a category silently does nothing.
@@ -1014,8 +1039,9 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
     (u.kind === "single" && u.entry.type === "personal") || u.kind === "split"
   )).length;
 
-  // During a drag, render the live working order; otherwise the sorted order.
-  const renderUnits = dragList || units;
+  // During a drag, render the live working order; otherwise the (optionally filtered) sorted order.
+  // Dragging only happens in edit mode, which clears any filter, so the two never overlap.
+  const renderUnits = dragList || filteredUnits;
 
   // Deleting one half of a split removes both halves, since a lone remainder is meaningless.
   // Captures the full object(s) via onCapture before deleting, so Undo can restore them —
@@ -1037,6 +1063,9 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
   }
 
   function exitEdit() { setEditMode(false); setSelected(new Set()); setConfirmBulk(false); setShowMove(false); setShowCategorize(false); }
+  // Entering edit mode clears any active filter — reorder redistributes order values across the
+  // rendered rows, which a partial (filtered) list would corrupt, so the two are kept exclusive.
+  function enterEdit() { setMethodFilter(null); setEditMode(true); }
 
   // Bulk delete every selected unit, expanding split groups to both halves (like handleDelete).
   // Only captures for Undo when exactly one unit was selected — a bulk delete of many has no
@@ -1166,7 +1195,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
         {(units.length > 0 || lastDeleted) && (
           <div style={{ display:"flex", gap:6 }}>
             {lastDeleted && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={onUndo}>Undo</button>}
-            {units.length > 0 && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => editMode ? exitEdit() : setEditMode(true)}>{editMode ? "Done" : "Edit"}</button>}
+            {units.length > 0 && <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => editMode ? exitEdit() : enterEdit()}>{editMode ? "Done" : "Edit"}</button>}
           </div>
         )}
       </div>
@@ -1178,6 +1207,26 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
         </div>
         {over > 0 && <div style={{ color:"#ef4444", fontSize:11, marginTop:4, fontWeight:500 }}>↓ {fmt(over)} over</div>}
       </div>
+      {/* Payment-type filter: narrow the list to one card to cross-check against its statement.
+          Only offered when more than one payment type is in use, and hidden in edit mode (reorder
+          needs the full list). Shows all charges on the card (personal, work, split), not credits. */}
+      {!editMode && usedMethods.length >= 2 && (
+        <div style={{ marginTop:12 }}>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:6 }}>
+            <button style={{ ...S.weekPill, ...(methodFilter === null ? S.weekPillActive : {}) }} onClick={() => setMethodFilter(null)}>All</button>
+            {usedMethods.map(m => (
+              <button key={m.id} style={{ ...S.weekPill, display:"inline-flex", alignItems:"center", gap:6, ...(methodFilter === m.id ? S.weekPillActive : {}) }} onClick={() => setMethodFilter(m.id)}>
+                <span style={{ ...S.dot, background: m.color }} />{m.name}
+              </button>
+            ))}
+          </div>
+          {methodFilter && (
+            <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:8 }}>
+              {filteredUnits.length} transaction{filteredUnits.length === 1 ? "" : "s"} · {fmt(filterTotal)} <span style={{ color:"var(--text-muted)" }}>as charged</span>
+            </div>
+          )}
+        </div>
+      )}
       <div style={{ marginTop:12 }}>
         {renderUnits.map(unit => (
           <div key={unit.id} ref={el => { if (el) rowRefs.current[unit.id] = el; else delete rowRefs.current[unit.id]; }}
@@ -1195,12 +1244,13 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
           </div>
         ))}
         {units.length === 0 && <div style={{ color:"var(--text-secondary)", fontSize:13, padding:"12px 0" }}>Nothing logged</div>}
+        {units.length > 0 && renderUnits.length === 0 && <div style={{ color:"var(--text-secondary)", fontSize:13, padding:"12px 0" }}>No transactions on this payment type</div>}
       </div>
       {!editMode ? (
         <div style={{ display:"flex", gap:8, marginTop:12 }}>
           <button style={{ ...S.actionBtn, flex:1 }} onClick={onAddEntry}>Log spend</button>
           {lastDeleted && <button style={S.editToggle} onClick={onUndo}>Undo</button>}
-          {units.length > 0 && <button style={S.editToggle} onClick={() => setEditMode(true)}>Edit</button>}
+          {units.length > 0 && <button style={S.editToggle} onClick={enterEdit}>Edit</button>}
         </div>
       ) : (
         <>
@@ -2038,7 +2088,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
 }
 
 // ─── Summary View ─────────────────────────────────────────────────────────────
-function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport }) {
+function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onEditEntry }) {
   const [methodDetail, setMethodDetail] = useState(null); // method name or null
   const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
 
@@ -2108,10 +2158,10 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     const match = (c) => catId ? c === catId : !(c && CATEGORY_BY_ID[c]);
     const fromEntries = state.entries
       .filter(e => e.type === "personal" && match(e.category))
-      .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method }));
+      .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method, entry: e }));
     const fromPins = state.pins
       .filter(p => p.type !== "business" && p.type !== "excluded" && match(p.category))
-      .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", method: p.method }));
+      .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", method: p.method, pinned: true }));
     return [...fromEntries, ...fromPins].sort((a, b) => {
       if (!a.date) return 1;
       if (!b.date) return -1;
@@ -2274,6 +2324,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
           cat={categoryDetail === "uncat" ? null : CATEGORY_BY_ID[categoryDetail]}
           transactions={transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail)}
           total={categoryDetail === "uncat" ? uncategorisedTotal : (byCategory[categoryDetail] || 0)}
+          onEditEntry={onEditEntry ? (entry) => { setCategoryDetail(null); onEditEntry(entry); } : null}
           onClose={() => setCategoryDetail(null)} />
       )}
     </div>
@@ -2324,7 +2375,7 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
 // ─── Category Detail Modal ────────────────────────────────────────────────────
 // Drill-down from the Summary "By category" card: the personal transactions (entries + pins)
 // behind one category's total. `cat` is a category object, or null for Uncategorised.
-function CategoryDetailModal({ cat, transactions, total, onClose }) {
+function CategoryDetailModal({ cat, transactions, total, onEditEntry, onClose }) {
   const name = cat ? cat.name : "Uncategorised";
   return (
     <Modal onClose={onClose} title={`${name} spend`}>
@@ -2339,16 +2390,23 @@ function CategoryDetailModal({ cat, transactions, total, onClose }) {
       </div>
       <div style={{ maxHeight:360, overflowY:"auto" }}>
         {transactions.length === 0 && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>No transactions yet</div>}
-        {transactions.map((t, i) => (
-          <div key={i} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none" }}>
+        {transactions.map((t, i) => {
+          // Entry-backed rows are tappable to edit (mainly to re-categorise) via the standard
+          // Edit spend modal. Pinned rows stay read-only here — they're managed on the Pinned tab.
+          const editable = t.entry && onEditEntry;
+          return (
+          <div key={i} onClick={editable ? () => onEditEntry(t.entry) : undefined}
+               style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" }}>
             <span style={{ ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" }} />
             <div style={{ flex:1 }}>
               <div style={{ fontSize:13, color:"var(--text-primary)" }}>{t.desc}</div>
               {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
             </div>
             <span style={{ fontWeight:600, fontSize:13, color:"var(--text-primary)" }}>{fmt(t.amount)}</span>
+            {editable && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
           </div>
-        ))}
+          );
+        })}
       </div>
     </Modal>
   );
