@@ -47,6 +47,12 @@
   const VAULT_KEY = "spendtracker_vault";   // legacy localStorage location (migrated away)
   const LEGACY_KEY = "spendtracker_v6";     // the old *plaintext* store, migrated then deleted
 
+  // Timestamp of the last successful export — unencrypted (like PRE_THEME_KEY below) so Settings
+  // can show "Last backed up: …" without needing the vault unlocked. Purely a freshness hint, not
+  // part of the account itself. app.jsx reads this same key for its display, so the name must stay
+  // in sync there.
+  const LAST_BACKUP_KEY = "spendtracker_last_backup";
+
   // Cosmetic-only theme preference for the screens that render before unlock (lock screen,
   // onboarding) — these can't read the encrypted state.theme, so this small unencrypted flag is
   // the only way to remember the user's choice across a reload. Not authoritative: once
@@ -417,7 +423,12 @@
     requestLock: () => Session.lock(),
     // Export the encrypted account as portable JSON (flushes any pending save first so the
     // backup is fully current). Import replaces this device's account with the backup.
-    exportBackup: async () => { try { await Session._queue; } catch (e) { /* ignore */ } return exportVaultJSON(); },
+    exportBackup: async () => {
+      try { await Session._queue; } catch (e) { /* ignore */ }
+      const json = await exportVaultJSON(); // throws if there's nothing to export — timestamp is only written on success
+      try { localStorage.setItem(LAST_BACKUP_KEY, new Date().toISOString()); } catch (e) { /* ignore */ }
+      return json;
+    },
     importBackup: (text) => importVaultJSON(text),
     // Erase every local trace of the vault, then reload back to first-run setup.
     // Note: a Face ID passkey lives in the OS keychain, not here, so it can't be
