@@ -261,6 +261,9 @@ function periodBounds(payYear, payMonth, kind, day) {
 function isScheduledPin(p) {
     return !!(p.freq && p.freq !== "none");
 }
+// A stable, week-independent key for one dated occurrence of a scheduled pin. Used to hang
+// per-occurrence overrides (skip/move/reorder) off the pin so a move never changes the key.
+const occKeyOf = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 function makePinEntry(pin, weekIndex, date) {
     return {
         id: "pin-" + pin.id + "-" + weekIndex + "-" + date.getDate() + "-" + date.getMonth(),
@@ -275,10 +278,24 @@ function makePinEntry(pin, weekIndex, date) {
         order: date.getTime(),
         pinned: true,
         pinId: pin.id,
+        occKey: occKeyOf(date), // identity for this occurrence's skip/move/order overrides
     };
 }
 function expandScheduledPins(pins, weeks) {
     const out = [];
+    // Emit one occurrence, applying the pin's per-occurrence overrides: skip drops it entirely; a
+    // move sends it to another week (its date is unchanged); a reorder replaces its sort order. None
+    // of these touch the recurring schedule itself — they live keyed by occKey on the pin.
+    const pushOcc = (p, naturalWeek, date) => {
+        const k = occKeyOf(date);
+        if ((p.skips || []).includes(k))
+            return;
+        const weekIndex = (p.moves && p.moves[k] != null) ? p.moves[k] : naturalWeek;
+        const entry = makePinEntry(p, weekIndex, date);
+        if (p.orders && p.orders[k] != null)
+            entry.order = p.orders[k];
+        out.push(entry);
+    };
     for (const p of pins) {
         if (!isScheduledPin(p))
             continue;
@@ -288,7 +305,7 @@ function expandScheduledPins(pins, weeks) {
             for (const w of weeks) {
                 const match = w.days.find(d => d.getDay() === p.day);
                 if (match)
-                    out.push(makePinEntry(p, w.index, match));
+                    pushOcc(p, w.index, match);
             }
         }
         else if (p.freq === "monthly") {
@@ -313,13 +330,13 @@ function expandScheduledPins(pins, weeks) {
                 }
             }
             if (target)
-                out.push(makePinEntry(p, targetWeek, target));
+                pushOcc(p, targetWeek, target);
         }
         else if (p.freq === "daily") {
             // One occurrence per calendar day in the period, in every week.
             for (const w of weeks) {
                 for (const d of w.days)
-                    out.push(makePinEntry(p, w.index, d));
+                    pushOcc(p, w.index, d);
             }
         }
     }
@@ -507,7 +524,7 @@ function App() {
     const [showCustomise, setShowCustomise] = useState(false); // appearance / payment types / categories modal
     // The most recently deleted entry/credit (or split pair), kept verbatim so Undo can restore it
     // exactly. Global (not per-week/tab) and not persisted — survives navigation, clears on reload.
-    const [lastDeleted, setLastDeleted] = useState(null); // {kind:"entry",entry} | {kind:"credit",credit} | {kind:"split",your,their}
+    const [lastDeleted, setLastDeleted] = useState(null); // {kind:"entry",entry} | {kind:"credit",credit} | {kind:"split",your,their} | {kind:"pin",pin} | {kind:"pinSkip",pinId,occKey}
     const [helpNonce, setHelpNonce] = useState(0); // bumped by the help button / new-user hint; each bump re-opens & scrolls to Settings' "How it works" card
     const [viewingPastIndex, setViewingPastIndex] = useState(null); // index into state.monthHistory, or null for live
     // If history trims (caps at 12 months) while a past period is being viewed, the index
@@ -710,8 +727,21 @@ function App() {
             setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex });
         }
     }
-    // Restores the most recently deleted entry/credit (or split pair) verbatim — same id/order/
-    // weekIndex, so it reappears in its original week and position. Global, not per-week, so it
+    // Per-occurrence overrides for a scheduled pin, stored on the pin itself so the recurring pattern
+    // is untouched: `skips` (occurrences to omit), `moves` (occKey → week), `orders` (occKey → order).
+    // Keyed by a week-independent occKey (see occKeyOf/expandScheduledPins), so a move/skip only ever
+    // affects this cycle's dated occurrence. Live period only — pins are read-only while viewing past.
+    const patchPin = (pinId, fn) => {
+        const p = state.pins.find(x => x.id === pinId);
+        if (p)
+            dispatch({ type: "UPD_PIN", pin: fn(p) });
+    };
+    const skipPinOccurrence = (pinId, occKey) => patchPin(pinId, p => ({ ...p, skips: [...(p.skips || []), occKey] }));
+    const unskipPinOccurrence = (pinId, occKey) => patchPin(pinId, p => ({ ...p, skips: (p.skips || []).filter(k => k !== occKey) }));
+    const movePinOccurrence = (pinId, occKey, weekIndex) => patchPin(pinId, p => ({ ...p, moves: { ...(p.moves || {}), [occKey]: weekIndex } }));
+    const reorderPinOccurrence = (pinId, occKey, order) => patchPin(pinId, p => ({ ...p, orders: { ...(p.orders || {}), [occKey]: order } }));
+    // Restores the most recently deleted entry/credit/pin (or split pair, or a skipped pin occurrence)
+    // verbatim — same id/order/weekIndex, so it reappears where it was. Global, not per-week, so it
     // survives switching tabs/weeks; plain useState (not persisted `state`) so it clears on reload.
     function undoLastDeleted() {
         if (!lastDeleted)
@@ -720,6 +750,10 @@ function App() {
             addEntry(lastDeleted.entry);
         else if (lastDeleted.kind === "credit")
             addCredit(lastDeleted.credit);
+        else if (lastDeleted.kind === "pin")
+            dispatch({ type: "ADD_PIN", pin: lastDeleted.pin });
+        else if (lastDeleted.kind === "pinSkip")
+            unskipPinOccurrence(lastDeleted.pinId, lastDeleted.occKey);
         else {
             if (lastDeleted.your)
                 addEntry(lastDeleted.your);
@@ -774,13 +808,15 @@ function App() {
                         "d left")))),
             weeks.filter(w => w.index === activeWeek).map(week => {
                 var _a;
-                return (React.createElement(WeekPanel, { key: week.index, week: week, weeks: weeks, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit, onEditEntry: openEditEntry, onEditCredit: (credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex }), onUpdEntry: updEntry, onUpdCredit: updCredit, onCapture: setLastDeleted, lastDeleted: lastDeleted, onUndo: undoLastDeleted }));
+                return (React.createElement(WeekPanel, { key: week.index, week: week, weeks: weeks, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit, onEditEntry: openEditEntry, onEditCredit: (credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex }), onUpdEntry: updEntry, onUpdCredit: updCredit, onCapture: setLastDeleted, lastDeleted: lastDeleted, onUndo: undoLastDeleted, onSkipPin: viewingPast ? null : skipPinOccurrence, onMovePin: viewingPast ? null : movePinOccurrence, onReorderPin: viewingPast ? null : reorderPinOccurrence }));
             }))),
         tab === "pins" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
                 React.createElement("div", { style: S.sectionTitle }, "Fixed costs"),
-                React.createElement("button", { style: S.addBtn, onClick: () => setShowAddPin(true) }, "+ Pin")),
-            React.createElement("div", { style: S.pinGrid }, state.pins.length === 0 ? React.createElement("div", { style: S.empty }, "No pinned costs") : state.pins.map(p => React.createElement(PinCard, { key: p.id, pin: p, onEdit: () => setEditPin(p), onDelete: () => dispatch({ type: "DEL_PIN", id: p.id }) }))))),
+                React.createElement("div", { style: { display: "flex", gap: 6 } },
+                    lastDeleted && lastDeleted.kind === "pin" && React.createElement("button", { style: S.editToggle, onClick: undoLastDeleted }, "Undo"),
+                    React.createElement("button", { style: S.addBtn, onClick: () => setShowAddPin(true) }, "+ Pin"))),
+            React.createElement("div", { style: S.pinGrid }, state.pins.length === 0 ? React.createElement("div", { style: S.empty }, "No pinned costs") : state.pins.map(p => React.createElement(PinCard, { key: p.id, pin: p, onEdit: () => setEditPin(p), onDelete: () => { setLastDeleted({ kind: "pin", pin: p }); dispatch({ type: "DEL_PIN", id: p.id }); } }))))),
         tab === "savings" && (() => {
             // Savings = accumulated leftover budget from COMPLETED months only (i.e. the
             // months archived into monthHistory). The current live month is not counted
@@ -909,7 +945,10 @@ function App() {
         showCustomise && React.createElement(CustomiseModal, { state: state, dispatch: dispatch, onClose: () => setShowCustomise(false) })));
 }
 // ─── Week Panel ───────────────────────────────────────────────────────────────
-function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, categories, onAddCategory, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit, onUpdEntry, onUpdCredit, onCapture, lastDeleted, onUndo }) {
+function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, categories, onAddCategory, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit, onUpdEntry, onUpdCredit, onCapture, lastDeleted, onUndo, onSkipPin, onMovePin, onReorderPin }) {
+    // Scheduled-pin occurrences can be skipped/moved/reordered per-occurrence only in the live period
+    // (these handlers are null while viewing a past period, keeping archived pins read-only).
+    const pinEditable = !!onSkipPin;
     const personal = entries.filter(e => e.type === "personal");
     const spent = personal.reduce((s, e) => s + e.amount, 0);
     const over = spent - weeklyBudget;
@@ -975,7 +1014,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
     // Credits (and any non-personal entry) can't carry a category — matches bulkCategorize's own
     // skip rule below — so the Categorise button should only appear when the selection actually has
     // something categorisable, otherwise picking a category silently does nothing.
-    const categorisableSelectedCount = units.filter(u => selected.has(u.id) && ((u.kind === "single" && u.entry.type === "personal") || u.kind === "split")).length;
+    const categorisableSelectedCount = units.filter(u => selected.has(u.id) && ((u.kind === "single" && !u.pinned && u.entry.type === "personal") || u.kind === "split")).length;
     // During a drag, render the live working order; otherwise the (optionally filtered) sorted order.
     // Dragging only happens in edit mode, which clears any filter, so the two never overlap.
     const renderUnits = dragList || filteredUnits;
@@ -1008,7 +1047,9 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
         const toDelete = units.filter(u => selected.has(u.id));
         if (toDelete.length === 1) {
             const u = toDelete[0];
-            if (u.kind === "credit")
+            if (u.pinned)
+                onCapture({ kind: "pinSkip", pinId: u.entry.pinId, occKey: u.entry.occKey });
+            else if (u.kind === "credit")
                 onCapture({ kind: "credit", credit: u.credit });
             else if (u.kind === "single")
                 onCapture({ kind: "entry", entry: u.entry });
@@ -1016,7 +1057,10 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
                 onCapture({ kind: "split", your: u.group.find(e => e.type === "personal") || null, their: u.group.find(e => e.type === "excluded") || null });
         }
         toDelete.forEach(u => {
-            if (u.kind === "credit")
+            // A pinned occurrence isn't a real entry — "deleting" it skips just this occurrence.
+            if (u.pinned)
+                onSkipPin(u.entry.pinId, u.entry.occKey);
+            else if (u.kind === "credit")
                 onDelCredit(u.credit.id);
             else if (u.kind === "single")
                 onDelEntry(u.entry.id);
@@ -1030,7 +1074,10 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
         units.forEach(u => {
             if (!selected.has(u.id))
                 return;
-            if (u.kind === "credit")
+            // A pinned occurrence moves via a per-occurrence week override, not by mutating a real entry.
+            if (u.pinned)
+                onMovePin(u.entry.pinId, u.entry.occKey, newWeek);
+            else if (u.kind === "credit")
                 onUpdCredit({ ...u.credit, weekIndex: newWeek });
             else if (u.kind === "single")
                 onUpdEntry({ ...u.entry, weekIndex: newWeek });
@@ -1047,7 +1094,8 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
         units.forEach(u => {
             if (!selected.has(u.id))
                 return;
-            if (u.kind === "single" && u.entry.type === "personal")
+            // Pins keep their category on the Pinned tab — not editable via the week-log bulk action.
+            if (u.kind === "single" && !u.pinned && u.entry.type === "personal")
                 onUpdEntry({ ...u.entry, category: catId || undefined });
             else if (u.kind === "split") {
                 const your = u.group.find(e => e.type === "personal");
@@ -1064,15 +1112,17 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
     function commitReorder(finalUnits) {
         if (!finalUnits)
             return;
-        // Pinned (scheduled-pin) rows are read-only and derived — never reorder or persist them,
-        // and keep their order values out of the redistribution pool.
-        const movable = finalUnits.filter(u => !u.pinned);
+        // Pinned occurrences reorder too (live period only) via a per-occurrence order override; they
+        // share the same redistribution pool as entries/credits so positions interleave correctly.
+        const movable = pinEditable ? finalUnits : finalUnits.filter(u => !u.pinned);
         const values = movable.map(u => u.order).sort((a, b) => b - a);
         movable.forEach((u, i) => {
             const newOrder = values[i];
             if (u.order === newOrder)
                 return;
-            if (u.kind === "credit")
+            if (u.pinned)
+                onReorderPin(u.entry.pinId, u.entry.occKey, newOrder);
+            else if (u.kind === "credit")
                 onUpdCredit({ ...u.credit, order: newOrder });
             else if (u.kind === "single")
                 onUpdEntry({ ...u.entry, order: newOrder });
@@ -1184,11 +1234,11 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
                     rowRefs.current[unit.id] = el;
                 else
                     delete rowRefs.current[unit.id]; }, style: { display: "flex", alignItems: "center", gap: 6, ...(dragId === unit.id ? S.rowDragging : {}) } },
-                editMode && (unit.pinned
+                editMode && (unit.pinned && !pinEditable
                     ? React.createElement("span", { style: { ...S.checkbox, opacity: 0.25, cursor: "default" } })
                     : React.createElement("button", { style: { ...S.checkbox, ...(selected.has(unit.id) ? { background: chipColors("#22c55e").bg, borderColor: "#22c55e" } : {}) }, onClick: () => toggleSelect(unit.id) }, selected.has(unit.id) ? "✓" : "")),
                 React.createElement("div", { style: { flex: 1, minWidth: 0 } }, renderUnitContent(unit)),
-                editMode && !unit.pinned && (React.createElement("button", { style: S.dragHandle, "aria-label": "Drag to reorder", onMouseDown: (e) => { e.preventDefault(); e.stopPropagation(); beginDrag(e.clientY, unit, false); }, onTouchStart: (e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, unit, true); } }, "\u2261"))))),
+                editMode && (!unit.pinned || pinEditable) && (React.createElement("button", { style: S.dragHandle, "aria-label": "Drag to reorder", onMouseDown: (e) => { e.preventDefault(); e.stopPropagation(); beginDrag(e.clientY, unit, false); }, onTouchStart: (e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, unit, true); } }, "\u2261"))))),
             units.length === 0 && React.createElement("div", { style: { color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" } }, "Nothing logged"),
             units.length > 0 && renderUnits.length === 0 && React.createElement("div", { style: { color: "var(--text-secondary)", fontSize: 13, padding: "12px 0" } }, "No transactions on this payment type")),
         !editMode ? (React.createElement("div", { style: { display: "flex", gap: 8, marginTop: 12 } },
@@ -1440,11 +1490,14 @@ function PaymentMethodsSettingsCard({ state, dispatch }) {
 // completed drag just persists the reordered array directly.
 function CategoriesSettingsCard({ state, dispatch }) {
     const categories = state.categories;
-    // Every category id referenced by a live or archived entry — such categories can't be removed.
+    // Every category id referenced by a live or archived entry OR pin — such categories can't be
+    // removed (pins carry a category too, so a pin-only category must lock just like an entry does).
     const used = new Set();
     [state, ...(state.monthHistory || [])].forEach(src => {
         (src.entries || []).forEach(e => { if (e.category)
             used.add(e.category); });
+        (src.pins || []).forEach(p => { if (p.category)
+            used.add(p.category); });
     });
     const setCats = (cs) => dispatch({ type: "SETTINGS", patch: { categories: cs } });
     const update = (id, patch) => setCats(categories.map(c => c.id === id ? { ...c, ...patch } : c));
