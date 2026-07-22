@@ -875,7 +875,7 @@ function App() {
                                 fmt(r.budget))),
                         React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#22c55e" : "#f87171" } }, signed(r.saved))))))));
         })(),
-        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onEditEntry: openEditEntry })),
+        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onEditEntry: openEditEntry, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
@@ -2056,9 +2056,11 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
             } }, "Save")));
 }
 // ─── Summary View ─────────────────────────────────────────────────────────────
-function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onEditEntry }) {
+function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onEditEntry, onGoToWeek }) {
     const [methodDetail, setMethodDetail] = useState(null); // method name or null
     const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
+    const [spendView, setSpendView] = useState("txn"); // "txn" = largest individual, "label" = grouped by name
+    const [labelDetail, setLabelDetail] = useState(null); // the label group being drilled into, or null
     // Gross (as charged) per card = everything that hit each card — all entries + all pins.
     // This matches the card's own statement (Amex app etc.), since work and full split amounts
     // are charged in full and reimbursed separately. Credits are income, not card charges, and
@@ -2108,10 +2110,12 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     function transactionsFor(method) {
         const fromEntries = state.entries
             .filter(e => e.method === method)
-            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, type: e.type }));
+            // A scheduled-pin virtual entry (e.pinned) isn't a real editable row — leave it without an
+            // entry ref so the drill-down keeps it read-only, matching By category / the week log.
+            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, type: e.type, entry: e.pinned ? undefined : e, pinned: !!e.pinned }));
         const fromPins = state.pins
             .filter(p => p.method === method)
-            .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", type: p.type === "business" ? "business" : p.type === "excluded" ? "excluded" : "personal" }));
+            .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", type: p.type === "business" ? "business" : p.type === "excluded" ? "excluded" : "personal", pinned: true }));
         return [...fromEntries, ...fromPins].sort((a, b) => {
             if (!a.date)
                 return 1;
@@ -2126,7 +2130,9 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         const match = (c) => catId ? c === catId : !(c && CATEGORY_BY_ID[c]);
         const fromEntries = state.entries
             .filter(e => e.type === "personal" && match(e.category))
-            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method, entry: e }));
+            // Guard scheduled-pin virtuals (e.pinned): they carry a synthetic id UPD_ENTRY can't match,
+            // so they must stay read-only here rather than opening an editor that no-ops on save.
+            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method, entry: e.pinned ? undefined : e, pinned: !!e.pinned }));
         const fromPins = state.pins
             .filter(p => p.type !== "business" && p.type !== "excluded" && match(p.category))
             .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", method: p.method, pinned: true }));
@@ -2138,11 +2144,36 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
             return new Date(b.date) - new Date(a.date);
         });
     }
-    // Largest individual spends this month (entries + pins, personal + business — excludes credits and the "not yours" portion of splits)
-    const allSpendItems = [
-        ...state.entries.filter(e => e.type !== "credit" && e.type !== "excluded").map(e => ({ desc: e.label || METHOD_NAME[e.method] || e.method, amount: e.amount, method: e.method, type: e.type })),
-        ...state.pins.filter(p => p.type !== "excluded").map(p => ({ desc: p.label, amount: p.amount || 0, method: p.method, type: p.type })),
-    ].sort((a, b) => b.amount - a.amount).slice(0, 5);
+    // Every personal/business spend this period (entries + pins), excluding credits and the "not yours"
+    // portion of splits. Carries entry/pinned so both the individual list and the by-label drill can
+    // open real entries in the editor (scheduled-pin virtuals + flat pins stay read-only).
+    const spendItems = [
+        ...state.entries.filter(e => e.type !== "credit" && e.type !== "excluded").map(e => ({ desc: e.label || METHOD_NAME[e.method] || e.method, amount: e.amount, method: e.method, type: e.type, date: e.date, entry: e.pinned ? undefined : e, pinned: !!e.pinned })),
+        ...state.pins.filter(p => p.type !== "excluded").map(p => ({ desc: p.label, amount: p.amount || 0, method: p.method, type: p.type, date: null, pinned: true })),
+    ];
+    // Largest individual spends (top 5 by amount).
+    const allSpendItems = [...spendItems].sort((a, b) => b.amount - a.amount).slice(0, 5);
+    // Cumulative spends grouped by (normalised) label — top 5 groups by summed total. A group whose
+    // members share one card keeps that card's dot; mixed cards/types fall back to neutral.
+    const labelGroups = (() => {
+        const map = new Map();
+        spendItems.forEach(it => {
+            const key = (it.desc || "").trim().toLowerCase();
+            let g = map.get(key);
+            if (!g) {
+                g = { desc: it.desc, total: 0, count: 0, method: it.method, type: it.type, items: [] };
+                map.set(key, g);
+            }
+            g.total += it.amount;
+            g.count += 1;
+            g.items.push(it);
+            if (g.method !== it.method)
+                g.method = null;
+            if (g.type !== it.type)
+                g.type = "mixed";
+        });
+        return [...map.values()].sort((a, b) => b.total - a.total).slice(0, 5);
+    })();
     // Source split: how much of personal spend came from pins vs quick-logged entries
     const sourcePct = totalSpent > 0 ? Math.round((totalPinned / totalSpent) * 100) : 0;
     return (React.createElement("div", { style: { padding: "12px 16px" } },
@@ -2203,16 +2234,17 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Weekly breakdown"),
             weekRows.map(({ week, total, byMethod, budget }) => (React.createElement("div", { key: week.index, style: { marginBottom: week.index < weeks.length ? 12 : 0, paddingBottom: week.index < weeks.length ? 12 : 0, borderBottom: week.index < weeks.length ? "1px solid var(--border)" : "none" } },
-                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 } },
+                React.createElement("div", { onClick: onGoToWeek ? () => onGoToWeek(week.index) : undefined, style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, cursor: onGoToWeek ? "pointer" : "default" } },
                     React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-heading)" } },
                         "Week ",
                         week.index),
-                    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: total > budget ? "#ef4444" : "var(--text-body)" } },
+                    React.createElement("span", { style: { fontSize: 13, fontWeight: 700, color: total > budget ? "#ef4444" : "var(--text-body)", display: "inline-flex", alignItems: "baseline", gap: 6 } },
                         fmt(total),
                         " ",
                         React.createElement("span", { style: { color: "var(--text-secondary)", fontWeight: 400 } },
                             "/ ",
-                            fmt(budget)))),
+                            fmt(budget)),
+                        onGoToWeek && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 16, fontWeight: 700, lineHeight: 1 } }, "\u203A"))),
                 React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 } },
                     METHODS.filter(m => byMethod[m.id] > 0).map(m => (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-tertiary)" } },
                         React.createElement("span", { style: { ...S.dot, background: m.color } }),
@@ -2220,14 +2252,36 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                         " ",
                         fmt(byMethod[m.id])))),
                     METHODS.every(m => byMethod[m.id] === 0) && React.createElement("span", { style: { fontSize: 11, color: "var(--text-muted)" } }, "Nothing logged")))))),
-        allSpendItems.length > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
-            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Largest spends"),
-            allSpendItems.map((item, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid var(--border)" : "none" } },
-                React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[item.method] || "var(--text-secondary)" } }),
-                React.createElement("span", { style: { flex: 1, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" } },
-                    item.desc,
-                    item.type === "business" && React.createElement("span", { style: { ...S.badge, background: chipColors("#f59e0b").bg, color: "#f59e0b" } }, "work")),
-                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(item.amount))))))),
+        allSpendItems.length > 0 && (() => {
+            const segBtn = (on) => ({ background: on ? "var(--surface-2)" : "transparent", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 6, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "4px 8px", fontSize: 11, fontWeight: on ? 600 : 500, cursor: "pointer" });
+            return (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+                React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8 } },
+                    React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" } }, "Largest spends"),
+                    React.createElement("div", { style: { display: "flex", gap: 4 } },
+                        React.createElement("button", { style: segBtn(spendView === "txn"), onClick: () => setSpendView("txn") }, "By transaction"),
+                        React.createElement("button", { style: segBtn(spendView === "label"), onClick: () => setSpendView("label") }, "By label"))),
+                spendView === "txn"
+                    ? allSpendItems.map((item, i) => {
+                        // Real entries tap to edit; pins (no entry ref) stay read-only.
+                        const editable = item.entry && onEditEntry;
+                        return (React.createElement("div", { key: i, onClick: editable ? () => onEditEntry(item.entry) : undefined, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" } },
+                            React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[item.method] || "var(--text-secondary)" } }),
+                            React.createElement("span", { style: { flex: 1, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" } },
+                                item.desc,
+                                item.type === "business" && React.createElement("span", { style: { ...S.badge, background: chipColors("#f59e0b").bg, color: "#f59e0b" } }, "work")),
+                            React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(item.amount)),
+                            editable && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15 } }, "\u203A")));
+                    })
+                    : labelGroups.map((g, i) => (React.createElement("div", { key: i, onClick: () => setLabelDetail(g), style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < labelGroups.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" } },
+                        React.createElement("span", { style: { ...S.dot, background: g.method ? (METHOD_COLOR[g.method] || "var(--text-secondary)") : "var(--text-secondary)" } }),
+                        React.createElement("span", { style: { flex: 1, fontSize: 13, color: g.type === "business" ? "#f59e0b" : "var(--text-body)" } },
+                            g.desc,
+                            g.count > 1 && React.createElement("span", { style: { color: "var(--text-secondary)", fontWeight: 400 } },
+                                " \u00D7",
+                                g.count)),
+                        React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: g.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(g.total)),
+                        React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15 } }, "\u203A"))))));
+        })(),
         totalSpent > 0 && totalPinned > 0 && totalEntries > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Spend source"),
             React.createElement("div", { style: { height: 6, background: "var(--surface-2)", borderRadius: 3, overflow: "hidden", marginBottom: 8, display: "flex" } },
@@ -2241,11 +2295,12 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                     "Quick-logged ",
                     fmt(totalEntries),
                     " \u25CF")))),
-        methodDetail && (React.createElement(MethodDetailModal, { method: methodDetail, transactions: transactionsFor(methodDetail), gross: grossByMethod[methodDetail], net: methodTotals[methodDetail], onClose: () => setMethodDetail(null) })),
-        categoryDetail && (React.createElement(CategoryDetailModal, { cat: categoryDetail === "uncat" ? null : CATEGORY_BY_ID[categoryDetail], transactions: transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail), total: categoryDetail === "uncat" ? uncategorisedTotal : (byCategory[categoryDetail] || 0), onEditEntry: onEditEntry ? (entry) => { setCategoryDetail(null); onEditEntry(entry); } : null, onClose: () => setCategoryDetail(null) }))));
+        methodDetail && (React.createElement(MethodDetailModal, { method: methodDetail, transactions: transactionsFor(methodDetail), gross: grossByMethod[methodDetail], net: methodTotals[methodDetail], onEditEntry: onEditEntry ? (entry) => { setMethodDetail(null); onEditEntry(entry); } : null, onClose: () => setMethodDetail(null) })),
+        categoryDetail && (React.createElement(CategoryDetailModal, { cat: categoryDetail === "uncat" ? null : CATEGORY_BY_ID[categoryDetail], transactions: transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail), total: categoryDetail === "uncat" ? uncategorisedTotal : (byCategory[categoryDetail] || 0), onEditEntry: onEditEntry ? (entry) => { setCategoryDetail(null); onEditEntry(entry); } : null, onClose: () => setCategoryDetail(null) })),
+        labelDetail && (React.createElement(LabelDetailModal, { group: labelDetail, onEditEntry: onEditEntry ? (entry) => { setLabelDetail(null); onEditEntry(entry); } : null, onClose: () => setLabelDetail(null) }))));
 }
 // ─── Method Detail Modal ──────────────────────────────────────────────────────
-function MethodDetailModal({ method, transactions, gross, net, onClose }) {
+function MethodDetailModal({ method, transactions, gross, net, onEditEntry, onClose }) {
     const col = METHOD_COLOR[method];
     const reimbursable = gross - net;
     return (React.createElement(Modal, { onClose: onClose, title: `${METHOD_NAME[method] || method} transactions` },
@@ -2266,14 +2321,20 @@ function MethodDetailModal({ method, transactions, gross, net, onClose }) {
                 " reimbursable")),
         React.createElement("div", { style: { maxHeight: 360, overflowY: "auto" } },
             transactions.length === 0 && React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "12px 0", textAlign: "center" } }, "No transactions yet"),
-            transactions.map((t, i) => (React.createElement("div", { key: i, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none" } },
-                React.createElement("div", { style: { flex: 1 } },
-                    React.createElement("div", { style: { fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : "var(--text-primary)" } },
-                        t.desc,
-                        t.type === "business" && React.createElement("span", { style: { ...S.badge, background: chipColors("#f59e0b").bg, color: "#f59e0b" } }, "work"),
-                        t.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: chipColors("#a855f7").bg, color: "#a855f7" } }, "reimbursable")),
-                    t.date && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } }, dateStr(new Date(t.date)))),
-                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : col } }, fmt(t.amount))))))));
+            transactions.map((t, i) => {
+                // Entry-backed rows tap to open the standard editor (splits route to the split editor via
+                // openEditEntry); pinned rows stay read-only — managed on the Pinned tab.
+                const editable = t.entry && onEditEntry;
+                return (React.createElement("div", { key: i, onClick: editable ? () => onEditEntry(t.entry) : undefined, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" } },
+                    React.createElement("div", { style: { flex: 1 } },
+                        React.createElement("div", { style: { fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : "var(--text-primary)" } },
+                            t.desc,
+                            t.type === "business" && React.createElement("span", { style: { ...S.badge, background: chipColors("#f59e0b").bg, color: "#f59e0b" } }, "work"),
+                            t.type === "excluded" && React.createElement("span", { style: { ...S.badge, background: chipColors("#a855f7").bg, color: "#a855f7" } }, "reimbursable")),
+                        t.date && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } }, dateStr(new Date(t.date)))),
+                    React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : col } }, fmt(t.amount)),
+                    editable && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15, marginLeft: 2 } }, "\u203A")));
+            }))));
 }
 // ─── Category Detail Modal ────────────────────────────────────────────────────
 // Drill-down from the Summary "By category" card: the personal transactions (entries + pins)
@@ -2306,6 +2367,33 @@ function CategoryDetailModal({ cat, transactions, total, onEditEntry, onClose })
                     React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: "var(--text-primary)" } }, fmt(t.amount)),
                     editable && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15, marginLeft: 2 } }, "\u203A")));
             }))));
+}
+// ─── Label Detail Modal ───────────────────────────────────────────────────────
+// Drill-down from the Summary "Largest spends · By label" view: every transaction sharing one
+// name, summed. Entry-backed rows tap to edit (splits route through openEditEntry); pins are
+// read-only, matching the other drill-downs.
+function LabelDetailModal({ group, onEditEntry, onClose }) {
+    const { desc, total, count, items } = group;
+    return (React.createElement(Modal, { onClose: onClose, title: desc },
+        React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px", marginBottom: 14 } },
+            React.createElement("div", { style: { fontSize: 17, fontWeight: 800, color: "var(--text-heading)" } }, fmt(total)),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
+                count,
+                " transaction",
+                count === 1 ? "" : "s")),
+        React.createElement("div", { style: { maxHeight: 360, overflowY: "auto" } }, items.map((t, i) => {
+            const editable = t.entry && onEditEntry;
+            return (React.createElement("div", { key: i, onClick: editable ? () => onEditEntry(t.entry) : undefined, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < items.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" } },
+                React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" } }),
+                React.createElement("div", { style: { flex: 1 } },
+                    React.createElement("div", { style: { fontSize: 13, color: t.type === "business" ? "#f59e0b" : "var(--text-primary)" } },
+                        t.desc,
+                        t.type === "business" && React.createElement("span", { style: { ...S.badge, background: chipColors("#f59e0b").bg, color: "#f59e0b" } }, "work"),
+                        t.pinned && React.createElement("span", { style: { ...S.badge, background: chipColors("#38bdf8").bg, color: "#38bdf8" } }, "\uD83D\uDCCC fixed")),
+                    t.date && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } }, dateStr(new Date(t.date)))),
+                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: t.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(t.amount)),
+                editable && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15, marginLeft: 2 } }, "\u203A")));
+        }))));
 }
 // ─── Export Modal ─────────────────────────────────────────────────────────────
 function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, totalCredits, methodTotals, onClose }) {
