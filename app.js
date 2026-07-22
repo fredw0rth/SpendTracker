@@ -151,6 +151,37 @@ const dayName = (d) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDa
 const monthName = (d) => MONTH_NAMES[d.getMonth()];
 const dateStr = (d) => `${dayName(d)} ${d.getDate()} ${monthName(d)}`;
 const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
+// Unencrypted timestamp of the last successful account export (crypto.js writes it once
+// exportBackup succeeds). Key name must stay in sync with crypto.js's LAST_BACKUP_KEY.
+const LAST_BACKUP_KEY = "spendtracker_last_backup";
+// Coarse "X ago" phrasing for the Settings backup-freshness line — deliberately imprecise
+// (steps down in granularity) since only rough recency matters, not the exact minute.
+function relativeTime(iso) {
+    if (!iso)
+        return null; // new Date(null) is epoch-zero, not Invalid Date, so guard explicitly
+    const then = new Date(iso).getTime();
+    if (isNaN(then))
+        return null;
+    const mins = Math.floor((Date.now() - then) / 60000);
+    if (mins < 1)
+        return "just now";
+    if (mins < 60)
+        return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24)
+        return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+    const days = Math.floor(hours / 24);
+    if (days < 7)
+        return `${days} day${days === 1 ? "" : "s"} ago`;
+    const weeks = Math.floor(days / 7);
+    if (weeks < 5)
+        return `${weeks} week${weeks === 1 ? "" : "s"} ago`;
+    const months = Math.floor(days / 30);
+    if (months < 12)
+        return `${months} month${months === 1 ? "" : "s"} ago`;
+    const years = Math.floor(days / 365);
+    return `${years} year${years === 1 ? "" : "s"} ago`;
+}
 function londonNow() {
     const parts = new Intl.DateTimeFormat("en-CA", {
         timeZone: "Europe/London",
@@ -520,6 +551,14 @@ function App() {
     const [showExport, setShowExport] = useState(false);
     const [showBackup, setShowBackup] = useState(false); // export-account modal
     const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
+    // "Last backed up" readout for Settings — refreshed when the export modal closes, since
+    // crypto.js has already written LAST_BACKUP_KEY by then (it happens as part of the export).
+    const [lastBackup, setLastBackup] = useState(() => { try {
+        return localStorage.getItem(LAST_BACKUP_KEY);
+    }
+    catch {
+        return null;
+    } });
     const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
     const [showCustomise, setShowCustomise] = useState(false); // appearance / payment types / categories modal
     // The most recently deleted entry/credit (or split pair), kept verbatim so Undo can restore it
@@ -925,7 +964,8 @@ function App() {
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Each browser keeps its own separate data \u2014 so Safari, Chrome and the home-screen app each start fresh. Export your account here, then import it in the other browser or on a new phone to carry everything across."),
                 React.createElement("div", { style: { display: "flex", gap: 8 } },
                     React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1 }, onClick: () => setShowBackup(true) }, "Export account"),
-                    React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setShowImportAcct(true) }, "Import account"))),
+                    React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setShowImportAcct(true) }, "Import account")),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 8 } }, lastBackup ? `Last backed up: ${relativeTime(lastBackup)}` : "Never backed up")),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#f87171", marginBottom: 10, textTransform: "uppercase" } }, "Reset"),
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Erase everything on this device \u2014 budget, transactions, history and your passphrase \u2014 and start over from setup. This can't be undone."),
@@ -940,7 +980,10 @@ function App() {
             else
                 dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }, onClose: () => { setShowAddPin(false); setEditPin(null); } }),
         showExport && React.createElement(ExportModal, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, remaining: remaining, totalCredits: totalCredits, methodTotals: methodTotals, onClose: () => setShowExport(false) }),
-        showBackup && React.createElement(BackupModal, { onClose: () => setShowBackup(false) }),
+        showBackup && React.createElement(BackupModal, { onClose: () => { setShowBackup(false); try {
+                setLastBackup(localStorage.getItem(LAST_BACKUP_KEY));
+            }
+            catch (e) { /* ignore */ } } }),
         showImportAcct && React.createElement(ImportBackupModal, { onClose: () => setShowImportAcct(false) }),
         showCustomise && React.createElement(CustomiseModal, { state: state, dispatch: dispatch, onClose: () => setShowCustomise(false) })));
 }
