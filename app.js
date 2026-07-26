@@ -653,10 +653,14 @@ function App() {
     // has nowhere left to spread to, so an overspend there just shows as "over" (the period's last
     // absorber). Lapsed earlier weeks are never touched. Underspend does not roll forward (month-level
     // "remaining" and the per-day-of-month figure already reflect it).
-    function getRebalancedBudgets(weeks, entries, weeklyBudget) {
+    function getRebalancedBudgets(weeks, entries, weeklyBudget, credits) {
         const N = weeks.length;
         const dailyRate = weeklyBudget / 7;
-        const spend = weeks.map(w => entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s, e) => s + e.amount, 0));
+        const spend = weeks.map(w => {
+            const gross = entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s, e) => s + e.amount, 0);
+            const wCredits = (credits || []).filter(c => c.weekIndex === w.index).reduce((s, c) => s + c.amount, 0);
+            return gross - wCredits;
+        });
         const reduction = new Array(N).fill(0); // budget cut carried into each week from earlier overspends
         const budgets = {};
         weeks.forEach((w, i) => {
@@ -688,7 +692,7 @@ function App() {
         return res;
     };
     const methodTotals = byMethod(personalEntries, effectiveData.pins.filter(p => p.type !== "business" && p.type !== "excluded"));
-    const rebalancedBudgets = getRebalancedBudgets(weeks, effectiveData.entries, effectiveData.weeklyBudget);
+    const rebalancedBudgets = getRebalancedBudgets(weeks, effectiveData.entries, effectiveData.weeklyBudget, effectiveData.credits);
     // Daily budgets — only meaningful for the live period; a past period has no "days left".
     // currentWeekObj is explicitly null while viewing the past so every figure below that
     // depends on it (already all guarded by `currentWeekObj ? ... : ...`) automatically and
@@ -704,7 +708,8 @@ function App() {
     } return Math.max(count, 1); })();
     const currentWeekBudget = currentWeekObj ? ((_a = rebalancedBudgets[currentWeekObj.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget) : effectiveData.weeklyBudget;
     const currentWeekSpent = currentWeekObj ? effectiveData.entries.filter(e => e.weekIndex === currentWeekObj.index && e.type === "personal").reduce((s, e) => s + e.amount, 0) : 0;
-    const weekRemaining = Math.max(currentWeekBudget - currentWeekSpent, 0);
+    const currentWeekCredits = currentWeekObj ? (effectiveData.credits || []).filter(c => c.weekIndex === currentWeekObj.index).reduce((s, c) => s + c.amount, 0) : 0;
+    const weekRemaining = Math.max(currentWeekBudget - currentWeekSpent + currentWeekCredits, 0);
     const dailyFromWeek = daysLeftInWeek > 0 ? weekRemaining / daysLeftInWeek : 0;
     const dailyFromMonth = daysLeftInMonth > 0 ? remaining / daysLeftInMonth : 0;
     const remainColor = remaining < 0 ? "#ef4444" : remaining < effectiveData.monthlyBudget * 0.15 ? "#f97316" : "#22c55e";
@@ -994,8 +999,10 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
     const pinEditable = !!onSkipPin;
     const personal = entries.filter(e => e.type === "personal");
     const spent = personal.reduce((s, e) => s + e.amount, 0);
-    const over = spent - weeklyBudget;
-    const pct = weeklyBudget > 0 ? Math.min((spent / weeklyBudget) * 100, 100) : 0;
+    const creditsTotal = credits.reduce((s, c) => s + c.amount, 0);
+    const netSpent = spent - creditsTotal;
+    const over = netSpent - weeklyBudget;
+    const pct = weeklyBudget > 0 ? Math.min((netSpent / weeklyBudget) * 100, 100) : 0;
     const [editMode, setEditMode] = useState(false);
     const [methodFilter, setMethodFilter] = useState(null); // payment-type id to show only, or null for all
     const [selected, setSelected] = useState(() => new Set());
@@ -1250,7 +1257,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12, marginTop: 6, color: "var(--text-tertiary)" } },
                 React.createElement("span", null, fmt(spent)),
                 React.createElement("span", null,
-                    fmt(Math.max(weeklyBudget - spent, 0)),
+                    fmt(Math.max(weeklyBudget - netSpent, 0)),
                     " left of ",
                     fmt(weeklyBudget),
                     isLastWeek ? " (final)" : "")),
