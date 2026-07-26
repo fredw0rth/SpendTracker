@@ -771,6 +771,11 @@ function App() {
             setEditTarget({ kind: "entry", data: entry, weekIndex: entry.weekIndex });
         }
     }
+    // Opens the edit sheet for a tapped credit. Used by both the week list and the Summary →
+    // Gross vs net → Credits drill-down.
+    function openEditCredit(credit) {
+        setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex });
+    }
     // Per-occurrence overrides for a scheduled pin, stored on the pin itself so the recurring pattern
     // is untouched: `skips` (occurrences to omit), `moves` (occKey → week), `orders` (occKey → order).
     // Keyed by a week-independent occKey (see occKeyOf/expandScheduledPins), so a move/skip only ever
@@ -852,7 +857,7 @@ function App() {
                         "d left")))),
             weeks.filter(w => w.index === activeWeek).map(week => {
                 var _a;
-                return (React.createElement(WeekPanel, { key: week.index, week: week, weeks: weeks, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit, onEditEntry: openEditEntry, onEditCredit: (credit) => setEditTarget({ kind: "credit", data: credit, weekIndex: credit.weekIndex }), onUpdEntry: updEntry, onUpdCredit: updCredit, onCapture: setLastDeleted, lastDeleted: lastDeleted, onUndo: undoLastDeleted, onSkipPin: viewingPast ? null : skipPinOccurrence, onMovePin: viewingPast ? null : movePinOccurrence, onReorderPin: viewingPast ? null : reorderPinOccurrence }));
+                return (React.createElement(WeekPanel, { key: week.index, week: week, weeks: weeks, entries: effectiveData.entries.filter(e => e.weekIndex === week.index), credits: effectiveData.credits.filter(c => c.weekIndex === week.index) || [], weeklyBudget: (_a = rebalancedBudgets[week.index]) !== null && _a !== void 0 ? _a : effectiveData.weeklyBudget, isLastWeek: week.index === weeks.length, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onAddEntry: () => setShowEntryFor(week.index), onDelEntry: delEntry, onDelCredit: delCredit, onEditEntry: openEditEntry, onEditCredit: openEditCredit, onUpdEntry: updEntry, onUpdCredit: updCredit, onCapture: setLastDeleted, lastDeleted: lastDeleted, onUndo: undoLastDeleted, onSkipPin: viewingPast ? null : skipPinOccurrence, onMovePin: viewingPast ? null : movePinOccurrence, onReorderPin: viewingPast ? null : reorderPinOccurrence }));
             }))),
         tab === "pins" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } },
@@ -919,7 +924,7 @@ function App() {
                                 fmt(r.budget))),
                         React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#22c55e" : "#f87171" } }, signed(r.saved))))))));
         })(),
-        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onEditEntry: openEditEntry, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
+        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onEditEntry: openEditEntry, onEditCredit: openEditCredit, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
@@ -2106,11 +2111,12 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
             } }, "Save")));
 }
 // ─── Summary View ─────────────────────────────────────────────────────────────
-function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onEditEntry, onGoToWeek }) {
+function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onEditEntry, onEditCredit, onGoToWeek }) {
     const [methodDetail, setMethodDetail] = useState(null); // method name or null
     const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
     const [spendView, setSpendView] = useState("txn"); // "txn" = largest individual, "label" = grouped by name
     const [labelDetail, setLabelDetail] = useState(null); // the label group being drilled into, or null
+    const [waterfallDetail, setWaterfallDetail] = useState(null); // "business" | "split" | "credits" | null — drill-down from the Gross vs net card
     // Gross (as charged) per card = everything that hit each card — all entries + all pins.
     // This matches the card's own statement (Amex app etc.), since work and full split amounts
     // are charged in full and reimbursed separately. Credits are income, not card charges, and
@@ -2194,6 +2200,24 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
             return new Date(b.date) - new Date(a.date);
         });
     }
+    // Business or split ("excluded") transactions (entries + pins), for the Gross vs net drill-down.
+    function transactionsForType(type) {
+        const fromEntries = state.entries
+            .filter(e => e.type === type)
+            .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method, entry: e.pinned ? undefined : e, pinned: !!e.pinned }));
+        const fromPins = state.pins
+            .filter(p => p.type === type)
+            .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", method: p.method, pinned: true }));
+        return [...fromEntries, ...fromPins].sort((a, b) => {
+            if (!a.date)
+                return 1;
+            if (!b.date)
+                return -1;
+            return new Date(b.date) - new Date(a.date);
+        });
+    }
+    // Credits, newest first, for the Gross vs net drill-down.
+    const creditTransactions = [...(state.credits || [])].sort((a, b) => new Date(b.date) - new Date(a.date));
     // Every personal/business spend this period (entries + pins), excluding credits and the "not yours"
     // portion of splits. Carries entry/pinned so both the individual list and the by-label drill can
     // open real entries in the editor (scheduled-pin virtuals + flat pins stay read-only).
@@ -2238,12 +2262,16 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                 fmt(state.monthlyBudget))),
         (reimbursableTotal > 0 || totalCredits > 0) && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Gross vs net"),
-            businessTotal > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
+            businessTotal > 0 && (React.createElement("button", { onClick: () => setWaterfallDetail("business"), style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", fontSize: 13, background: "none", border: "none", cursor: "pointer", textAlign: "left" } },
                 React.createElement("span", { style: { color: "#f59e0b" } }, "Business spend"),
-                React.createElement("span", { style: { color: "#f59e0b", fontWeight: 600 } }, fmt(businessTotal)))),
-            splitTotal > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
+                React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                    React.createElement("span", { style: { color: "#f59e0b", fontWeight: 600 } }, fmt(businessTotal)),
+                    React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 18, fontWeight: 700, lineHeight: 1 } }, "\u203A")))),
+            splitTotal > 0 && (React.createElement("button", { onClick: () => setWaterfallDetail("split"), style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", fontSize: 13, background: "none", border: "none", cursor: "pointer", textAlign: "left" } },
                 React.createElement("span", { style: { color: "#a855f7" } }, "Split spend"),
-                React.createElement("span", { style: { color: "#a855f7", fontWeight: 600 } }, fmt(splitTotal)))),
+                React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                    React.createElement("span", { style: { color: "#a855f7", fontWeight: 600 } }, fmt(splitTotal)),
+                    React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 18, fontWeight: 700, lineHeight: 1 } }, "\u203A")))),
             React.createElement("div", { style: { borderTop: "1px solid var(--border)", marginTop: 6, display: "flex", justifyContent: "space-between", padding: "6px 0 5px" } },
                 React.createElement("span", { style: { color: "var(--text-body)", fontSize: 13, fontWeight: 600 } }, "Gross spend across all cards"),
                 React.createElement("span", { style: { color: "var(--text-heading)", fontWeight: 700, fontSize: 13 } }, fmt(grossSpend))),
@@ -2252,11 +2280,13 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                 React.createElement("span", { style: { color: "var(--text-tertiary)", fontWeight: 600 } },
                     "\u2212 ",
                     fmt(reimbursableTotal))),
-            totalCredits > 0 && (React.createElement("div", { style: { display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13 } },
+            totalCredits > 0 && (React.createElement("button", { onClick: () => setWaterfallDetail("credits"), style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", fontSize: 13, background: "none", border: "none", cursor: "pointer", textAlign: "left" } },
                 React.createElement("span", { style: { color: "#22c55e" } }, "Credits"),
-                React.createElement("span", { style: { color: "#22c55e", fontWeight: 600 } },
-                    "+ ",
-                    fmt(totalCredits)))),
+                React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                    React.createElement("span", { style: { color: "#22c55e", fontWeight: 600 } },
+                        "+ ",
+                        fmt(totalCredits)),
+                    React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 18, fontWeight: 700, lineHeight: 1 } }, "\u203A")))),
             React.createElement("div", { style: { borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "baseline" } },
                 React.createElement("span", { style: { color: "var(--text-heading)", fontSize: 13, fontWeight: 700 } }, "Net spend"),
                 React.createElement("span", { style: { color: "var(--text-heading)", fontWeight: 800, fontSize: 15 } }, fmt(netTotal))))),
@@ -2347,7 +2377,9 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                     " \u25CF")))),
         methodDetail && (React.createElement(MethodDetailModal, { method: methodDetail, transactions: transactionsFor(methodDetail), gross: grossByMethod[methodDetail], net: methodTotals[methodDetail], onEditEntry: onEditEntry ? (entry) => { setMethodDetail(null); onEditEntry(entry); } : null, onClose: () => setMethodDetail(null) })),
         categoryDetail && (React.createElement(CategoryDetailModal, { cat: categoryDetail === "uncat" ? null : CATEGORY_BY_ID[categoryDetail], transactions: transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail), total: categoryDetail === "uncat" ? uncategorisedTotal : (byCategory[categoryDetail] || 0), onEditEntry: onEditEntry ? (entry) => { setCategoryDetail(null); onEditEntry(entry); } : null, onClose: () => setCategoryDetail(null) })),
-        labelDetail && (React.createElement(LabelDetailModal, { group: labelDetail, onEditEntry: onEditEntry ? (entry) => { setLabelDetail(null); onEditEntry(entry); } : null, onClose: () => setLabelDetail(null) }))));
+        labelDetail && (React.createElement(LabelDetailModal, { group: labelDetail, onEditEntry: onEditEntry ? (entry) => { setLabelDetail(null); onEditEntry(entry); } : null, onClose: () => setLabelDetail(null) })),
+        (waterfallDetail === "business" || waterfallDetail === "split") && (React.createElement(SpendTypeDetailModal, { title: waterfallDetail === "business" ? "Business spend" : "Split spend", color: waterfallDetail === "business" ? "#f59e0b" : "#a855f7", total: waterfallDetail === "business" ? businessTotal : splitTotal, transactions: transactionsForType(waterfallDetail === "business" ? "business" : "excluded"), onEditEntry: onEditEntry ? (entry) => { setWaterfallDetail(null); onEditEntry(entry); } : null, onClose: () => setWaterfallDetail(null) })),
+        waterfallDetail === "credits" && (React.createElement(CreditsDetailModal, { total: totalCredits, transactions: creditTransactions, onEditCredit: onEditCredit ? (credit) => { setWaterfallDetail(null); onEditCredit(credit); } : null, onClose: () => setWaterfallDetail(null) }))));
 }
 // ─── Method Detail Modal ──────────────────────────────────────────────────────
 function MethodDetailModal({ method, transactions, gross, net, onEditEntry, onClose }) {
@@ -2444,6 +2476,60 @@ function LabelDetailModal({ group, onEditEntry, onClose }) {
                 React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: t.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(t.amount)),
                 editable && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15, marginLeft: 2 } }, "\u203A")));
         }))));
+}
+// ─── Spend Type Detail Modal ──────────────────────────────────────────────────
+// Drill-down from the Summary "Gross vs net" card: the business or split ("not yours")
+// transactions (entries + pins) behind one of those subtotals. Pinned rows stay read-only,
+// matching the other drill-downs.
+function SpendTypeDetailModal({ title, color, total, transactions, onEditEntry, onClose }) {
+    return (React.createElement(Modal, { onClose: onClose, title: title },
+        React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px", marginBottom: 14 } },
+            React.createElement("div", { style: { fontSize: 17, fontWeight: 800, color } }, fmt(total)),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
+                transactions.length,
+                " transaction",
+                transactions.length === 1 ? "" : "s")),
+        React.createElement("div", { style: { maxHeight: 360, overflowY: "auto" } },
+            transactions.length === 0 && React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "12px 0", textAlign: "center" } }, "No transactions yet"),
+            transactions.map((t, i) => {
+                const editable = t.entry && onEditEntry;
+                return (React.createElement("div", { key: i, onClick: editable ? () => onEditEntry(t.entry) : undefined, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" } },
+                    React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" } }),
+                    React.createElement("div", { style: { flex: 1 } },
+                        React.createElement("div", { style: { fontSize: 13, color } }, t.desc),
+                        t.date && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } }, dateStr(new Date(t.date)))),
+                    React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color } }, fmt(t.amount)),
+                    editable && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15, marginLeft: 2 } }, "\u203A")));
+            }))));
+}
+// ─── Credits Detail Modal ─────────────────────────────────────────────────────
+// Drill-down from the Summary "Gross vs net" card: every credit this period. Tappable to edit,
+// matching how credits are edited from the week log.
+function CreditsDetailModal({ total, transactions, onEditCredit, onClose }) {
+    return (React.createElement(Modal, { onClose: onClose, title: "Credits" },
+        React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px", marginBottom: 14 } },
+            React.createElement("div", { style: { fontSize: 17, fontWeight: 800, color: "#22c55e" } },
+                "+",
+                fmt(total)),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
+                transactions.length,
+                " credit",
+                transactions.length === 1 ? "" : "s")),
+        React.createElement("div", { style: { maxHeight: 360, overflowY: "auto" } },
+            transactions.length === 0 && React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "12px 0", textAlign: "center" } }, "No credits yet"),
+            transactions.map((c, i) => (React.createElement("div", { key: c.id, onClick: onEditCredit ? () => onEditCredit(c) : undefined, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none", cursor: onEditCredit ? "pointer" : "default" } },
+                React.createElement("span", { style: { ...S.dot, background: "#22c55e" } }),
+                React.createElement("div", { style: { flex: 1 } },
+                    React.createElement("div", { style: { fontSize: 13, color: "#22c55e" } },
+                        c.label || "Credit",
+                        c.from && React.createElement("span", { style: { color: "var(--text-secondary)" } },
+                            " from ",
+                            c.from)),
+                    c.date && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } }, dateStr(new Date(c.date)))),
+                React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: "#22c55e" } },
+                    "+",
+                    fmt(c.amount)),
+                onEditCredit && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15, marginLeft: 2 } }, "\u203A")))))));
 }
 // ─── Export Modal ─────────────────────────────────────────────────────────────
 function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, totalCredits, methodTotals, onClose }) {
