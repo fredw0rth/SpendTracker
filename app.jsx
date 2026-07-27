@@ -338,6 +338,43 @@ function expandScheduledPins(pins, weeks) {
   return out;
 }
 
+// Effective ordering key: prefer the explicit `order`, falling back to the creation timestamp so
+// items logged before `order` existed still sort chronologically without any migration. Shared by
+// the week log and the Summary drill-downs so the two can never drift apart.
+const effOrder = (item) => item.order != null ? item.order : (Date.parse(item.date) || 0);
+
+// Group transactions by the week they're filed under, for the Summary drill-downs. Weeks run
+// ascending (matching the Weekly breakdown card and the W1–W5 pills); within a week, items sort by
+// effOrder descending — exactly what the week log shows, so a hand-arranged order carries through.
+//
+// Grouping (rather than one flat sort) is what makes this correct: `order` values are only ever
+// comparable against siblings from the SAME week. commitReorder redistributes a single week's own
+// existing values, and a cross-week move rewrites `weekIndex` while leaving `order` untouched — so
+// `order` is never compared across weeks here.
+//
+// Flat (unscheduled) pins are whole-period costs carrying no weekIndex, so they collect in a
+// trailing group instead of being forced into a week they don't belong to. Anything whose weekIndex
+// matches no known week lands there too, rather than silently vanishing from the list.
+function groupByWeek(items, weeks) {
+  const buckets = new Map();
+  const trailing = [];
+  for (const it of items) {
+    if (it.weekIndex == null || !weeks.some(w => w.index === it.weekIndex)) { trailing.push(it); continue; }
+    if (!buckets.has(it.weekIndex)) buckets.set(it.weekIndex, []);
+    buckets.get(it.weekIndex).push(it);
+  }
+  const groups = [];
+  for (const w of weeks) {
+    const rows = buckets.get(w.index);
+    if (rows && rows.length) groups.push({ key: "w" + w.index, label: "Week " + w.index, items: rows.sort((a, b) => effOrder(b) - effOrder(a)) });
+  }
+  if (trailing.length) groups.push({ key: "fixed", label: "Fixed costs", items: trailing });
+  return groups;
+}
+
+// Total row count across grouped output, for the "N transactions" counts in the drill-downs.
+const groupCount = (groups) => groups.reduce((s, g) => s + g.items.length, 0);
+
 function todayWeekIndex(weeks) {
   const norm = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
   const today = norm(new Date());
@@ -1083,10 +1120,6 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
   const dragIdRef = useRef(null);
   const dragListRef = useRef(null);
   const rowRefs = useRef({});                          // unit.id -> row DOM node, for hit-testing during drag
-
-  // Effective ordering key: prefer the explicit `order`, falling back to the creation timestamp so
-  // items logged before `order` existed still sort chronologically without any migration.
-  const effOrder = (item) => item.order != null ? item.order : (Date.parse(item.date) || 0);
 
   // One "unit" per rendered row: a solo entry, a whole split pair, or a credit. Entries and credits
   // are merged into a single list sorted by effective order (newest first), so credits interleave
@@ -2411,21 +2444,20 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     return { week: w, total: wTotal, byMethod: wByMethod, budget: wBudget };
   });
 
-  // All transactions for a given method (entries + pins), for drill-down
+  // All transactions for a given method (entries + pins), grouped by week for the drill-down.
+  // weekIndex/order are carried through so groupByWeek can reproduce the week log's arrangement.
   function transactionsFor(method) {
     const fromEntries = state.entries
       .filter(e => e.method === method)
       // A scheduled-pin virtual entry (e.pinned) isn't a real editable row — leave it without an
       // entry ref so the drill-down keeps it read-only, matching By category / the week log.
-      .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, type: e.type, entry: e.pinned ? undefined : e, pinned: !!e.pinned }));
+      .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, type: e.type, entry: e.pinned ? undefined : e, pinned: !!e.pinned, weekIndex: e.weekIndex, order: e.order }));
+    // Flat (unscheduled) pins are whole-period costs with no week of their own — deliberately left
+    // without weekIndex/order so groupByWeek collects them into the trailing "Fixed costs" group.
     const fromPins = state.pins
       .filter(p => p.method === method)
       .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", type: p.type === "business" ? "business" : p.type === "excluded" ? "excluded" : "personal", pinned: true }));
-    return [...fromEntries, ...fromPins].sort((a, b) => {
-      if (!a.date) return 1;
-      if (!b.date) return -1;
-      return new Date(b.date) - new Date(a.date);
-    });
+    return groupByWeek([...fromEntries, ...fromPins], weeks);
   }
 
   // All personal transactions for a category (entries + pins), for the category drill-down;
@@ -2436,40 +2468,33 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
       .filter(e => e.type === "personal" && match(e.category))
       // Guard scheduled-pin virtuals (e.pinned): they carry a synthetic id UPD_ENTRY can't match,
       // so they must stay read-only here rather than opening an editor that no-ops on save.
-      .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method, entry: e.pinned ? undefined : e, pinned: !!e.pinned }));
+      .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method, entry: e.pinned ? undefined : e, pinned: !!e.pinned, weekIndex: e.weekIndex, order: e.order }));
     const fromPins = state.pins
       .filter(p => p.type !== "business" && p.type !== "excluded" && match(p.category))
       .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", method: p.method, pinned: true }));
-    return [...fromEntries, ...fromPins].sort((a, b) => {
-      if (!a.date) return 1;
-      if (!b.date) return -1;
-      return new Date(b.date) - new Date(a.date);
-    });
+    return groupByWeek([...fromEntries, ...fromPins], weeks);
   }
 
   // Business or split ("excluded") transactions (entries + pins), for the Gross vs net drill-down.
   function transactionsForType(type) {
     const fromEntries = state.entries
       .filter(e => e.type === type)
-      .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method, entry: e.pinned ? undefined : e, pinned: !!e.pinned }));
+      .map(e => ({ date: e.date, amount: e.amount, desc: e.label || METHOD_NAME[e.method] || e.method, method: e.method, entry: e.pinned ? undefined : e, pinned: !!e.pinned, weekIndex: e.weekIndex, order: e.order }));
     const fromPins = state.pins
       .filter(p => p.type === type)
       .map(p => ({ date: null, amount: p.amount || 0, desc: p.label + " (pinned)", method: p.method, pinned: true }));
-    return [...fromEntries, ...fromPins].sort((a, b) => {
-      if (!a.date) return 1;
-      if (!b.date) return -1;
-      return new Date(b.date) - new Date(a.date);
-    });
+    return groupByWeek([...fromEntries, ...fromPins], weeks);
   }
 
-  // Credits, newest first, for the Gross vs net drill-down.
-  const creditTransactions = [...(state.credits || [])].sort((a, b) => new Date(b.date) - new Date(a.date));
+  // Credits, grouped by week for the Gross vs net drill-down. Credits already carry weekIndex and
+  // order natively (and are drag-reordered alongside spend in the week log), so no mapping needed.
+  const creditGroups = groupByWeek([...(state.credits || [])], weeks);
 
   // Every personal/business spend this period (entries + pins), excluding credits and the "not yours"
   // portion of splits. Carries entry/pinned so both the individual list and the by-label drill can
   // open real entries in the editor (scheduled-pin virtuals + flat pins stay read-only).
   const spendItems = [
-    ...state.entries.filter(e => e.type !== "credit" && e.type !== "excluded").map(e => ({ desc: e.label || METHOD_NAME[e.method] || e.method, amount: e.amount, method: e.method, type: e.type, date: e.date, entry: e.pinned ? undefined : e, pinned: !!e.pinned })),
+    ...state.entries.filter(e => e.type !== "credit" && e.type !== "excluded").map(e => ({ desc: e.label || METHOD_NAME[e.method] || e.method, amount: e.amount, method: e.method, type: e.type, date: e.date, entry: e.pinned ? undefined : e, pinned: !!e.pinned, weekIndex: e.weekIndex, order: e.order })),
     ...state.pins.filter(p => p.type !== "excluded").map(p => ({ desc: p.label, amount: p.amount || 0, method: p.method, type: p.type, date: null, pinned: true })),
   ];
   // Largest individual spends (top 5 by amount).
@@ -2666,12 +2691,12 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
       )}
 
       {methodDetail && (
-        <MethodDetailModal method={methodDetail} transactions={transactionsFor(methodDetail)} gross={grossByMethod[methodDetail]} net={methodTotals[methodDetail]} onEditEntry={onEditEntry ? (entry) => { setMethodDetail(null); onEditEntry(entry); } : null} onClose={() => setMethodDetail(null)} />
+        <MethodDetailModal method={methodDetail} groups={transactionsFor(methodDetail)} gross={grossByMethod[methodDetail]} net={methodTotals[methodDetail]} onEditEntry={onEditEntry ? (entry) => { setMethodDetail(null); onEditEntry(entry); } : null} onClose={() => setMethodDetail(null)} />
       )}
       {categoryDetail && (
         <CategoryDetailModal
           cat={categoryDetail === "uncat" ? null : CATEGORY_BY_ID[categoryDetail]}
-          transactions={transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail)}
+          groups={transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail)}
           total={categoryDetail === "uncat" ? uncategorisedTotal : (byCategory[categoryDetail] || 0)}
           onEditEntry={onEditEntry ? (entry) => { setCategoryDetail(null); onEditEntry(entry); } : null}
           onClose={() => setCategoryDetail(null)} />
@@ -2679,6 +2704,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
       {labelDetail && (
         <LabelDetailModal
           group={labelDetail}
+          groups={groupByWeek(labelDetail.items, weeks)}
           onEditEntry={onEditEntry ? (entry) => { setLabelDetail(null); onEditEntry(entry); } : null}
           onClose={() => setLabelDetail(null)} />
       )}
@@ -2687,14 +2713,14 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
           title={waterfallDetail === "business" ? "Business spend" : "Split spend"}
           color={waterfallDetail === "business" ? "#f59e0b" : "#a855f7"}
           total={waterfallDetail === "business" ? businessTotal : splitTotal}
-          transactions={transactionsForType(waterfallDetail === "business" ? "business" : "excluded")}
+          groups={transactionsForType(waterfallDetail === "business" ? "business" : "excluded")}
           onEditEntry={onEditEntry ? (entry) => { setWaterfallDetail(null); onEditEntry(entry); } : null}
           onClose={() => setWaterfallDetail(null)} />
       )}
       {waterfallDetail === "credits" && (
         <CreditsDetailModal
           total={totalCredits}
-          transactions={creditTransactions}
+          groups={creditGroups}
           onEditCredit={onEditCredit ? (credit) => { setWaterfallDetail(null); onEditCredit(credit); } : null}
           onClose={() => setWaterfallDetail(null)} />
       )}
@@ -2702,10 +2728,35 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
   );
 }
 
+// ─── Week Grouped List ────────────────────────────────────────────────────────
+// Shared list body for the Summary drill-downs: one headed block per week (ascending), each holding
+// that week's rows in the order they were arranged in the week log, then the trailing "Fixed costs"
+// block for whole-period pins. Rows stay bespoke per drill-down via renderRow, which receives the
+// item, its index within the group, and whether it should draw a separator (all but the last).
+//
+// Per-transaction dates are deliberately absent: `date` records when an entry was logged, not when
+// it was spent, and never moves when an entry is filed into (or dragged between) weeks — so it can
+// fall outside the week it belongs to. The week header is the honest unit of time here, matching
+// the rest of the app, where every other date display is a week range.
+function WeekGroupedList({ groups, empty, renderRow }) {
+  if (!groups.length) return <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>{empty}</div>;
+  return (
+    <div style={{ maxHeight:360, overflowY:"auto" }}>
+      {groups.map(g => (
+        <div key={g.key} style={{ marginBottom:8 }}>
+          <div style={{ fontSize:10, fontWeight:700, color:"var(--text-secondary)", textTransform:"uppercase", letterSpacing:"0.04em", padding:"8px 0 3px" }}>{g.label}</div>
+          {g.items.map((t, i) => renderRow(t, i, i < g.items.length - 1))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Method Detail Modal ──────────────────────────────────────────────────────
-function MethodDetailModal({ method, transactions, gross, net, onEditEntry, onClose }) {
+function MethodDetailModal({ method, groups, gross, net, onEditEntry, onClose }) {
   const col = METHOD_COLOR[method];
   const reimbursable = gross - net;
+  const count = groupCount(groups);
   return (
     <Modal onClose={onClose} title={`${METHOD_NAME[method] || method} transactions`}>
       {/* Gross (what hit the card / matches the statement) reconciled down to your net share */}
@@ -2720,32 +2771,28 @@ function MethodDetailModal({ method, transactions, gross, net, onEditEntry, onCl
         </div>
       </div>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:12, padding:"0 2px" }}>
-        <span style={{ fontSize:12, color:"var(--text-secondary)" }}>{transactions.length} transaction{transactions.length === 1 ? "" : "s"}</span>
+        <span style={{ fontSize:12, color:"var(--text-secondary)" }}>{count} transaction{count === 1 ? "" : "s"}</span>
         {reimbursable > 0.005 && <span style={{ fontSize:11, color:"var(--text-tertiary)" }}>{fmt(reimbursable)} reimbursable</span>}
       </div>
-      <div style={{ maxHeight:360, overflowY:"auto" }}>
-        {transactions.length === 0 && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>No transactions yet</div>}
-        {transactions.map((t, i) => {
-          // Entry-backed rows tap to open the standard editor (splits route to the split editor via
-          // openEditEntry); pinned rows stay read-only — managed on the Pinned tab.
-          const editable = t.entry && onEditEntry;
-          return (
-          <div key={i} onClick={editable ? () => onEditEntry(t.entry) : undefined}
-               style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" }}>
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : "var(--text-primary)" }}>
-                {t.desc}
-                {t.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
-                {t.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}>reimbursable</span>}
-              </div>
-              {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
+      <WeekGroupedList groups={groups} empty="No transactions yet" renderRow={(t, i, sep) => {
+        // Entry-backed rows tap to open the standard editor (splits route to the split editor via
+        // openEditEntry); pinned rows stay read-only — managed on the Pinned tab.
+        const editable = t.entry && onEditEntry;
+        return (
+        <div key={i} onClick={editable ? () => onEditEntry(t.entry) : undefined}
+             style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: sep ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" }}>
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : "var(--text-primary)" }}>
+              {t.desc}
+              {t.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
+              {t.type === "excluded" && <span style={{ ...S.badge, background:chipColors("#a855f7").bg, color:"#a855f7" }}>reimbursable</span>}
             </div>
-            <span style={{ fontWeight:600, fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : col }}>{fmt(t.amount)}</span>
-            {editable && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
           </div>
-          );
-        })}
-      </div>
+          <span style={{ fontWeight:600, fontSize:13, color: t.type === "business" ? "#f59e0b" : t.type === "excluded" ? "#a855f7" : col }}>{fmt(t.amount)}</span>
+          {editable && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
+        </div>
+        );
+      }} />
     </Modal>
   );
 }
@@ -2753,8 +2800,9 @@ function MethodDetailModal({ method, transactions, gross, net, onEditEntry, onCl
 // ─── Category Detail Modal ────────────────────────────────────────────────────
 // Drill-down from the Summary "By category" card: the personal transactions (entries + pins)
 // behind one category's total. `cat` is a category object, or null for Uncategorised.
-function CategoryDetailModal({ cat, transactions, total, onEditEntry, onClose }) {
+function CategoryDetailModal({ cat, groups, total, onEditEntry, onClose }) {
   const name = cat ? cat.name : "Uncategorised";
+  const count = groupCount(groups);
   return (
     <Modal onClose={onClose} title={`${name} spend`}>
       <div style={{ display:"flex", alignItems:"center", gap:10, background:"var(--surface-2)", borderRadius:8, padding:"10px 12px", marginBottom:14 }}>
@@ -2763,29 +2811,25 @@ function CategoryDetailModal({ cat, transactions, total, onEditEntry, onClose })
           : <span style={{ width:34, height:34, borderRadius:"50%", background:"var(--surface)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, color:"var(--text-muted)", fontSize:18 }}>∅</span>}
         <div>
           <div style={{ fontSize:17, fontWeight:800, color:"var(--text-heading)" }}>{fmt(total)}</div>
-          <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{transactions.length} transaction{transactions.length === 1 ? "" : "s"}</div>
+          <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{count} transaction{count === 1 ? "" : "s"}</div>
         </div>
       </div>
-      <div style={{ maxHeight:360, overflowY:"auto" }}>
-        {transactions.length === 0 && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>No transactions yet</div>}
-        {transactions.map((t, i) => {
-          // Entry-backed rows are tappable to edit (mainly to re-categorise) via the standard
-          // Edit spend modal. Pinned rows stay read-only here — they're managed on the Pinned tab.
-          const editable = t.entry && onEditEntry;
-          return (
-          <div key={i} onClick={editable ? () => onEditEntry(t.entry) : undefined}
-               style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" }}>
-            <span style={{ ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" }} />
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:13, color:"var(--text-primary)" }}>{t.desc}</div>
-              {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
-            </div>
-            <span style={{ fontWeight:600, fontSize:13, color:"var(--text-primary)" }}>{fmt(t.amount)}</span>
-            {editable && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
+      <WeekGroupedList groups={groups} empty="No transactions yet" renderRow={(t, i, sep) => {
+        // Entry-backed rows are tappable to edit (mainly to re-categorise) via the standard
+        // Edit spend modal. Pinned rows stay read-only here — they're managed on the Pinned tab.
+        const editable = t.entry && onEditEntry;
+        return (
+        <div key={i} onClick={editable ? () => onEditEntry(t.entry) : undefined}
+             style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: sep ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" }}>
+          <span style={{ ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" }} />
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, color:"var(--text-primary)" }}>{t.desc}</div>
           </div>
-          );
-        })}
-      </div>
+          <span style={{ fontWeight:600, fontSize:13, color:"var(--text-primary)" }}>{fmt(t.amount)}</span>
+          {editable && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
+        </div>
+        );
+      }} />
     </Modal>
   );
 }
@@ -2794,35 +2838,34 @@ function CategoryDetailModal({ cat, transactions, total, onEditEntry, onClose })
 // Drill-down from the Summary "Largest spends · By label" view: every transaction sharing one
 // name, summed. Entry-backed rows tap to edit (splits route through openEditEntry); pins are
 // read-only, matching the other drill-downs.
-function LabelDetailModal({ group, onEditEntry, onClose }) {
-  const { desc, total, count, items } = group;
+function LabelDetailModal({ group, groups, onEditEntry, onClose }) {
+  const { desc, total, count } = group;
   return (
     <Modal onClose={onClose} title={desc}>
       <div style={{ background:"var(--surface-2)", borderRadius:8, padding:"10px 12px", marginBottom:14 }}>
         <div style={{ fontSize:17, fontWeight:800, color:"var(--text-heading)" }}>{fmt(total)}</div>
         <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{count} transaction{count === 1 ? "" : "s"}</div>
       </div>
-      <div style={{ maxHeight:360, overflowY:"auto" }}>
-        {items.map((t, i) => {
-          const editable = t.entry && onEditEntry;
-          return (
-          <div key={i} onClick={editable ? () => onEditEntry(t.entry) : undefined}
-               style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < items.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" }}>
-            <span style={{ ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" }} />
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : "var(--text-primary)" }}>
-                {t.desc}
-                {t.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
-                {t.pinned && <span style={{ ...S.badge, background:chipColors("#38bdf8").bg, color:"#38bdf8" }}>📌 fixed</span>}
-              </div>
-              {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
+      {/* Grouped by week like the other drill-downs — with repeated same-name purchases, the week
+          is what tells two otherwise identical rows apart. */}
+      <WeekGroupedList groups={groups} empty="No transactions yet" renderRow={(t, i, sep) => {
+        const editable = t.entry && onEditEntry;
+        return (
+        <div key={i} onClick={editable ? () => onEditEntry(t.entry) : undefined}
+             style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: sep ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" }}>
+          <span style={{ ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" }} />
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, color: t.type === "business" ? "#f59e0b" : "var(--text-primary)" }}>
+              {t.desc}
+              {t.type === "business" && <span style={{ ...S.badge, background:chipColors("#f59e0b").bg, color:"#f59e0b" }}>work</span>}
+              {t.pinned && <span style={{ ...S.badge, background:chipColors("#38bdf8").bg, color:"#38bdf8" }}>📌 fixed</span>}
             </div>
-            <span style={{ fontWeight:600, fontSize:13, color: t.type === "business" ? "#f59e0b" : "var(--text-primary)" }}>{fmt(t.amount)}</span>
-            {editable && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
           </div>
-          );
-        })}
-      </div>
+          <span style={{ fontWeight:600, fontSize:13, color: t.type === "business" ? "#f59e0b" : "var(--text-primary)" }}>{fmt(t.amount)}</span>
+          {editable && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
+        </div>
+        );
+      }} />
     </Modal>
   );
 }
@@ -2831,31 +2874,28 @@ function LabelDetailModal({ group, onEditEntry, onClose }) {
 // Drill-down from the Summary "Gross vs net" card: the business or split ("not yours")
 // transactions (entries + pins) behind one of those subtotals. Pinned rows stay read-only,
 // matching the other drill-downs.
-function SpendTypeDetailModal({ title, color, total, transactions, onEditEntry, onClose }) {
+function SpendTypeDetailModal({ title, color, total, groups, onEditEntry, onClose }) {
+  const count = groupCount(groups);
   return (
     <Modal onClose={onClose} title={title}>
       <div style={{ background:"var(--surface-2)", borderRadius:8, padding:"10px 12px", marginBottom:14 }}>
         <div style={{ fontSize:17, fontWeight:800, color }}>{fmt(total)}</div>
-        <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{transactions.length} transaction{transactions.length === 1 ? "" : "s"}</div>
+        <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{count} transaction{count === 1 ? "" : "s"}</div>
       </div>
-      <div style={{ maxHeight:360, overflowY:"auto" }}>
-        {transactions.length === 0 && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>No transactions yet</div>}
-        {transactions.map((t, i) => {
-          const editable = t.entry && onEditEntry;
-          return (
-          <div key={i} onClick={editable ? () => onEditEntry(t.entry) : undefined}
-               style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" }}>
-            <span style={{ ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" }} />
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:13, color }}>{t.desc}</div>
-              {t.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(t.date))}</div>}
-            </div>
-            <span style={{ fontWeight:600, fontSize:13, color }}>{fmt(t.amount)}</span>
-            {editable && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
+      <WeekGroupedList groups={groups} empty="No transactions yet" renderRow={(t, i, sep) => {
+        const editable = t.entry && onEditEntry;
+        return (
+        <div key={i} onClick={editable ? () => onEditEntry(t.entry) : undefined}
+             style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: sep ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" }}>
+          <span style={{ ...S.dot, background: METHOD_COLOR[t.method] || "var(--text-secondary)" }} />
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, color }}>{t.desc}</div>
           </div>
-          );
-        })}
-      </div>
+          <span style={{ fontWeight:600, fontSize:13, color }}>{fmt(t.amount)}</span>
+          {editable && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
+        </div>
+        );
+      }} />
     </Modal>
   );
 }
@@ -2863,28 +2903,25 @@ function SpendTypeDetailModal({ title, color, total, transactions, onEditEntry, 
 // ─── Credits Detail Modal ─────────────────────────────────────────────────────
 // Drill-down from the Summary "Gross vs net" card: every credit this period. Tappable to edit,
 // matching how credits are edited from the week log.
-function CreditsDetailModal({ total, transactions, onEditCredit, onClose }) {
+function CreditsDetailModal({ total, groups, onEditCredit, onClose }) {
+  const count = groupCount(groups);
   return (
     <Modal onClose={onClose} title="Credits">
       <div style={{ background:"var(--surface-2)", borderRadius:8, padding:"10px 12px", marginBottom:14 }}>
         <div style={{ fontSize:17, fontWeight:800, color:"#22c55e" }}>+{fmt(total)}</div>
-        <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{transactions.length} credit{transactions.length === 1 ? "" : "s"}</div>
+        <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{count} credit{count === 1 ? "" : "s"}</div>
       </div>
-      <div style={{ maxHeight:360, overflowY:"auto" }}>
-        {transactions.length === 0 && <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>No credits yet</div>}
-        {transactions.map((c, i) => (
-          <div key={c.id} onClick={onEditCredit ? () => onEditCredit(c) : undefined}
-               style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: i < transactions.length - 1 ? "1px solid var(--border)" : "none", cursor: onEditCredit ? "pointer" : "default" }}>
-            <span style={{ ...S.dot, background:"#22c55e" }} />
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:13, color:"#22c55e" }}>{c.label || "Credit"}{c.from && <span style={{ color:"var(--text-secondary)" }}> from {c.from}</span>}</div>
-              {c.date && <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{dateStr(new Date(c.date))}</div>}
-            </div>
-            <span style={{ fontWeight:600, fontSize:13, color:"#22c55e" }}>+{fmt(c.amount)}</span>
-            {onEditCredit && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
+      <WeekGroupedList groups={groups} empty="No credits yet" renderRow={(c, i, sep) => (
+        <div key={c.id} onClick={onEditCredit ? () => onEditCredit(c) : undefined}
+             style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: sep ? "1px solid var(--border)" : "none", cursor: onEditCredit ? "pointer" : "default" }}>
+          <span style={{ ...S.dot, background:"#22c55e" }} />
+          <div style={{ flex:1 }}>
+            <div style={{ fontSize:13, color:"#22c55e" }}>{c.label || "Credit"}{c.from && <span style={{ color:"var(--text-secondary)" }}> from {c.from}</span>}</div>
           </div>
-        ))}
-      </div>
+          <span style={{ fontWeight:600, fontSize:13, color:"#22c55e" }}>+{fmt(c.amount)}</span>
+          {onEditCredit && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
+        </div>
+      )} />
     </Modal>
   );
 }
