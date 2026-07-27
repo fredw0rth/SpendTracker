@@ -2729,10 +2729,14 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 }
 
 // ─── Week Grouped List ────────────────────────────────────────────────────────
-// Shared list body for the Summary drill-downs: one headed block per week (ascending), each holding
-// that week's rows in the order they were arranged in the week log, then the trailing "Fixed costs"
-// block for whole-period pins. Rows stay bespoke per drill-down via renderRow, which receives the
-// item, its index within the group, and whether it should draw a separator (all but the last).
+// Shared list body for the Summary drill-downs: week headers (ascending) punctuating one continuous
+// list, each week's rows in the order they were arranged in the week log, then a trailing "Fixed
+// costs" section for whole-period pins. Rows stay bespoke per drill-down via renderRow, which
+// receives the item, its index within the section, and whether it should draw a separator.
+//
+// The sections deliberately don't sit in separate blocks: every row keeps its separator except the
+// very last one overall, so the rule carries straight through each header and the list scrolls as
+// one unbroken run from the end of one week into the start of the next.
 //
 // Per-transaction dates are deliberately absent: `date` records when an entry was logged, not when
 // it was spent, and never moves when an entry is filed into (or dragged between) weeks — so it can
@@ -2740,12 +2744,13 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 // the rest of the app, where every other date display is a week range.
 function WeekGroupedList({ groups, empty, renderRow }) {
   if (!groups.length) return <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>{empty}</div>;
+  const lastGroup = groups.length - 1;
   return (
     <div style={{ maxHeight:360, overflowY:"auto" }}>
-      {groups.map(g => (
-        <div key={g.key} style={{ marginBottom:8 }}>
-          <div style={{ fontSize:10, fontWeight:700, color:"var(--text-secondary)", textTransform:"uppercase", letterSpacing:"0.04em", padding:"8px 0 3px" }}>{g.label}</div>
-          {g.items.map((t, i) => renderRow(t, i, i < g.items.length - 1))}
+      {groups.map((g, gi) => (
+        <div key={g.key}>
+          <div style={{ fontSize:10, fontWeight:700, color:"var(--text-secondary)", textTransform:"uppercase", letterSpacing:"0.04em", padding:"10px 0 4px" }}>{g.label}</div>
+          {g.items.map((t, i) => renderRow(t, i, !(gi === lastGroup && i === g.items.length - 1)))}
         </div>
       ))}
     </div>
