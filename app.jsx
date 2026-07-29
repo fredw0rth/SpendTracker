@@ -343,18 +343,26 @@ function expandScheduledPins(pins, weeks) {
 // the week log and the Summary drill-downs so the two can never drift apart.
 const effOrder = (item) => item.order != null ? item.order : (Date.parse(item.date) || 0);
 
-// Group transactions by the week they're filed under, for the Summary drill-downs. Weeks run
-// ascending (matching the Weekly breakdown card and the W1–W5 pills); within a week, items sort by
-// effOrder descending — exactly what the week log shows, so a hand-arranged order carries through.
+// Group transactions by the week they're filed under, for the Summary drill-downs.
 //
-// Grouping (rather than one flat sort) is what makes this correct: `order` values are only ever
-// comparable against siblings from the SAME week. commitReorder redistributes a single week's own
-// existing values, and a cross-week move rewrites `weekIndex` while leaving `order` untouched — so
-// `order` is never compared across weeks here.
+// Ordering reads like a card statement: most recent at the top, oldest at the bottom, so scrolling
+// down always moves backwards in time and never doubles back. That means weeks run DESCENDING
+// (latest week first) to match the descending effOrder sort within each week — pairing the two the
+// other way round makes time run backwards inside a week but jump forwards at every header, which
+// puts each week's newest row directly beneath the previous week's oldest.
 //
-// Flat (unscheduled) pins are whole-period costs carrying no weekIndex, so they collect in a
-// trailing group instead of being forced into a week they don't belong to. Anything whose weekIndex
-// matches no known week lands there too, rather than silently vanishing from the list.
+// Grouping (rather than one flat sort) is what makes the within-week part correct: `order` values
+// are only ever comparable against siblings from the SAME week. commitReorder redistributes a single
+// week's own existing values, and a cross-week move rewrites `weekIndex` while leaving `order`
+// untouched — so `order` is never compared across weeks here.
+//
+// Flat (unscheduled) pins are whole-period costs that never appear in the week log at all (WeekPanel
+// is only passed entries and credits), so they have no week and no hand-arranged position to carry
+// through. They collect in a trailing group, below the oldest week, keeping the dated run
+// uninterrupted — in state.pins order, so the section matches the Pinned tab. Anything whose
+// weekIndex matches no known week lands there too, rather than silently vanishing from the list.
+// Scheduled-pin occurrences are unaffected: they carry a real weekIndex and order, so they sit
+// inside their own week exactly where they were dragged.
 function groupByWeek(items, weeks) {
   const buckets = new Map();
   const trailing = [];
@@ -364,7 +372,8 @@ function groupByWeek(items, weeks) {
     buckets.get(it.weekIndex).push(it);
   }
   const groups = [];
-  for (const w of weeks) {
+  for (let i = weeks.length - 1; i >= 0; i--) {
+    const w = weeks[i];
     const rows = buckets.get(w.index);
     if (rows && rows.length) groups.push({ key: "w" + w.index, label: "Week " + w.index, items: rows.sort((a, b) => effOrder(b) - effOrder(a)) });
   }
@@ -2615,8 +2624,10 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
       {/* Weekly breakdown */}
       <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
         <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Weekly breakdown</div>
-        {weekRows.map(({ week, total, byMethod, budget }) => (
-          <div key={week.index} style={{ marginBottom: week.index < weeks.length ? 12 : 0, paddingBottom: week.index < weeks.length ? 12 : 0, borderBottom: week.index < weeks.length ? "1px solid var(--border)" : "none" }}>
+        {/* Latest week first, matching the drill-downs' statement-style ordering. The separator keys
+            off position in the rendered list (not week number) so the last row stays borderless. */}
+        {[...weekRows].reverse().map(({ week, total, byMethod, budget }, i, arr) => (
+          <div key={week.index} style={{ marginBottom: i < arr.length - 1 ? 12 : 0, paddingBottom: i < arr.length - 1 ? 12 : 0, borderBottom: i < arr.length - 1 ? "1px solid var(--border)" : "none" }}>
             <div onClick={onGoToWeek ? () => onGoToWeek(week.index) : undefined}
                  style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:6, cursor: onGoToWeek ? "pointer" : "default" }}>
               <span style={{ fontSize:13, fontWeight:700, color:"var(--text-heading)" }}>Week {week.index}</span>
