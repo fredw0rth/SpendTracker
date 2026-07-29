@@ -2153,6 +2153,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
     const [spendView, setSpendView] = useState("txn"); // "txn" = largest individual, "label" = grouped by name
     const [labelDetail, setLabelDetail] = useState(null); // the label group being drilled into, or null
+    const [showAllSpends, setShowAllSpends] = useState(false); // full "Largest spends" ranking open?
     const [waterfallDetail, setWaterfallDetail] = useState(null); // "business" | "split" | "credits" | null — drill-down from the Gross vs net card
     // Gross (as charged) per card = everything that hit each card — all entries + all pins.
     // This matches the card's own statement (Amex app etc.), since work and full split amounts
@@ -2248,11 +2249,13 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         ...state.entries.filter(e => e.type !== "credit" && e.type !== "excluded").map(e => ({ desc: e.label || METHOD_NAME[e.method] || e.method, amount: e.amount, method: e.method, type: e.type, date: e.date, entry: e.pinned ? undefined : e, pinned: !!e.pinned, weekIndex: e.weekIndex, order: e.order })),
         ...state.pins.filter(p => p.type !== "excluded").map(p => ({ desc: p.label, amount: p.amount || 0, method: p.method, type: p.type, date: null, pinned: true })),
     ];
-    // Largest individual spends (top 5 by amount).
-    const allSpendItems = [...spendItems].sort((a, b) => b.amount - a.amount).slice(0, 5);
-    // Cumulative spends grouped by (normalised) label — top 5 groups by summed total. A group whose
-    // members share one card keeps that card's dot; mixed cards/types fall back to neutral.
-    const labelGroups = (() => {
+    // Individual spends ranked high to low — the full list. The card shows the leading few; "View all"
+    // opens the complete ranking, so both read from the same array and can't disagree.
+    const rankedItems = [...spendItems].sort((a, b) => b.amount - a.amount);
+    // Cumulative spends grouped by (normalised) label, ranked by summed total — again the full list,
+    // previewed on the card. A group whose members share one card keeps that card's dot; mixed
+    // cards/types fall back to neutral.
+    const rankedLabels = (() => {
         const map = new Map();
         spendItems.forEach(it => {
             const key = (it.desc || "").trim().toLowerCase();
@@ -2269,8 +2272,11 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
             if (g.type !== it.type)
                 g.type = "mixed";
         });
-        return [...map.values()].sort((a, b) => b.total - a.total).slice(0, 5);
+        return [...map.values()].sort((a, b) => b.total - a.total);
     })();
+    // Both views cover the same spend, so one total serves either ranking.
+    const rankedTotal = rankedItems.reduce((s, it) => s + it.amount, 0);
+    const SPEND_PREVIEW = 5; // rows shown on the card before "View all"
     // Source split: how much of personal spend came from pins vs quick-logged entries
     const sourcePct = totalSpent > 0 ? Math.round((totalPinned / totalSpent) * 100) : 0;
     return (React.createElement("div", { style: { padding: "12px 16px" } },
@@ -2355,35 +2361,25 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                         " ",
                         fmt(byMethod[m.id])))),
                     METHODS.every(m => byMethod[m.id] === 0) && React.createElement("span", { style: { fontSize: 11, color: "var(--text-muted)" } }, "Nothing logged")))))),
-        allSpendItems.length > 0 && (() => {
-            const segBtn = (on) => ({ background: on ? "var(--surface-2)" : "transparent", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 6, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "4px 8px", fontSize: 11, fontWeight: on ? 600 : 500, cursor: "pointer" });
+        rankedItems.length > 0 && (() => {
+            const rows = spendView === "txn" ? rankedItems : rankedLabels;
+            const shown = rows.slice(0, SPEND_PREVIEW);
+            const hidden = rows.length - shown.length;
             return (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
                 React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8 } },
                     React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" } }, "Largest spends"),
                     React.createElement("div", { style: { display: "flex", gap: 4 } },
-                        React.createElement("button", { style: segBtn(spendView === "txn"), onClick: () => setSpendView("txn") }, "By transaction"),
-                        React.createElement("button", { style: segBtn(spendView === "label"), onClick: () => setSpendView("label") }, "By label"))),
+                        React.createElement("button", { style: spendSegBtn(spendView === "txn"), onClick: () => setSpendView("txn") }, "By transaction"),
+                        React.createElement("button", { style: spendSegBtn(spendView === "label"), onClick: () => setSpendView("label") }, "By label"))),
                 spendView === "txn"
-                    ? allSpendItems.map((item, i) => {
-                        // Real entries tap to edit; pins (no entry ref) stay read-only.
-                        const editable = item.entry && onEditEntry;
-                        return (React.createElement("div", { key: i, onClick: editable ? () => onEditEntry(item.entry) : undefined, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < allSpendItems.length - 1 ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" } },
-                            React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[item.method] || "var(--text-secondary)" } }),
-                            React.createElement("span", { style: { flex: 1, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" } },
-                                item.desc,
-                                item.type === "business" && React.createElement("span", { style: { ...S.badge, background: chipColors("#f59e0b").bg, color: "#f59e0b" } }, "work")),
-                            React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(item.amount)),
-                            editable && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15 } }, "\u203A")));
-                    })
-                    : labelGroups.map((g, i) => (React.createElement("div", { key: i, onClick: () => setLabelDetail(g), style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: i < labelGroups.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" } },
-                        React.createElement("span", { style: { ...S.dot, background: g.method ? (METHOD_COLOR[g.method] || "var(--text-secondary)") : "var(--text-secondary)" } }),
-                        React.createElement("span", { style: { flex: 1, fontSize: 13, color: g.type === "business" ? "#f59e0b" : "var(--text-body)" } },
-                            g.desc,
-                            g.count > 1 && React.createElement("span", { style: { color: "var(--text-secondary)", fontWeight: 400 } },
-                                " \u00D7",
-                                g.count)),
-                        React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: g.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(g.total)),
-                        React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15 } }, "\u203A"))))));
+                    ? shown.map((item, i) => React.createElement(SpendTxnRow, { key: i, item: item, sep: i < shown.length - 1, onEditEntry: onEditEntry }))
+                    : shown.map((g, i) => React.createElement(SpendLabelRow, { key: i, group: g, sep: i < shown.length - 1, onOpen: () => setLabelDetail(g) })),
+                hidden > 0 && (React.createElement("button", { onClick: () => setShowAllSpends(true), style: { width: "100%", background: "none", border: "none", borderTop: "1px solid var(--border)", color: "var(--text-tertiary)", padding: "10px 0 0", marginTop: 6, fontSize: 12, fontWeight: 600, cursor: "pointer", textAlign: "center" } },
+                    "View all ",
+                    rows.length,
+                    " ",
+                    spendView === "txn" ? "transactions" : "labels",
+                    " \u203A"))));
         })(),
         totalSpent > 0 && totalPinned > 0 && totalEntries > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Spend source"),
@@ -2400,9 +2396,64 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                     " \u25CF")))),
         methodDetail && (React.createElement(MethodDetailModal, { method: methodDetail, groups: transactionsFor(methodDetail), gross: grossByMethod[methodDetail], net: methodTotals[methodDetail], onEditEntry: onEditEntry ? (entry) => { setMethodDetail(null); onEditEntry(entry); } : null, onClose: () => setMethodDetail(null) })),
         categoryDetail && (React.createElement(CategoryDetailModal, { cat: categoryDetail === "uncat" ? null : CATEGORY_BY_ID[categoryDetail], groups: transactionsForCategory(categoryDetail === "uncat" ? null : categoryDetail), total: categoryDetail === "uncat" ? uncategorisedTotal : (byCategory[categoryDetail] || 0), onEditEntry: onEditEntry ? (entry) => { setCategoryDetail(null); onEditEntry(entry); } : null, onClose: () => setCategoryDetail(null) })),
+        showAllSpends && (React.createElement(AllSpendsModal, { view: spendView, onView: setSpendView, items: rankedItems, labels: rankedLabels, total: rankedTotal, onEditEntry: onEditEntry, onOpenLabel: setLabelDetail, onClose: () => setShowAllSpends(false) })),
         labelDetail && (React.createElement(LabelDetailModal, { group: labelDetail, groups: groupByWeek(labelDetail.items, weeks), onEditEntry: onEditEntry ? (entry) => { setLabelDetail(null); onEditEntry(entry); } : null, onClose: () => setLabelDetail(null) })),
         (waterfallDetail === "business" || waterfallDetail === "split") && (React.createElement(SpendTypeDetailModal, { title: waterfallDetail === "business" ? "Business spend" : "Split spend", color: waterfallDetail === "business" ? "#f59e0b" : "#a855f7", total: waterfallDetail === "business" ? businessTotal : splitTotal, groups: transactionsForType(waterfallDetail === "business" ? "business" : "excluded"), onEditEntry: onEditEntry ? (entry) => { setWaterfallDetail(null); onEditEntry(entry); } : null, onClose: () => setWaterfallDetail(null) })),
         waterfallDetail === "credits" && (React.createElement(CreditsDetailModal, { total: totalCredits, groups: creditGroups, onEditCredit: onEditCredit ? (credit) => { setWaterfallDetail(null); onEditCredit(credit); } : null, onClose: () => setWaterfallDetail(null) }))));
+}
+// ─── Largest Spends rows ──────────────────────────────────────────────────────
+// Shared by the Summary card (which previews the leading few) and the "View all" modal (which shows
+// the complete ranking), so the two renderings can't drift apart.
+const spendSegBtn = (on) => ({ background: on ? "var(--surface-2)" : "transparent", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 6, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "4px 8px", fontSize: 11, fontWeight: on ? 600 : 500, cursor: "pointer" });
+function SpendTxnRow({ item, sep, onEditEntry }) {
+    // Real entries tap to edit; pins (no entry ref) stay read-only.
+    const editable = item.entry && onEditEntry;
+    return (React.createElement("div", { onClick: editable ? () => onEditEntry(item.entry) : undefined, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: sep ? "1px solid var(--border)" : "none", cursor: editable ? "pointer" : "default" } },
+        React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[item.method] || "var(--text-secondary)" } }),
+        React.createElement("span", { style: { flex: 1, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-body)" } },
+            item.desc,
+            item.type === "business" && React.createElement("span", { style: { ...S.badge, background: chipColors("#f59e0b").bg, color: "#f59e0b" } }, "work")),
+        React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: item.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(item.amount)),
+        editable && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15 } }, "\u203A")));
+}
+function SpendLabelRow({ group, sep, onOpen }) {
+    return (React.createElement("div", { onClick: onOpen, style: { display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: sep ? "1px solid var(--border)" : "none", cursor: "pointer" } },
+        React.createElement("span", { style: { ...S.dot, background: group.method ? (METHOD_COLOR[group.method] || "var(--text-secondary)") : "var(--text-secondary)" } }),
+        React.createElement("span", { style: { flex: 1, fontSize: 13, color: group.type === "business" ? "#f59e0b" : "var(--text-body)" } },
+            group.desc,
+            group.count > 1 && React.createElement("span", { style: { color: "var(--text-secondary)", fontWeight: 400 } },
+                " \u00D7",
+                group.count)),
+        React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: group.type === "business" ? "#f59e0b" : "var(--text-primary)" } }, fmt(group.total)),
+        React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15 } }, "\u203A")));
+}
+// ─── All Spends Modal ─────────────────────────────────────────────────────────
+// "View all" from the Summary "Largest spends" card: the complete ranking, highest to lowest, with
+// the same By transaction / By label toggle. The toggle is the card's own state, so the modal opens
+// on whichever view you were already looking at and the card reflects any change on close.
+//
+// Tapping a row leaves this modal mounted rather than closing it first: the label breakdown (and the
+// entry editor) stack on top, so dismissing one drops you back into the ranking with your scroll
+// position intact — the point of the screen being to work down a long list.
+function AllSpendsModal({ view, onView, items, labels, total, onEditEntry, onOpenLabel, onClose }) {
+    const isTxn = view === "txn";
+    const rows = isTxn ? items : labels;
+    return (React.createElement(Modal, { onClose: onClose, title: "Largest spends" },
+        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 8 } },
+            React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)" } },
+                rows.length,
+                " ",
+                isTxn ? (rows.length === 1 ? "transaction" : "transactions") : (rows.length === 1 ? "label" : "labels"),
+                " \u00B7 ",
+                fmt(total)),
+            React.createElement("div", { style: { display: "flex", gap: 4, flexShrink: 0 } },
+                React.createElement("button", { style: spendSegBtn(isTxn), onClick: () => onView("txn") }, "By transaction"),
+                React.createElement("button", { style: spendSegBtn(!isTxn), onClick: () => onView("label") }, "By label"))),
+        React.createElement("div", { style: { maxHeight: 420, overflowY: "auto" } },
+            rows.length === 0 && React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "12px 0", textAlign: "center" } }, "No spend logged yet"),
+            isTxn
+                ? rows.map((item, i) => React.createElement(SpendTxnRow, { key: i, item: item, sep: i < rows.length - 1, onEditEntry: onEditEntry }))
+                : rows.map((g, i) => React.createElement(SpendLabelRow, { key: i, group: g, sep: i < rows.length - 1, onOpen: () => onOpenLabel(g) })))));
 }
 // ─── Week Grouped List ────────────────────────────────────────────────────────
 // Shared list body for the Summary drill-downs: week headers (ascending) punctuating one continuous
