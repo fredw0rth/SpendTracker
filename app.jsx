@@ -541,7 +541,10 @@ function App() {
   const [state, dispatch] = useReducer(reducer, null, () => {
     const s = load() || defaultState();
     // Backfill fields for accounts created before they existed: methods (customisable payment
-    // types), categories, and the category-prompt toggle. Spread once so all backfills apply.
+    // types), categories, the category-prompt toggle, and credits (added after some accounts
+    // already existed — those have no `credits` key at all, not even an empty array; leaving it
+    // missing crashes the first render that reaches a bare `.credits.filter(...)`, which takes
+    // down the whole tree with no error boundary to catch it). Spread once so all backfills apply.
     return {
       ...s,
       methods: (s.methods && s.methods.length) ? s.methods : DEFAULT_METHODS,
@@ -552,6 +555,7 @@ function App() {
         : DEFAULT_CATEGORIES,
       categoryPrompt: s.categoryPrompt === undefined ? true : s.categoryPrompt,
       descriptionPrompt: s.descriptionPrompt === undefined ? true : s.descriptionPrompt,
+      credits: s.credits || [],
     };
   });
 
@@ -658,6 +662,10 @@ function App() {
     ...periodData,
     entries: [...periodData.entries, ...pinEntries],
     pins: periodData.pins.filter(p => !isScheduledPin(p)),
+    // Archived months from before credits existed have no `credits` key at all (not even `[]`) —
+    // normalised here so every downstream consumer of effectiveData can treat it as always present,
+    // whether it's live state (already backfilled above) or an old archive (never was).
+    credits: periodData.credits || [],
   };
 
   useEffect(() => {
@@ -894,7 +902,7 @@ function App() {
           )}
 
           {weeks.filter(w => w.index === activeWeek).map(week => (
-            <WeekPanel key={week.index} week={week} weeks={weeks} entries={effectiveData.entries.filter(e => e.weekIndex === week.index)} credits={effectiveData.credits.filter(c => c.weekIndex === week.index) || []} weeklyBudget={rebalancedBudgets[week.index] ?? effectiveData.weeklyBudget} isLastWeek={week.index === weeks.length} categories={state.categories} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onAddEntry={() => setShowEntryFor(week.index)} onDelEntry={delEntry} onDelCredit={delCredit} onEditEntry={openEditEntry} onEditCredit={openEditCredit} onUpdEntry={updEntry} onUpdCredit={updCredit} onCapture={setLastDeleted} lastDeleted={lastDeleted} onUndo={undoLastDeleted} onSkipPin={viewingPast ? null : skipPinOccurrence} onMovePin={viewingPast ? null : movePinOccurrence} onReorderPin={viewingPast ? null : reorderPinOccurrence} />
+            <WeekPanel key={week.index} week={week} weeks={weeks} entries={effectiveData.entries.filter(e => e.weekIndex === week.index)} credits={(effectiveData.credits || []).filter(c => c.weekIndex === week.index)} weeklyBudget={rebalancedBudgets[week.index] ?? effectiveData.weeklyBudget} isLastWeek={week.index === weeks.length} categories={state.categories} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onAddEntry={() => setShowEntryFor(week.index)} onDelEntry={delEntry} onDelCredit={delCredit} onEditEntry={openEditEntry} onEditCredit={openEditCredit} onUpdEntry={updEntry} onUpdCredit={updCredit} onCapture={setLastDeleted} lastDeleted={lastDeleted} onUndo={undoLastDeleted} onSkipPin={viewingPast ? null : skipPinOccurrence} onMovePin={viewingPast ? null : movePinOccurrence} onReorderPin={viewingPast ? null : reorderPinOccurrence} />
           ))}
         </div>
       )}
