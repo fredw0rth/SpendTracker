@@ -1,6 +1,6 @@
 // Cache name includes a version number — bump this any time index.html or app.jsx changes,
 // so returning users get the update instead of a stale cached copy.
-const CACHE_NAME = "spendtracker-v47";
+const CACHE_NAME = "spendtracker-v48";
 const CACHED_FILES = [
   "./",
   "./index.html",
@@ -42,6 +42,10 @@ self.addEventListener("fetch", (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
         return response;
       })
-      .catch(() => caches.match(event.request))
+      // Scope the fallback to THIS release's cache. An unscoped caches.match() searches every
+      // cache still on the device, so a flaky connection could serve an app.js from one release
+      // against an index.html/crypto.js from another — a version mix that crashes in ways the
+      // stack trace won't explain.
+      .catch(() => caches.open(CACHE_NAME).then((cache) => cache.match(event.request)))
   );
 });
