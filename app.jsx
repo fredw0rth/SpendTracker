@@ -138,6 +138,26 @@ const monthName = (d) => MONTH_NAMES[d.getMonth()];
 const dateStr = (d) => `${dayName(d)} ${d.getDate()} ${monthName(d)}`;
 const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
 
+// The spend day an entry is filed under: a zero-padded "YYYY-MM-DD" calendar date, absent when
+// the day isn't known. Deliberately date-only and deliberately not `date`:
+//   - `date` is when the entry was LOGGED, not when the money was spent, and a cross-week move
+//     rewrites weekIndex while leaving it alone — so it can fall outside its own week.
+//   - A full timestamp would drift: toISOString() at 23:00 on a device at UTC+13 yields tomorrow.
+//   - Zero-padding is what makes the string sortable, which is the whole sort for day grouping.
+// Absent means undated, so every pre-existing entry stays valid with no migration.
+// Distinct from occKeyOf below, which is un-padded and only ever a map key for pin overrides.
+const pad2 = (n) => String(n).padStart(2, "0");
+const dayKey = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+// Column 0-6 for a day in the day picker's grid. buildWeeks closes a week on SUNDAY, so weeks run
+// Mon→Sun and Monday is column 0 — not the Sun=0 that getDay() hands back. Partial weeks (the first
+// week of a period starts on payday, mid-week) rely on this to sit under the right columns.
+const weekCol = (d) => (d.getDay() + 6) % 7;
+// Parsed back as LOCAL midnight — `new Date("2026-07-31")` would parse as UTC and can land on
+// the previous day once rendered in a negative-offset timezone.
+const dayKeyToDate = (key) => { const [y, m, d] = String(key).split("-").map(Number); return new Date(y, m - 1, d); };
+// Long form for day headings: "Fri 31 Jul". Reuses dateStr so headings match the week ranges.
+const dayKeyLabel = (key) => dateStr(dayKeyToDate(key));
+
 // Unencrypted timestamp of the last successful account export (crypto.js writes it once
 // exportBackup succeeds). Key name must stay in sync with crypto.js's LAST_BACKUP_KEY.
 const LAST_BACKUP_KEY = "spendtracker_last_backup";
@@ -284,6 +304,7 @@ function makePinEntry(pin, weekIndex, date) {
     category: pin.category,    // carried so week-log rows and the category summary see it
     weekIndex,
     date: date.toISOString(),
+    day: dayKey(date),         // a scheduled occurrence knows its real calendar day, so day grouping gets it free
     order: date.getTime(),
     pinned: true,              // read-only marker: managed from the Pinned tab, not the week log
     pinId: pin.id,
@@ -299,8 +320,13 @@ function expandScheduledPins(pins, weeks) {
   const pushOcc = (p, naturalWeek, date) => {
     const k = occKeyOf(date);
     if ((p.skips || []).includes(k)) return;
-    const weekIndex = (p.moves && p.moves[k] != null) ? p.moves[k] : naturalWeek;
+    const moved = !!(p.moves && p.moves[k] != null);
+    const weekIndex = moved ? p.moves[k] : naturalWeek;
     const entry = makePinEntry(p, weekIndex, date);
+    // A moved occurrence keeps its original date (that's its identity — occKey is derived from it)
+    // but is now filed under a different week, so its day would sit outside that week. Drop the day
+    // rather than show a heading the week doesn't contain; the same rule a cross-week move follows.
+    if (moved) delete entry.day;
     if (p.orders && p.orders[k] != null) entry.order = p.orders[k];
     out.push(entry);
   };
@@ -392,6 +418,24 @@ function todayWeekIndex(weeks) {
   }
   if (today < norm(weeks[0]?.start)) return 1;
   return weeks[weeks.length - 1]?.index || 1;
+}
+
+// The week a given spend day is filed under. weeks already carries every day it contains
+// (buildWeeks), so this is a lookup rather than fresh date maths — and it's the only thing that
+// sets weekIndex for a dated entry, which is what keeps day and week from ever disagreeing.
+// Returns null for a day outside the period, so callers can fall back rather than guess.
+function weekIndexForDay(weeks, key) {
+  if (!key) return null;
+  const w = (weeks || []).find(w => w.days.some(d => dayKey(d) === key));
+  return w ? w.index : null;
+}
+
+// Today as a spend day, or null when today falls outside the period being viewed (an archived
+// month, or a period being previewed). londonNow rather than new Date so "today" agrees with the
+// rollover check and the current-week highlight instead of drifting on a travelling device.
+function todayDayKey(weeks) {
+  const key = dayKey(londonNow());
+  return weekIndexForDay(weeks, key) ? key : null;
 }
 
 // ─── Default State ────────────────────────────────────────────────────────────
@@ -1180,22 +1224,31 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
   const rowRefs = useRef({});                          // unit.id -> row DOM node, for hit-testing during drag
 
   // One "unit" per rendered row: a solo entry, a whole split pair, or a credit. Entries and credits
-  // are merged into a single list sorted by effective order (newest first), so credits interleave
-  // with spend chronologically instead of being pinned to the bottom. A manual drag overrides this
-  // by rewriting `order`. A split's two halves share one order value, so the pair sorts as a unit.
+  // are merged into a single list, so credits interleave with spend chronologically instead of being
+  // pinned to the bottom. A split's two halves share one order value (and one day), so the pair
+  // sorts as a unit.
   const units = [];
   const seenSplits = new Set();
   for (const e of entries) {
     if (e.splitGroupId) {
       if (seenSplits.has(e.splitGroupId)) continue;
       seenSplits.add(e.splitGroupId);
-      units.push({ kind: "split", id: e.splitGroupId, order: effOrder(e), group: entries.filter(x => x.splitGroupId === e.splitGroupId) });
+      units.push({ kind: "split", id: e.splitGroupId, order: effOrder(e), day: e.day || null, group: entries.filter(x => x.splitGroupId === e.splitGroupId) });
     } else {
-      units.push({ kind: "single", id: e.id, order: effOrder(e), entry: e, pinned: !!e.pinned });
+      units.push({ kind: "single", id: e.id, order: effOrder(e), day: e.day || null, entry: e, pinned: !!e.pinned });
     }
   }
-  for (const c of credits) units.push({ kind: "credit", id: c.id, order: effOrder(c), credit: c });
-  units.sort((a, b) => b.order - a.order);
+  for (const c of credits) units.push({ kind: "credit", id: c.id, order: effOrder(c), day: c.day || null, credit: c });
+  // Newest first, as before — but the spend day is now the primary key, so the list reads as a run
+  // of days rather than one undifferentiated column. Undated rows (everything logged before days
+  // existed, and anything whose day was dropped by a cross-week move) sink to a trailing block:
+  // they can't be slotted between two dated rows without inventing a day they never had.
+  // Within a day, `order` still decides, so hand-arranged positions survive untouched.
+  units.sort((a, b) => {
+    if (a.day && b.day) { if (a.day !== b.day) return a.day < b.day ? 1 : -1; }
+    else if (a.day || b.day) return a.day ? -1 : 1;
+    return b.order - a.order;
+  });
 
   // Payment types actually used by this week's entries (any classification). The filter is only
   // worth offering when there's more than one — otherwise it's noise. Kept in state.methods order.
@@ -1278,14 +1331,19 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
   }
 
   // Bulk move every selected unit to a different week (reusing UPD_ENTRY/UPD_CREDIT, same as drag reorder).
+  // The day is DROPPED on the way: a row's day has to sit inside the week it's filed under, and a
+  // day from the old week never does. Moving a spend to another week is a statement that you no
+  // longer know which day it happened, so it lands undated rather than under a fabricated heading.
+  // (This is exactly the drift that makes the older `date` field useless as a spend date — it was
+  // left alone by moves, so it can point outside its own week. Clearing is what stops it recurring.)
   function bulkMove(newWeek) {
     units.forEach(u => {
       if (!selected.has(u.id)) return;
       // A pinned occurrence moves via a per-occurrence week override, not by mutating a real entry.
       if (u.pinned) onMovePin(u.entry.pinId, u.entry.occKey, newWeek);
-      else if (u.kind === "credit") onUpdCredit({ ...u.credit, weekIndex: newWeek });
-      else if (u.kind === "single") onUpdEntry({ ...u.entry, weekIndex: newWeek });
-      else u.group.forEach(half => onUpdEntry({ ...half, weekIndex: newWeek }));
+      else if (u.kind === "credit") onUpdCredit({ ...u.credit, weekIndex: newWeek, day: undefined });
+      else if (u.kind === "single") onUpdEntry({ ...u.entry, weekIndex: newWeek, day: undefined });
+      else u.group.forEach(half => onUpdEntry({ ...half, weekIndex: newWeek, day: undefined }));
     });
     setShowMove(false);
     exitEdit();
@@ -1311,19 +1369,34 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
   // Persist a hand-reordered list: redistribute the units' existing order values to their new
   // positions (highest value = top). Reusing the existing value set keeps future-logged items —
   // which get a fresh, larger Date.now() — naturally on top. Split halves both take the group's value.
-  function commitReorder(finalUnits) {
+  function commitReorder(finalUnits, draggedId) {
     if (!finalUnits) return;
+    // A row dropped into another day's block has to ADOPT that day, or the day-first sort simply
+    // snaps it back where it came from the moment we re-render and the drag looks like it failed.
+    // The day comes from the row above (you dropped it beneath that heading); at the very top there
+    // is no row above, so the row below decides. Landing in the undated block clears the day.
+    // Only the dragged row changes — every other row keeps the day it already had.
+    const di = draggedId != null ? finalUnits.findIndex(u => u.id === draggedId) : -1;
+    const dragged = di >= 0 ? finalUnits[di] : null;
+    const adoptedDay = dragged ? (di > 0 ? finalUnits[di - 1].day : (finalUnits[1] ? finalUnits[1].day : dragged.day)) : null;
+    const dayChanged = dragged && !dragged.pinned && (adoptedDay || null) !== (dragged.day || null);
+
     // Pinned occurrences reorder too (live period only) via a per-occurrence order override; they
     // share the same redistribution pool as entries/credits so positions interleave correctly.
     const movable = pinEditable ? finalUnits : finalUnits.filter(u => !u.pinned);
     const values = movable.map(u => u.order).sort((a, b) => b - a);
     movable.forEach((u, i) => {
       const newOrder = values[i];
-      if (u.order === newOrder) return;
+      const isDragged = dayChanged && u.id === draggedId;
+      if (u.order === newOrder && !isDragged) return;
+      // A pin occurrence has no editable day (it's derived from the schedule), so only its order moves.
       if (u.pinned) onReorderPin(u.entry.pinId, u.entry.occKey, newOrder);
-      else if (u.kind === "credit") onUpdCredit({ ...u.credit, order: newOrder });
-      else if (u.kind === "single") onUpdEntry({ ...u.entry, order: newOrder });
-      else u.group.forEach(half => onUpdEntry({ ...half, order: newOrder }));
+      else {
+        const dayPatch = isDragged ? { day: adoptedDay || undefined } : {};
+        if (u.kind === "credit") onUpdCredit({ ...u.credit, order: newOrder, ...dayPatch });
+        else if (u.kind === "single") onUpdEntry({ ...u.entry, order: newOrder, ...dayPatch });
+        else u.group.forEach(half => onUpdEntry({ ...half, order: newOrder, ...dayPatch }));
+      }
     });
   }
 
@@ -1358,7 +1431,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
       window.removeEventListener("touchend", end);
       window.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", end);
-      commitReorder(dragListRef.current);
+      commitReorder(dragListRef.current, dragIdRef.current);
       dragIdRef.current = null; dragListRef.current = null;
       setDragId(null); setDragList(null);
     };
@@ -1369,6 +1442,28 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
       window.addEventListener("mousemove", onMouseMove);
       window.addEventListener("mouseup", end);
     }
+  }
+
+  // True when the unit at `i` opens a new day block — i.e. it's the first row, or its day differs
+  // from the row above. Comparing against the rendered list (not the sorted one) means the headings
+  // follow the live working order mid-drag, so a row dragged into another day shows the change as
+  // it happens rather than only after the drop.
+  function dayHeadingFor(list, i) {
+    if (i === 0) return true;
+    return (list[i].day || null) !== (list[i - 1].day || null);
+  }
+
+  // A day's spend: personal only, matching the gross figure the week header shows (work is
+  // reimbursed, the "not yours" half of a split isn't yours, and credits are money in). Deliberately
+  // NOT netted against credits — fmt() prints absolute values, so a day whose credits outweighed its
+  // spend would render its negative total as a positive one. Days with no personal spend total zero
+  // and the heading simply omits the figure rather than showing £0.00 against a lone credit row.
+  function dayTotal(list, day) {
+    return list.filter(u => (u.day || null) === (day || null)).reduce((s, u) => {
+      if (u.kind === "credit") return s;
+      if (u.kind === "split") return s + u.group.filter(e => e.type === "personal").reduce((g, e) => g + e.amount, 0);
+      return s + (u.entry.type === "personal" ? u.entry.amount : 0);
+    }, 0);
   }
 
   function renderUnitContent(unit) {
@@ -1421,8 +1516,18 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
         </div>
       )}
       <div style={{ marginTop:12 }}>
-        {renderUnits.map(unit => (
-          <div key={unit.id} ref={el => { if (el) rowRefs.current[unit.id] = el; else delete rowRefs.current[unit.id]; }}
+        {renderUnits.map((unit, i) => (
+          <React.Fragment key={unit.id}>
+          {/* Day heading, emitted whenever the day changes going down the list. Rendered as a sibling
+              of the rows rather than wrapping them, so the drag hit-test — which walks rowRefs — never
+              sees it and keeps measuring only real rows. Subtotal is that day's personal spend. */}
+          {dayHeadingFor(renderUnits, i) && (
+            <div style={S.dayHead}>
+              <span style={S.dayHeadLabel}>{unit.day ? dayKeyLabel(unit.day) : "Undated"}</span>
+              {dayTotal(renderUnits, unit.day) > 0 && <span style={S.dayHeadTotal}>{fmt(dayTotal(renderUnits, unit.day))}</span>}
+            </div>
+          )}
+          <div ref={el => { if (el) rowRefs.current[unit.id] = el; else delete rowRefs.current[unit.id]; }}
                style={{ display:"flex", alignItems:"center", gap:6, ...(dragId === unit.id ? S.rowDragging : {}) }}>
             {editMode && (unit.pinned && !pinEditable
               ? <span style={{ ...S.checkbox, opacity:0.25, cursor:"default" }} />
@@ -1435,6 +1540,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
                       onTouchStart={(e) => { e.stopPropagation(); beginDrag(e.touches[0].clientY, unit, true); }}>≡</button>
             )}
           </div>
+          </React.Fragment>
         ))}
         {units.length === 0 && <div style={{ color:"var(--text-secondary)", fontSize:13, padding:"12px 0" }}>Nothing logged</div>}
         {units.length > 0 && renderUnits.length === 0 && <div style={{ color:"var(--text-secondary)", fontSize:13, padding:"12px 0" }}>No transactions on this payment type</div>}
@@ -1989,10 +2095,25 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
   // The amount is an integer number of pence, filled in from the right (calculator style), so the
   // decimal never has to be typed: tap 1-2-5-0 → £12.50. Starts at £0.00. Prefilled when editing.
   const [cents, setCents] = useState(() => editData ? Math.round(editData.amount * 100) : 0);
-  // Which week a new entry is logged to. Seeds from the weekIndex prop every time the modal opens
-  // (the modal is remounted per open), so the quick-add ＋ always defaults back to the current
-  // calendar week — the chosen week is never persisted across opens.
-  const [selectedWeek, setSelectedWeek] = useState(weekIndex);
+  // Which DAY a new entry is logged to, as a "YYYY-MM-DD" key. Seeds to today when today falls in
+  // the week the modal was opened for, otherwise that week's last day — so the quick-add ＋ lands
+  // on today, while "Log spend" on some other week lands in the week you actually tapped. Seeded
+  // fresh every open (the modal is remounted per open), so a chosen day never persists across opens.
+  const [selectedDay, setSelectedDay] = useState(() => {
+    const w = (weeks || []).find(x => x.index === weekIndex) || (weeks || [])[0];
+    if (!w || !w.days.length) return null;
+    const today = todayDayKey(weeks);
+    if (today && w.days.some(d => dayKey(d) === today)) return today;
+    return dayKey(w.days[w.days.length - 1]);
+  });
+  const [dayPickerOpen, setDayPickerOpen] = useState(false);
+  // Which week the open picker is showing. Null = follow the selected day; stepping with ‹ › sets
+  // an override so another week can be browsed, and picking a day clears it again.
+  const [pickerWeekOverride, setPickerWeekOverride] = useState(null);
+  // The week is DERIVED from the chosen day and never stored separately — one control, so the two
+  // can't contradict each other and a dated entry can't be filed outside its own day's week. Falls
+  // back to the opening week only if there's no usable day (a period with no days can't happen).
+  const selectedWeek = weekIndexForDay(weeks, selectedDay) || weekIndex;
   // Fall back to the first method if the seeded id no longer exists (e.g. its type was removed).
   const [method, setMethod] = useState(() => {
     const seed = editEntry ? editEntry.method : (splitRef ? splitRef.method : defaultMethod);
@@ -2170,8 +2291,8 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
         // The "not yours" portion is excluded from your spend total — same bucket as shared/split pins.
         // This covers both work reimbursement and splitting a tab with friends; neither should
         // touch your remaining budget, and neither should be conflated with actual work expenses.
-        const your = yourPortion > 0 ? { id: Math.random().toString(36).slice(2), amount: yourPortion, label: note.trim(), note: note.trim(), method, type: "personal", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId } : null;
-        const their = { id: Math.random().toString(36).slice(2), amount: theirPortion, label: note.trim(), note: note.trim(), method, type: "excluded", weekIndex: selectedWeek, date: baseDate, order: baseOrder, splitGroupId: groupId };
+        const your = yourPortion > 0 ? { id: Math.random().toString(36).slice(2), amount: yourPortion, label: note.trim(), note: note.trim(), method, type: "personal", weekIndex: selectedWeek, day: selectedDay || undefined, date: baseDate, order: baseOrder, splitGroupId: groupId } : null;
+        const their = { id: Math.random().toString(36).slice(2), amount: theirPortion, label: note.trim(), note: note.trim(), method, type: "excluded", weekIndex: selectedWeek, day: selectedDay || undefined, date: baseDate, order: baseOrder, splitGroupId: groupId };
         const save = { kind: "split", your, their, flash: { amount: splitTotal, split: true } };
         // Offer categorisation of the personal portion when there is one and the prompt is on.
         if (categoryPrompt && your) { setPendingSave(save); return; }
@@ -2181,14 +2302,14 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
     }
 
     if (type === "credit") {
-      onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), weekIndex: selectedWeek, from: "", date: new Date().toISOString(), order: Date.now() });
+      onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), weekIndex: selectedWeek, day: selectedDay || undefined, from: "", date: new Date().toISOString(), order: Date.now() });
       setFlash({ amount, credit: true });
       setTimeout(() => setFlash(null), 900);
       resetAfterSave();
       return;
     }
 
-    const entry = { id: Math.random().toString(36).slice(2), amount, label: note.trim(), note: note.trim(), method, type, weekIndex: selectedWeek, date: new Date().toISOString(), order: Date.now() };
+    const entry = { id: Math.random().toString(36).slice(2), amount, label: note.trim(), note: note.trim(), method, type, weekIndex: selectedWeek, day: selectedDay || undefined, date: new Date().toISOString(), order: Date.now() };
     // Personal spends get the category prompt (when enabled); work expenses skip it.
     if (categoryPrompt && type === "personal") {
       setPendingSave({ kind: "entry", entry, flash: { amount, method } });
@@ -2214,16 +2335,54 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
 
   // Enter-key glyph changes on the first split step since it advances rather than saves
   const enterGlyph = type === "split" && splitStage === "total" ? "→" : "↵";
-  // When logging (not editing), the title carries a week picker so a cost can be dropped into any
-  // week of the period — not just today's. Editing keeps a plain title (a row's week can't change).
+  // When logging (not editing), the title carries a day picker so a cost can be dropped on any day
+  // of the period — not just today. It reads "Today" in the common case rather than the date, since
+  // that's the 90% path and scans faster. Editing keeps a plain title (a row's day can't change:
+  // its week is fixed, and changing the day would mean re-deriving the week under the entry).
+  const todayKey = todayDayKey(weeks);
+  const dayLabel = !selectedDay ? "day" : (selectedDay === todayKey ? "Today" : dayKeyLabel(selectedDay));
   const title = isEdit ? (editCredit ? "Edit credit" : "Edit spend") : (
     <span style={{ display:"inline-flex", alignItems:"center", gap:6 }}>
       Log ·
-      <select value={selectedWeek} onChange={e => setSelectedWeek(Number(e.target.value))} style={S.weekSelect}>
-        {(weeks || []).map(w => <option key={w.index} value={w.index}>Week {w.index} · {dateStr(w.start)}–{dateStr(w.end)}</option>)}
-      </select>
+      <button onClick={() => setDayPickerOpen(o => !o)} style={S.daySelectBtn}>
+        {dayLabel} <span style={{ fontSize:10, opacity:0.7 }}>{dayPickerOpen ? "▴" : "▾"}</span>
+      </button>
     </span>
   );
+
+  // The expanded picker: one chip per day of the shown week, aligned to weekday columns so a
+  // partial week (the first week of a period starts on payday, mid-week) still lines up under the
+  // right headings instead of sliding left. ‹ › step whole weeks, so filing into another week is
+  // never lost by dropping the old week select.
+  const pickerWeek = (weeks || []).find(w => w.index === (pickerWeekOverride != null ? pickerWeekOverride : selectedWeek));
+  const dayPicker = (!isEdit && dayPickerOpen && pickerWeek) ? (
+    <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:10, marginBottom:12 }}>
+      <div style={{ display:"flex", gap:4, marginBottom:8 }}>
+        {Array.from({ length: weekCol(pickerWeek.days[0]) }).map((_, i) => <div key={"sp" + i} style={{ flex:1 }} />)}
+        {pickerWeek.days.map(d => {
+          const k = dayKey(d);
+          const active = k === selectedDay;
+          return (
+            <button key={k} onClick={() => { setSelectedDay(k); setPickerWeekOverride(null); setDayPickerOpen(false); }}
+              style={{ ...S.dayChip, ...(active ? S.dayChipActive : {}), ...(!active && k === todayKey ? S.dayChipToday : {}) }}>
+              <div style={{ fontSize:9, opacity:0.75, textTransform:"uppercase" }}>{dayName(d)}</div>
+              <div style={{ fontSize:14, fontWeight:700 }}>{d.getDate()}</div>
+            </button>
+          );
+        })}
+        {Array.from({ length: 6 - weekCol(pickerWeek.days[pickerWeek.days.length - 1]) }).map((_, i) => <div key={"tp" + i} style={{ flex:1 }} />)}
+      </div>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", gap:8 }}>
+        <button style={S.dayStepBtn} disabled={pickerWeek.index <= 1}
+          onClick={() => setPickerWeekOverride(pickerWeek.index - 1)}>‹</button>
+        <span style={{ fontSize:11, color:"var(--text-secondary)", textAlign:"center", flex:1 }}>
+          Week {pickerWeek.index} · {dateStr(pickerWeek.start)}–{dateStr(pickerWeek.end)}
+        </span>
+        <button style={S.dayStepBtn} disabled={pickerWeek.index >= (weeks || []).length}
+          onClick={() => setPickerWeekOverride(pickerWeek.index + 1)}>›</button>
+      </div>
+    </div>
+  ) : null;
 
   // After ↵ on a categorisable spend, the keypad is swapped for the category grid (Monzo-style).
   if (pendingSave) {
@@ -2302,6 +2461,7 @@ function EntryModal({ weekIndex, weeks, edit, defaultMethod, categories, categor
 
   return (
     <Modal onClose={onClose} title={title}>
+      {dayPicker}
       <div style={{ background:"var(--surface-2)", borderRadius:12, padding:"14px 20px", marginBottom:12, textAlign:"center", border:`1px solid ${flash ? mc.border : "var(--border-strong)"}`, opacity: isSplitEdit ? 0.7 : 1 }}>
         {displayCaption && <div style={{ fontSize:11, color:"#a855f7", fontWeight:600, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.04em" }}>{displayCaption}</div>}
         <div style={{ fontSize: displayStr.length > 7 ? 30 : 42, fontWeight:800, color: flash ? "#22c55e" : "var(--text-heading)" }}>
@@ -2869,10 +3029,14 @@ function AllSpendsModal({ view, onView, items, labels, total, onEditEntry, onOpe
 // very last one overall, so the rule carries straight through each header and the list scrolls as
 // one unbroken run from the end of one week into the start of the next.
 //
-// Per-transaction dates are deliberately absent: `date` records when an entry was logged, not when
-// it was spent, and never moves when an entry is filed into (or dragged between) weeks — so it can
-// fall outside the week it belongs to. The week header is the honest unit of time here, matching
-// the rest of the app, where every other date display is a week range.
+// These drill-downs stay grouped by WEEK even though entries now carry a spend `day`. Two reasons:
+// the drill-downs span the whole period, where day headings would fragment a short list into a
+// dozen near-empty sections; and `day` is optional, so any run of older or moved-between-weeks rows
+// would collapse into one undated block anyway. The week log is where days earn their keep.
+//
+// Note the per-transaction date shown here is still nothing: `date` remains the LOGGED-at timestamp
+// and is not safe to render — a cross-week move rewrites weekIndex and leaves it alone, so it can
+// point outside its own week. `day` is the field that means "when it was spent"; `date` is not.
 function WeekGroupedList({ groups, empty, renderRow }) {
   if (!groups.length) return <div style={{ color:"var(--text-muted)", fontSize:13, padding:"12px 0", textAlign:"center" }}>{empty}</div>;
   const lastGroup = groups.length - 1;
@@ -3275,6 +3439,16 @@ const S = {
   modalHeader: { display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 },
   modalTitle: { fontSize:15, fontWeight:700, color:"var(--text-heading)" },
   weekSelect: { background:"var(--surface-2)", border:"1px solid var(--border-strong)", borderRadius:6, color:"var(--text-heading)", fontSize:14, fontWeight:700, padding:"3px 6px", cursor:"pointer", outline:"none", fontFamily:"inherit" },
+  daySelectBtn: { background:"var(--surface-2)", border:"1px solid var(--border-strong)", borderRadius:6, color:"var(--text-heading)", fontSize:14, fontWeight:700, padding:"3px 8px", cursor:"pointer", outline:"none", fontFamily:"inherit", display:"inline-flex", alignItems:"center", gap:4 },
+  dayChip: { flex:1, minWidth:0, background:"var(--surface-2)", border:"1px solid var(--border)", borderRadius:8, color:"var(--text-secondary)", padding:"5px 0", cursor:"pointer", fontFamily:"inherit", textAlign:"center" },
+  dayChipActive: { background:"#0369a1", border:"1px solid #0369a1", color:"var(--on-accent)" },
+  dayChipToday: { border:"1px solid var(--text-heading)", color:"var(--text-heading)" },
+  dayStepBtn: { background:"var(--surface-2)", border:"1px solid var(--border)", borderRadius:6, color:"var(--text-secondary)", width:28, height:24, fontSize:14, cursor:"pointer", fontFamily:"inherit", padding:0, flexShrink:0 },
+  // Day heading in the week log. Matches WeekGroupedList's section headings so the two lists read
+  // as one system; the subtotal sits opposite on the same baseline.
+  dayHead: { display:"flex", alignItems:"baseline", justifyContent:"space-between", gap:8, padding:"10px 0 4px" },
+  dayHeadLabel: { fontSize:10, fontWeight:700, color:"var(--text-secondary)", textTransform:"uppercase", letterSpacing:"0.04em" },
+  dayHeadTotal: { fontSize:11, fontWeight:600, color:"var(--text-tertiary)" },
   quickAdd: { position:"fixed", left:"calc(14px + env(safe-area-inset-left))", bottom:"calc(14px + env(safe-area-inset-bottom))", width:52, height:52, borderRadius:"50%", background:"#0369a1", border:"none", color:"var(--on-accent)", fontSize:30, fontWeight:400, lineHeight:1, cursor:"pointer", zIndex:50, boxShadow:"0 4px 14px rgba(3,105,161,0.5)", display:"flex", alignItems:"center", justifyContent:"center", paddingBottom:4 },
   hintBanner: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, background:"var(--surface-2)", borderBottom:"1px solid #0369a1", padding:"8px 16px", fontSize:12, color:"var(--text-body)", lineHeight:1.4 },
   hintBtn: { background:"#0369a1", border:"none", borderRadius:6, color:"var(--on-accent)", padding:"4px 10px", fontSize:12, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" },

@@ -73,7 +73,7 @@
 
   // Build identifier, surfaced in crash diagnostics so a report can be tied to a specific
   // release. Bump in lockstep with CACHE_NAME in sw.js.
-  const BUILD = "v48";
+  const BUILD = "v49";
 
   const enc = new TextEncoder();
   const dec = new TextDecoder();
