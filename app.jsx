@@ -422,8 +422,51 @@ function defaultState() {
   };
 }
 
+// ─── State normalisation ──────────────────────────────────────────────────────
+// Single source of truth for "a state object the render tree can safely consume". Two jobs:
+//
+//  1. Backfill fields for accounts created before those fields existed. Older accounts have no
+//     `credits` key at all (not even an empty array), pre-icon accounts have categories without
+//     an `icon`, and so on.
+//  2. Act as a safety net against a reducer that forgets to carry a field forward. MONTH_ROLLOVER
+//     did exactly that and dropped `categories`, which crashed the whole app on the first payday
+//     after categories shipped — a render-phase throw with no error boundary takes down the tree.
+//
+// Applied on load AND to every reducer result, so a missing required field cannot survive a
+// dispatch. Keep it cheap: it runs once per state-changing action.
+function normalizeState(s) {
+  const src = s || {};
+  return {
+    ...src,
+    methods: (src.methods && src.methods.length) ? src.methods : DEFAULT_METHODS,
+    // Ensure every category has an `icon` (accounts from the emoji-based build won't): reuse the
+    // default id→icon map, else fall back to a generic tag.
+    categories: (src.categories && src.categories.length)
+      ? src.categories.map(c => c.icon ? c : { ...c, icon: DEFAULT_CATEGORY_ICON[c.id] || "tag" })
+      : DEFAULT_CATEGORIES,
+    categoryPrompt: src.categoryPrompt === undefined ? true : src.categoryPrompt,
+    descriptionPrompt: src.descriptionPrompt === undefined ? true : src.descriptionPrompt,
+    // `true` is the right default for a MISSING value here: defaultState() writes an explicit
+    // `false` for genuinely new accounts, so undefined means an existing account — never re-show
+    // the first-run tour to someone who has already dismissed it.
+    helpHintSeen: src.helpHintSeen === undefined ? true : src.helpHintSeen,
+    entries: src.entries || [],
+    pins: src.pins || [],
+    credits: src.credits || [],
+    monthHistory: src.monthHistory || [],
+  };
+}
+
 // ─── Reducer ──────────────────────────────────────────────────────────────────
+// rawReducer holds the actual transitions; `reducer` wraps it so every result is normalised.
+// The identity check matters: rawReducer's `default` returns the same object for an unknown
+// action, and normalising it would mint a new one, re-rendering and re-firing the save effect.
 function reducer(s, a) {
+  const next = rawReducer(s, a);
+  return next === s ? s : normalizeState(next);
+}
+
+function rawReducer(s, a) {
   switch (a.type) {
     case "ADD_ENTRY": return { ...s, entries: [a.entry, ...s.entries], lastMethod: (a.entry.type !== "credit" && a.entry.type !== "excluded" && a.entry.method) ? a.entry.method : s.lastMethod };
     case "DEL_ENTRY": return { ...s, entries: s.entries.filter(e => e.id !== a.id) };
@@ -451,10 +494,16 @@ function reducer(s, a) {
         paydayDay: s.paydayDay,
       };
       const newHistory = [...(s.monthHistory||[]), archive].slice(-12);
-      return { payYear: a.newYear, payMonth: a.newMonth, monthLabel: a.newLabel,
-        monthlyBudget: s.monthlyBudget, weeklyBudget: s.weeklyBudget,
-        paydayKind: s.paydayKind, paydayDay: s.paydayDay, theme: s.theme, pins: s.pins, methods: s.methods,
-        lastMethod: s.lastMethod, monthHistory: newHistory,
+      // Spread `s` — do NOT hand-list the fields to carry over. This case previously built a
+      // fresh object naming each passthrough, and silently dropped every field added to state
+      // afterwards (categories, categoryPrompt, descriptionPrompt, helpHintSeen), which crashed
+      // the app on the first payday after categories shipped. Anything not named below is meant
+      // to survive a rollover untouched: budgets, payday rule, theme, methods, categories, the
+      // prompt toggles, lastMethod, and pins (recurring by design). Entries and credits are
+      // period-scoped, so the new period starts empty.
+      return { ...s,
+        payYear: a.newYear, payMonth: a.newMonth, monthLabel: a.newLabel,
+        monthHistory: newHistory,
         entries: [], credits: [] };
     }
     case "EDIT_PAST_ENTRY": {
@@ -538,33 +587,18 @@ function HelpCard({ focus }) {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
-  const [state, dispatch] = useReducer(reducer, null, () => {
-    const s = load() || defaultState();
-    // Backfill fields for accounts created before they existed: methods (customisable payment
-    // types), categories, the category-prompt toggle, and credits (added after some accounts
-    // already existed — those have no `credits` key at all, not even an empty array; leaving it
-    // missing crashes the first render that reaches a bare `.credits.filter(...)`, which takes
-    // down the whole tree with no error boundary to catch it). Spread once so all backfills apply.
-    return {
-      ...s,
-      methods: (s.methods && s.methods.length) ? s.methods : DEFAULT_METHODS,
-      // Ensure every category has an `icon` (accounts from the emoji-based build won't): reuse the
-      // default id→icon map, else fall back to a generic tag.
-      categories: (s.categories && s.categories.length)
-        ? s.categories.map(c => c.icon ? c : { ...c, icon: DEFAULT_CATEGORY_ICON[c.id] || "tag" })
-        : DEFAULT_CATEGORIES,
-      categoryPrompt: s.categoryPrompt === undefined ? true : s.categoryPrompt,
-      descriptionPrompt: s.descriptionPrompt === undefined ? true : s.descriptionPrompt,
-      credits: s.credits || [],
-    };
-  });
+  const [state, dispatch] = useReducer(reducer, null, () => normalizeState(load() || defaultState()));
 
   // Refresh the module-level method views from state before any child renders (see Constants).
-  METHODS = state.methods;
-  METHOD_COLOR = Object.fromEntries(state.methods.map(m => [m.id, m.color]));
-  METHOD_NAME = Object.fromEntries(state.methods.map(m => [m.id, m.name]));
-  CATEGORIES = state.categories;
-  CATEGORY_BY_ID = Object.fromEntries(state.categories.map(c => [c.id, c]));
+  // Fall back rather than dereference state directly: this block runs on every render before any
+  // child, so a throw here unmounts the entire tree. normalizeState should already guarantee both
+  // arrays, but this is the last line of defence for anything that bypasses the reducer — a
+  // hand-patched vault, a malformed imported backup, or a future code path that sets state directly.
+  METHODS = (state.methods && state.methods.length) ? state.methods : DEFAULT_METHODS;
+  CATEGORIES = (state.categories && state.categories.length) ? state.categories : DEFAULT_CATEGORIES;
+  METHOD_COLOR = Object.fromEntries(METHODS.map(m => [m.id, m.color]));
+  METHOD_NAME = Object.fromEntries(METHODS.map(m => [m.id, m.name]));
+  CATEGORY_BY_ID = Object.fromEntries(CATEGORIES.map(c => [c.id, c]));
 
   const [tab, setTab] = useState("week");
   const [activeWeek, setActiveWeek] = useState(1);
@@ -657,14 +691,17 @@ function App() {
   // entries — counting against the week they land in — while they're dropped from the flat pin
   // total to avoid double-counting. Non-scheduled pins keep the flat whole-period behaviour.
   // effectiveData keeps its name so all derivations below read the augmented data unchanged.
-  const pinEntries = expandScheduledPins(periodData.pins, weeks);
+  // periodData is either live state (normalised) or an archived month, which stores a smaller
+  // shape and never gets normalizeState applied. Guard all three collections here so every
+  // downstream consumer of effectiveData — including SummaryView, which is handed it wholesale —
+  // can treat them as always present regardless of how old the archive is.
+  const periodEntries = periodData.entries || [];
+  const periodPins = periodData.pins || [];
+  const pinEntries = expandScheduledPins(periodPins, weeks);
   const effectiveData = {
     ...periodData,
-    entries: [...periodData.entries, ...pinEntries],
-    pins: periodData.pins.filter(p => !isScheduledPin(p)),
-    // Archived months from before credits existed have no `credits` key at all (not even `[]`) —
-    // normalised here so every downstream consumer of effectiveData can treat it as always present,
-    // whether it's live state (already backfilled above) or an old archive (never was).
+    entries: [...periodEntries, ...pinEntries],
+    pins: periodPins.filter(p => !isScheduledPin(p)),
     credits: periodData.credits || [],
   };
 
@@ -936,9 +973,13 @@ function App() {
           // Bounds use the payday rule the month was archived under, not today's setting.
           const { start, end } = periodBounds(m.payYear, m.payMonth, m.paydayKind || "last-working", m.paydayDay);
           const mWeeks = buildWeeks(start, end);
-          const pinEntries = expandScheduledPins(m.pins, mWeeks);
-          const spentEntries = [...m.entries, ...pinEntries].filter(e => e.type === "personal").reduce((s,e)=>s+e.amount,0);
-          const spentPins = m.pins.filter(p => !isScheduledPin(p) && p.type !== "business" && p.type !== "excluded").reduce((s,p)=>s+(p.amount||0),0);
+          // Archives are never run through normalizeState, so guard their collections the same
+          // way `credits` already is below — an older or imported archive may omit them entirely.
+          const mEntries = m.entries || [];
+          const mPins = m.pins || [];
+          const pinEntries = expandScheduledPins(mPins, mWeeks);
+          const spentEntries = [...mEntries, ...pinEntries].filter(e => e.type === "personal").reduce((s,e)=>s+e.amount,0);
+          const spentPins = mPins.filter(p => !isScheduledPin(p) && p.type !== "business" && p.type !== "excluded").reduce((s,p)=>s+(p.amount||0),0);
           const credits = (m.credits||[]).reduce((s,c)=>s+c.amount,0);
           return m.monthlyBudget - (spentEntries + spentPins) + credits;
         };

@@ -71,6 +71,10 @@
   // quick glance at a notification. Tune here.
   const AUTO_LOCK_MS = 2 * 60 * 1000; // 2 minutes
 
+  // Build identifier, surfaced in crash diagnostics so a report can be tied to a specific
+  // release. Bump in lockstep with CACHE_NAME in sw.js.
+  const BUILD = "v48";
+
   const enc = new TextEncoder();
   const dec = new TextDecoder();
 
@@ -735,7 +739,7 @@
   }
 
   // ── Root: decides what to show, gates the real app behind unlock ──
-  function Root() {
+  function RootInner() {
     const [phase, setPhase] = useState("boot"); // boot | onboard | migrate | locked | unlocked
     const [vault, setVault] = useState(null);
     const [importing, setImporting] = useState(false); // showing the "import a previous account" screen
@@ -802,7 +806,12 @@
     }
 
     let screen;
-    if (phase === "locked" && vault) {
+    if (phase === "locked") {
+      // Guard the vault-less case explicitly rather than letting it fall through to the onboard
+      // branch below: showing "Welcome, set your budget" on top of an existing encrypted vault
+      // would look exactly like data loss. Render nothing instead — phase only becomes "locked"
+      // after a vault has been loaded or a lock event, so this should be unreachable.
+      if (!vault) return null;
       screen = h(LockScreen, { vault, onUnlocked: handleUnlocked });
     } else if (importing && (phase === "onboard" || phase === "migrate")) {
       // Import is reachable from the pre-account screens (welcome / migrate).
@@ -823,6 +832,149 @@
       h("div", { style: C.preThemeToggle }, h(window.ThemeToggle, { theme: preTheme, onToggle: togglePreTheme })),
       screen
     );
+  }
+
+  // ── Crash recovery ──
+  // React unmounts the entire tree on any unhandled render-phase throw. Without a boundary that
+  // leaves #root empty — and since #root is min-height:100vh over the themed background, the
+  // result is an blank dark page that looks like a hang rather than an error. On a phone there is
+  // no console to check, so the error has to be shown on screen or it's invisible.
+  //
+  // Boundaries catch render and lifecycle throws only — not event handlers or async rejections.
+
+  // Shape-only summary of the decrypted state: enough to diagnose a structural bug, safe to paste
+  // into a chat. Allowlist rather than denylist, so any field added later is redacted by default.
+  // Arrays report only their length; everything else reports only its type. The named exceptions
+  // are calendar/enum/boolean settings that carry no financial information and are exactly what's
+  // needed to diagnose a rollover.
+  const DIAG_SAFE_KEYS = { payYear:1, payMonth:1, paydayKind:1, paydayDay:1, theme:1,
+                           categoryPrompt:1, descriptionPrompt:1, helpHintSeen:1 };
+  function shapeOf(s) {
+    if (!s || typeof s !== "object") return { state: s === null ? "null" : typeof s };
+    const out = {};
+    Object.keys(s).forEach((k) => {
+      const v = s[k];
+      if (Array.isArray(v)) out[k] = "array(" + v.length + ")";
+      else if (DIAG_SAFE_KEYS[k]) out[k] = v;
+      else if (v === null || v === undefined) out[k] = String(v);
+      else out[k] = typeof v;
+    });
+    return out;
+  }
+
+  function buildDiagnostics(err, info) {
+    let shape;
+    try { shape = shapeOf(Session.getState()); } catch (e) { shape = { error: "unavailable" }; }
+    return [
+      "SpendTracker diagnostics",
+      "build: " + BUILD,
+      "when: " + new Date().toISOString(),
+      "standalone: " + (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches),
+      "ua: " + navigator.userAgent,
+      "",
+      "error: " + ((err && err.name) || "Error") + ": " + ((err && err.message) || String(err)),
+      "",
+      "stack:",
+      (err && err.stack) || "(none)",
+      "",
+      "component stack:",
+      (info && info.componentStack) || "(none)",
+      "",
+      "state shape (no amounts, labels or notes):",
+      JSON.stringify(shape, null, 2),
+    ].join("\n");
+  }
+
+  function CrashScreen({ err, info, onRetry, onLock }) {
+    const [copied, setCopied] = useState("");
+    const [saving, setSaving] = useState(false);
+    const taRef = useRef(null);
+    const report = buildDiagnostics(err, info);
+    // Only offer the backup when a key is actually in memory — if it crashed while locked there is
+    // nothing to export, and a button that always fails is worse than no button.
+    const canExport = !!Session._dek;
+
+    async function copyReport() {
+      try {
+        await navigator.clipboard.writeText(report);
+        setCopied("Copied.");
+      } catch (e) {
+        // iOS refuses clipboard writes outside a trusted gesture on older WebKit — fall back to
+        // selecting the text so it can be copied with the native handles.
+        if (taRef.current) { taRef.current.focus(); taRef.current.select(); }
+        setCopied("Select all, then copy.");
+      }
+    }
+
+    async function exportBackup() {
+      setSaving(true);
+      try {
+        try { await Session._queue; } catch (e) { /* a failed pending save shouldn't block the export */ }
+        const json = await exportVaultJSON();
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "spendtracker-backup.json";
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 2000);
+      } catch (e) {
+        setCopied("Couldn't export — copy the diagnostics instead.");
+      }
+      setSaving(false);
+    }
+
+    return h("div", { style: { ...C.page, paddingTop: 32, paddingBottom: 32, justifyContent: "flex-start" } },
+      h("div", { style: C.brand }, "Something's gone wrong"),
+      h("div", { style: C.sub },
+        "Your data is safe and still encrypted on this device — nothing has been lost. " +
+        "The details below tell us what broke."),
+      h("textarea", {
+        ref: taRef,
+        readOnly: true,
+        value: report,
+        style: { ...C.input, height: 200, fontFamily: "ui-monospace, Menlo, monospace",
+                 fontSize: 11, lineHeight: 1.5, whiteSpace: "pre", overflow: "auto", marginBottom: 10 },
+      }),
+      copied ? h("div", { style: { ...C.note, color: "#60a5fa", marginBottom: 8 } }, copied) : null,
+      h("button", { style: C.primary, onClick: copyReport }, "Copy diagnostics"),
+      canExport
+        ? h("button", { style: C.ghost, onClick: exportBackup, disabled: saving },
+            saving ? "Exporting…" : "Export a backup")
+        : null,
+      h("button", { style: C.ghost, onClick: onRetry }, "Try again"),
+      h("button", { style: C.ghost, onClick: onLock }, "Back to the lock screen"),
+      h("button", { style: C.link, onClick: () => location.reload() }, "Reload the app")
+    );
+  }
+
+  class ErrorBoundary extends React.Component {
+    constructor(props) { super(props); this.state = { err: null, info: null }; }
+    static getDerivedStateFromError(err) { return { err }; }
+    componentDidCatch(err, info) {
+      this.setState({ info });
+      try { console.error("[SpendTracker] render crash", err, info); } catch (e) {}
+    }
+    render() {
+      if (!this.state.err) return this.props.children;
+      return h(CrashScreen, {
+        err: this.state.err, info: this.state.info,
+        onRetry: this.props.onRetry, onLock: this.props.onLock,
+      });
+    }
+  }
+
+  // Wrap RootInner from the outside so a throw in its own render or effects is caught too.
+  // The nonce is a remount key: bumping it discards the boundary's error state AND gives
+  // RootInner a fresh mount, which re-runs its boot effect and re-reads the vault from disk.
+  function Root() {
+    const [nonce, setNonce] = useState(0);
+    const retry = () => setNonce((n) => n + 1);
+    return h(ErrorBoundary, {
+      key: nonce,
+      onRetry: retry,
+      onLock: () => { try { Session.lock(); } catch (e) {} retry(); },
+    }, h(RootInner, { key: nonce }));
   }
 
   window.SpendTrackerRoot = Root;
