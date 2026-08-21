@@ -100,6 +100,11 @@
   } catch (e) {}
 </script>
 
+<!-- reconcile.js is the statement-reading + matching logic. Pure functions, no DOM and no
+     React, so it's also loaded directly by the unit tests; app.js reaches it via
+     window.SpendReconcile, so it must load first. -->
+<script src="reconcile.js"></script>
+
 <!-- app.js defines the tracker UI; crypto.js defines the encryption + lock screen
      that gates it. app.js must load first so crypto.js's Root can reference App
      and defaultState. -->

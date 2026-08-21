@@ -315,9 +315,14 @@ function isScheduledPin(p) {
 // per-occurrence overrides (skip/move/reorder) off the pin so a move never changes the key.
 const occKeyOf = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 function makePinEntry(pin, weekIndex, date) {
+    const occKey = occKeyOf(date);
+    // `amounts` is the fourth per-occurrence override map, alongside skips/moves/orders: it lets a
+    // single occurrence differ from the pin's standing amount without rewriting the others. That's
+    // what reconciliation needs when a statement shows one month's rent charged at a new price.
+    const override = (pin.amounts || {})[occKey];
     return {
         id: "pin-" + pin.id + "-" + weekIndex + "-" + date.getDate() + "-" + date.getMonth(),
-        amount: pin.amount || 0,
+        amount: override != null ? override : (pin.amount || 0),
         label: pin.label,
         note: pin.note || "",
         method: pin.method,
@@ -329,7 +334,7 @@ function makePinEntry(pin, weekIndex, date) {
         order: date.getTime(),
         pinned: true,
         pinId: pin.id,
-        occKey: occKeyOf(date), // identity for this occurrence's skip/move/order overrides
+        occKey, // identity for this occurrence's skip/move/order/amount overrides
     };
 }
 function expandScheduledPins(pins, weeks) {
@@ -545,6 +550,132 @@ function reducer(s, a) {
     const next = rawReducer(s, a);
     return next === s ? s : normalizeState(next);
 }
+// ─── Reconciliation: adapting app data to reconcile.js ────────────────────────
+// reconcile.js is deliberately ignorant of the app's object shapes. These two helpers are the
+// whole seam: one flattens what's logged into the small `candidate` shape the matcher compares
+// against, the other turns a period into the plain day→week lookup it uses to place a date.
+const REC = () => window.SpendReconcile;
+// Every period the statement could touch: the live one first (so it wins any overlap), then each
+// archived period, each rebuilt from its OWN payday rule and budget snapshot.
+function reconcilePeriods(state) {
+    const mk = (archiveIndex, d) => {
+        const { start, end } = periodBounds(d.payYear, d.payMonth, d.paydayKind || "last-working", d.paydayDay);
+        const weeks = buildWeeks(start, end);
+        return {
+            archiveIndex,
+            label: d.monthLabel,
+            data: d,
+            weeks,
+            // dayKeys mirrors exactly what weekIndexForDay reads (week.days), just serialised, so the
+            // matcher and the app can never disagree about which week a day belongs to.
+            weekKeys: weeks.map(w => ({ index: w.index, dayKeys: w.days.map(dayKey) })),
+        };
+    };
+    const out = [mk(null, state)];
+    (state.monthHistory || []).forEach((arc, i) => out.push(mk(i, arc)));
+    return out;
+}
+// Flattens one period's logged items into candidates. Three shapes collapse here:
+//   • a split becomes ONE candidate at the group total — it is one card transaction, and matching
+//     either half against the statement would flag every split you have ever logged;
+//   • a scheduled pin occurrence becomes a "pin" candidate carrying pinId + occKey, so its fixes
+//     can route to the pin's override maps rather than to a row that doesn't exist in `entries`;
+//   • a credit becomes a "credit" candidate, which only ever matches an incoming statement row.
+function reconcileCandidates(period, methodId) {
+    const d = period.data;
+    const entries = d.entries || [];
+    const pinEntries = expandScheduledPins(d.pins || [], period.weeks);
+    const all = [...entries, ...pinEntries];
+    const wanted = (m) => !methodId || m === methodId;
+    const out = [];
+    const seenSplit = new Set();
+    const kp = "a" + (period.archiveIndex == null ? "live" : period.archiveIndex);
+    for (const e of all) {
+        if (!wanted(e.method))
+            continue;
+        if (e.pinned) {
+            const recons = ((d.pins || []).find(p => p.id === e.pinId) || {}).recons || {};
+            out.push({
+                key: kp + ":pin:" + e.pinId + ":" + e.occKey, kind: "pin", direction: "debit",
+                amount: e.amount, day: e.day || null, label: e.label || "", method: e.method,
+                recon: recons[e.occKey] || null,
+                ref: { archiveIndex: period.archiveIndex, pinId: e.pinId, occKey: e.occKey, entry: e },
+            });
+            continue;
+        }
+        if (e.splitGroupId) {
+            if (seenSplit.has(e.splitGroupId))
+                continue;
+            seenSplit.add(e.splitGroupId);
+            const group = all.filter(x => x.splitGroupId === e.splitGroupId);
+            const your = group.find(x => x.type === "personal") || null;
+            const their = group.find(x => x.type === "excluded") || null;
+            out.push({
+                key: kp + ":split:" + e.splitGroupId, kind: "split", direction: "debit",
+                amount: Math.round(group.reduce((t, x) => t + (x.amount || 0), 0) * 100) / 100,
+                // The fingerprint is kept on the personal half, which is the one every fix rewrites.
+                day: e.day || null, label: e.label || "", method: e.method,
+                recon: (your && your.recon) || (their && their.recon) || null,
+                ref: { archiveIndex: period.archiveIndex, groupId: e.splitGroupId, your, their },
+            });
+            continue;
+        }
+        out.push({
+            key: kp + ":entry:" + e.id, kind: "entry", direction: "debit",
+            amount: e.amount, day: e.day || null, label: e.label || "", method: e.method,
+            recon: e.recon || null, ref: { archiveIndex: period.archiveIndex, entry: e },
+        });
+    }
+    for (const c of (d.credits || [])) {
+        out.push({
+            key: kp + ":credit:" + c.id, kind: "credit", direction: "credit",
+            amount: c.amount, day: c.day || null, label: c.label || "", method: null,
+            recon: c.recon || null, ref: { archiveIndex: period.archiveIndex, credit: c },
+        });
+    }
+    return out;
+}
+// ─── Reconciliation ops ───────────────────────────────────────────────────────
+// One reconciliation can produce dozens of fixes spread across the live period and several
+// archived ones. These apply a single op to one collection; RECONCILE_APPLY below folds a whole
+// batch of them into ONE state transition, because the save effect re-encrypts and rewrites the
+// entire vault on every dispatch — thirty fixes applied one at a time is thirty encrypt cycles.
+function applyReconEntryOp(list, op) {
+    if (op.op === "add")
+        return [op.entry, ...list];
+    if (op.op === "del")
+        return list.filter(e => e.id !== op.id);
+    if (op.op === "upd")
+        return list.map(e => e.id === op.entry.id ? op.entry : e);
+    return list;
+}
+function applyReconCreditOp(list, op) {
+    if (op.op === "add")
+        return [op.credit, ...list];
+    if (op.op === "del")
+        return list.filter(c => c.id !== op.id);
+    if (op.op === "upd")
+        return list.map(c => c.id === op.credit.id ? op.credit : c);
+    return list;
+}
+// Pin fixes never touch the recurring schedule — they write the same per-occurrence override maps
+// the Week tab's skip/move already use, keyed by the week-independent occKey. "rate" is the one
+// exception: it changes the pin's standing amount, which is what a genuine price rise means.
+function applyReconPinOp(list, op) {
+    return list.map(p => {
+        if (p.id !== op.pinId)
+            return p;
+        if (op.op === "skip")
+            return { ...p, skips: [...(p.skips || []), op.occKey] };
+        if (op.op === "amount")
+            return { ...p, amounts: { ...(p.amounts || {}), [op.occKey]: op.amount } };
+        if (op.op === "rate")
+            return { ...p, amount: op.amount };
+        if (op.op === "recon")
+            return { ...p, recons: { ...(p.recons || {}), [op.occKey]: op.recon } };
+        return p;
+    });
+}
 function rawReducer(s, a) {
     switch (a.type) {
         case "ADD_ENTRY": return { ...s, entries: [a.entry, ...s.entries], lastMethod: (a.entry.type !== "credit" && a.entry.type !== "excluded" && a.entry.method) ? a.entry.method : s.lastMethod };
@@ -613,6 +744,41 @@ function rawReducer(s, a) {
                 return arc;
             });
             return { ...s, monthHistory: newHistory };
+        }
+        case "RECONCILE_APPLY": {
+            // ops: [{ archiveIndex: null|number, kind: "entry"|"credit"|"pin", op, ...payload }]
+            // archiveIndex null targets the live period; a number targets that monthHistory slot, the
+            // same way EDIT_PAST_ENTRY does — the reconcile screen spans periods, so it can't rely on
+            // App's viewingPast routers, which only ever know about one.
+            const ops = a.ops || [];
+            if (!ops.length)
+                return s;
+            let entries = s.entries, credits = s.credits || [], pins = s.pins || [];
+            const history = s.monthHistory || [];
+            const nextHistory = history.slice();
+            let historyTouched = false;
+            for (const op of ops) {
+                if (op.archiveIndex == null) {
+                    if (op.kind === "credit")
+                        credits = applyReconCreditOp(credits, op);
+                    else if (op.kind === "pin")
+                        pins = applyReconPinOp(pins, op);
+                    else
+                        entries = applyReconEntryOp(entries, op);
+                    continue;
+                }
+                const arc = nextHistory[op.archiveIndex];
+                if (!arc)
+                    continue; // history trimmed under us — drop the op rather than crash
+                historyTouched = true;
+                if (op.kind === "credit")
+                    nextHistory[op.archiveIndex] = { ...arc, credits: applyReconCreditOp(arc.credits || [], op) };
+                else if (op.kind === "pin")
+                    nextHistory[op.archiveIndex] = { ...arc, pins: applyReconPinOp(arc.pins || [], op) };
+                else
+                    nextHistory[op.archiveIndex] = { ...arc, entries: applyReconEntryOp(arc.entries || [], op) };
+            }
+            return { ...s, entries, credits, pins, monthHistory: historyTouched ? nextHistory : history };
         }
         case "RESET": return { ...defaultState(), ...a.keep };
         default: return s;
@@ -689,6 +855,7 @@ function App() {
     } });
     const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
     const [showCustomise, setShowCustomise] = useState(false); // appearance / payment types / categories modal
+    const [showReconcile, setShowReconcile] = useState(false); // bank-statement reconciliation modal
     // The most recently deleted entry/credit (or split pair), kept verbatim so Undo can restore it
     // exactly. Global (not per-week/tab) and not persisted — survives navigation, clears on reload.
     const [lastDeleted, setLastDeleted] = useState(null); // {kind:"entry",entry} | {kind:"credit",credit} | {kind:"split",your,their} | {kind:"pin",pin} | {kind:"pinSkip",pinId,occKey}
@@ -974,6 +1141,19 @@ function App() {
                 React.createElement("button", { style: S.hintDismiss, "aria-label": "Dismiss", onClick: () => dispatch({ type: "SETTINGS", patch: { helpHintSeen: true } }) }, "\u2715")))),
         React.createElement("div", { style: S.tabs }, [["week", "Week"], ["pins", "Pinned"], ["savings", "Savings"], ["summary", "Summary"]].map(([k, l]) => (React.createElement("button", { key: k, style: { ...S.tab, ...(tab === k ? S.tabActive : {}) }, onClick: () => setTab(k) }, l)))),
         tab === "week" && (React.createElement("div", { style: { padding: "12px 16px 80px" } },
+            (state.monthHistory || []).length > 0 && (() => {
+                const n = state.monthHistory.length;
+                const canOlder = viewingPastIndex === null ? n > 0 : viewingPastIndex > 0;
+                const canNewer = viewingPastIndex !== null;
+                const goOlder = () => setViewingPastIndex(viewingPastIndex === null ? n - 1 : viewingPastIndex - 1);
+                const goNewer = () => setViewingPastIndex(viewingPastIndex === n - 1 ? null : viewingPastIndex + 1);
+                return (React.createElement("div", { style: S.periodNav },
+                    React.createElement("button", { style: { ...S.periodNavBtn, ...(canOlder ? {} : S.periodNavBtnOff) }, disabled: !canOlder, "aria-label": "Earlier period", onClick: goOlder }, "\u25C0"),
+                    React.createElement("div", { style: { textAlign: "center", lineHeight: 1.2 } },
+                        React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-heading)" } }, periodData.monthLabel),
+                        React.createElement("div", { style: { fontSize: 10, color: "var(--text-muted)" } }, viewingPast ? "finished period" : "current period")),
+                    React.createElement("button", { style: { ...S.periodNavBtn, ...(canNewer ? {} : S.periodNavBtnOff) }, disabled: !canNewer, "aria-label": "Later period", onClick: goNewer }, "\u25B6")));
+            })(),
             React.createElement("div", { style: S.weekNav }, weeks.map(w => (React.createElement("button", { key: w.index, style: { ...S.weekPill, ...(currentWeekObj && w.index === currentWeekObj.index ? S.weekPillCurrent : {}), ...(activeWeek === w.index ? S.weekPillActive : {}) }, onClick: () => setActiveWeek(w.index) },
                 "W",
                 w.index)))),
@@ -1063,7 +1243,7 @@ function App() {
                                 fmt(r.budget))),
                         React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#22c55e" : "#f87171" } }, signed(r.saved))))))));
         })(),
-        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onEditEntry: openEditEntry, onEditCredit: openEditCredit, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
+        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onReconcile: () => setShowReconcile(true), onEditEntry: openEditEntry, onEditCredit: openEditCredit, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
@@ -1134,7 +1314,9 @@ function App() {
             }
             catch (e) { /* ignore */ } } }),
         showImportAcct && React.createElement(ImportBackupModal, { onClose: () => setShowImportAcct(false) }),
-        showCustomise && React.createElement(CustomiseModal, { state: state, dispatch: dispatch, onClose: () => setShowCustomise(false) })));
+        showCustomise && React.createElement(CustomiseModal, { state: state, dispatch: dispatch, onClose: () => setShowCustomise(false) }),
+        showReconcile && React.createElement(ReconcileModal, { state: state, periods: reconcilePeriods(state), onApply: ops => { if (ops && ops.length)
+                dispatch({ type: "RECONCILE_APPLY", ops }); }, onClose: () => setShowReconcile(false) })));
 }
 // ─── Week Panel ───────────────────────────────────────────────────────────────
 function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, categories, onAddCategory, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit, onUpdEntry, onUpdCredit, onCapture, lastDeleted, onUndo, onSkipPin, onMovePin, onReorderPin }) {
@@ -2351,7 +2533,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
             } }, "Save")));
 }
 // ─── Summary View ─────────────────────────────────────────────────────────────
-function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onEditEntry, onEditCredit, onGoToWeek }) {
+function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onReconcile, onEditEntry, onEditCredit, onGoToWeek }) {
     const [methodDetail, setMethodDetail] = useState(null); // method name or null
     const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
     const [spendView, setSpendView] = useState("txn"); // "txn" = largest individual, "label" = grouped by name
@@ -2483,7 +2665,8 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     // Source split: how much of personal spend came from pins vs quick-logged entries
     const sourcePct = totalSpent > 0 ? Math.round((totalPinned / totalSpent) * 100) : 0;
     return (React.createElement("div", { style: { padding: "12px 16px" } },
-        React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginBottom: 10 } },
+        React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 10 } },
+            React.createElement("button", { style: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 500 }, onClick: onReconcile }, "\u21C4 Reconcile"),
             React.createElement("button", { style: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 500 }, onClick: onExport }, "\u2197 Export")),
         React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "18px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6, textTransform: "uppercase" } }, "Month overview"),
@@ -2962,6 +3145,364 @@ function ImportBackupModal({ onClose }) {
             React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirm(false) }, "Cancel"),
             React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, disabled: busy, onClick: doImport }, busy ? "Importing…" : "Wipe & import")))));
 }
+// ─── Reconcile with a bank statement ──────────────────────────────────────────
+// Three steps in one sheet: upload the CSV, confirm which column is which, then work through
+// the discrepancies. Nothing is written until the footer's two-step confirm, and everything it
+// does write goes out as a single RECONCILE_APPLY so the vault is re-encrypted once, not once
+// per fix.
+function ReconcileModal({ state, periods, onApply, onClose }) {
+    const [step, setStep] = useState("upload");
+    const [text, setText] = useState("");
+    const [fileName, setFileName] = useState("");
+    const [rows, setRows] = useState([]);
+    const [map, setMap] = useState(null);
+    const [methodId, setMethodId] = useState(state.lastMethod || (state.methods[0] || {}).id);
+    const [allCards, setAllCards] = useState(false);
+    const [err, setErr] = useState("");
+    const [result, setResult] = useState(null);
+    const [dayIndex, setDayIndex] = useState(null);
+    const [picked, setPicked] = useState({});
+    const [pinMode, setPinMode] = useState({}); // candidate key → "once" | "rate"
+    const [open, setOpen] = useState({ missing: true, mismatch: true, extra: true, matched: false, other: false });
+    const [confirm, setConfirm] = useState(false);
+    const lib = REC();
+    const methodName = (id) => METHOD_NAME[id] || id;
+    function onFile(e) {
+        const f = e.target.files && e.target.files[0];
+        if (!f)
+            return;
+        setFileName(f.name);
+        f.text().then(t => { setText(t); setErr(""); }).catch(() => setErr("Couldn't read that file."));
+    }
+    function readStatement() {
+        if (!lib) {
+            setErr("The reconciliation module didn't load. Try reopening the app.");
+            return;
+        }
+        const parsed = lib.parseCSV(text);
+        if (!parsed.rows.length) {
+            setErr("That file has no rows in it.");
+            return;
+        }
+        const sniffed = lib.sniffColumns(parsed.rows);
+        if (sniffed.dateCol == null || (sniffed.amountCol == null && sniffed.debitCol == null)) {
+            setErr("We couldn't find a date and an amount in that file. Check it's the CSV your bank exports.");
+            setRows(parsed.rows);
+            setMap(sniffed);
+            setStep("map");
+            return;
+        }
+        setErr("");
+        setRows(parsed.rows);
+        setMap(sniffed);
+        setStep("map");
+    }
+    function runReconcile() {
+        const statement = lib.buildStatement(rows, map);
+        if (!statement.length) {
+            setErr("None of those rows read as transactions. Check the columns above.");
+            return;
+        }
+        const idx = lib.buildDayIndex(periods.map(p => ({ archiveIndex: p.archiveIndex, weeks: p.weekKeys })));
+        const candidates = [];
+        for (const p of periods)
+            candidates.push(...reconcileCandidates(p, allCards ? null : methodId));
+        const res = lib.reconcile({ statement, candidates, dayIndex: idx });
+        // Additions and corrections start ticked; deletions never do — removing something you logged
+        // is the one action here you can't eyeball afterwards.
+        const initial = {};
+        for (const r of res.missingFromApp)
+            initial[r.id] = true;
+        for (const m of res.amountMismatch)
+            initial[m.row.id] = true;
+        setDayIndex(idx);
+        setResult(res);
+        setPicked(initial);
+        setErr("");
+        setStep("review");
+    }
+    const toggle = (k) => setPicked(p => ({ ...p, [k]: !p[k] }));
+    // ── Turning ticked rows into reducer ops ────────────────────────────────────
+    function buildOps() {
+        const ops = [];
+        const now = new Date().toISOString();
+        let seq = Date.now();
+        for (const row of result.missingFromApp) {
+            if (!picked[row.id])
+                continue;
+            const at = lib.periodIndexFor(row.date, dayIndex);
+            if (!at)
+                continue;
+            if (row.direction === "credit") {
+                ops.push({ archiveIndex: at.archiveIndex, kind: "credit", op: "add", credit: {
+                        id: genId(), amount: row.amount, label: row.description || "Refund",
+                        weekIndex: at.weekIndex, day: row.date, from: "", date: now, order: seq++,
+                        recon: row.fingerprint
+                    } });
+            }
+            else {
+                ops.push({ archiveIndex: at.archiveIndex, kind: "entry", op: "add", entry: {
+                        id: genId(), amount: row.amount, label: row.description, note: row.description,
+                        method: methodId, type: "personal", weekIndex: at.weekIndex, day: row.date,
+                        date: now, order: seq++, recon: row.fingerprint
+                    } });
+            }
+        }
+        for (const m of result.amountMismatch) {
+            if (!picked[m.row.id])
+                continue;
+            const c = m.candidate, ref = c.ref, ai = ref.archiveIndex, fp = m.row.fingerprint;
+            if (c.kind === "pin") {
+                // "Just this one" writes a per-occurrence override; "the new price" moves the pin itself.
+                ops.push({ archiveIndex: ai, kind: "pin", op: pinMode[c.key] === "rate" ? "rate" : "amount",
+                    pinId: ref.pinId, occKey: ref.occKey, amount: m.row.amount });
+                ops.push({ archiveIndex: ai, kind: "pin", op: "recon", pinId: ref.pinId, occKey: ref.occKey, recon: fp });
+            }
+            else if (c.kind === "split") {
+                const parts = lib.resplit(ref.your ? ref.your.amount : 0, ref.their ? ref.their.amount : 0, m.row.amount);
+                if (ref.your)
+                    ops.push({ archiveIndex: ai, kind: "entry", op: "upd", entry: { ...ref.your, amount: parts.your, recon: fp } });
+                if (ref.their)
+                    ops.push({ archiveIndex: ai, kind: "entry", op: "upd", entry: { ...ref.their, amount: parts.their } });
+            }
+            else if (c.kind === "credit") {
+                ops.push({ archiveIndex: ai, kind: "credit", op: "upd", credit: { ...ref.credit, amount: m.row.amount, recon: fp } });
+            }
+            else {
+                ops.push({ archiveIndex: ai, kind: "entry", op: "upd", entry: { ...ref.entry, amount: m.row.amount, recon: fp } });
+            }
+        }
+        for (const c of result.notOnStatement) {
+            if (!picked[c.key])
+                continue;
+            const ref = c.ref, ai = ref.archiveIndex;
+            if (c.kind === "pin")
+                ops.push({ archiveIndex: ai, kind: "pin", op: "skip", pinId: ref.pinId, occKey: ref.occKey });
+            else if (c.kind === "split") {
+                if (ref.your)
+                    ops.push({ archiveIndex: ai, kind: "entry", op: "del", id: ref.your.id });
+                if (ref.their)
+                    ops.push({ archiveIndex: ai, kind: "entry", op: "del", id: ref.their.id });
+            }
+            else if (c.kind === "credit")
+                ops.push({ archiveIndex: ai, kind: "credit", op: "del", id: ref.credit.id });
+            else
+                ops.push({ archiveIndex: ai, kind: "entry", op: "del", id: ref.entry.id });
+        }
+        // Remember the confident matches, so re-uploading this statement doesn't re-examine them.
+        for (const m of result.matched) {
+            const c = m.candidate, ref = c.ref, ai = ref.archiveIndex, fp = m.row.fingerprint;
+            if (c.recon === fp)
+                continue;
+            if (c.kind === "pin")
+                ops.push({ archiveIndex: ai, kind: "pin", op: "recon", pinId: ref.pinId, occKey: ref.occKey, recon: fp });
+            else if (c.kind === "credit")
+                ops.push({ archiveIndex: ai, kind: "credit", op: "upd", credit: { ...ref.credit, recon: fp } });
+            else if (c.kind === "split") {
+                if (ref.your)
+                    ops.push({ archiveIndex: ai, kind: "entry", op: "upd", entry: { ...ref.your, recon: fp } });
+            }
+            else
+                ops.push({ archiveIndex: ai, kind: "entry", op: "upd", entry: { ...ref.entry, recon: fp } });
+        }
+        return ops;
+    }
+    const counts = result ? {
+        add: result.missingFromApp.filter(r => picked[r.id]).length,
+        fix: result.amountMismatch.filter(m => picked[m.row.id]).length,
+        del: result.notOnStatement.filter(c => picked[c.key]).length,
+    } : { add: 0, fix: 0, del: 0 };
+    const totalPicked = counts.add + counts.fix + counts.del;
+    // ── Shared bits of chrome ───────────────────────────────────────────────────
+    const Tick = ({ on, onToggle }) => (React.createElement("button", { onClick: onToggle, "aria-label": on ? "Deselect" : "Select", style: { width: 22, height: 22, flexShrink: 0, borderRadius: 6, cursor: "pointer", fontSize: 12, lineHeight: 1,
+            background: on ? "#0369a1" : "var(--surface-2)", color: "var(--on-accent)",
+            border: `1px solid ${on ? "#0369a1" : "var(--border-strong)"}` } }, on ? "✓" : ""));
+    const Section = ({ id, title, colour, count, hint, children }) => count === 0 ? null : (React.createElement("div", { style: { border: "1px solid var(--border)", borderRadius: 10, marginBottom: 10, overflow: "hidden" } },
+        React.createElement("button", { onClick: () => setOpen(o => ({ ...o, [id]: !o[id] })), style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+                background: "var(--surface)", border: "none", padding: "10px 12px", cursor: "pointer", textAlign: "left" } },
+            React.createElement("span", { style: { fontSize: 13, fontWeight: 600, color: colour || "var(--text-heading)" } }, title),
+            React.createElement("span", { style: { fontSize: 12, color: "var(--text-secondary)" } },
+                count,
+                " ",
+                open[id] ? "▾" : "▸")),
+        open[id] && (React.createElement("div", { style: { padding: "0 12px 10px" } },
+            hint && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, margin: "2px 0 8px" } }, hint),
+            children))));
+    const rowBox = { display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: "1px solid var(--border)" };
+    const periodTag = (archiveIndex) => {
+        const p = periods.find(x => x.archiveIndex === archiveIndex);
+        return p && p.archiveIndex != null ? p.label : null;
+    };
+    // ── Step 1: upload ──────────────────────────────────────────────────────────
+    if (step === "upload") {
+        return (React.createElement(Modal, { onClose: onClose, title: "Reconcile a statement" },
+            React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", lineHeight: 1.5, marginBottom: 12 } }, "Upload the CSV your bank or card provider exports. SpendTracker reads it, cross-references it with what you've logged, and shows you anything that doesn't line up. Nothing is changed until you say so, and the file never leaves your phone."),
+            React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 } }, "Which card is this statement for?"),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 } },
+                (state.methods || []).map(m => (React.createElement("button", { key: m.id, onClick: () => { setMethodId(m.id); setAllCards(false); }, style: { background: (!allCards && methodId === m.id) ? m.color : "var(--surface)",
+                        border: `1px solid ${(!allCards && methodId === m.id) ? m.color : "var(--border-strong)"}`,
+                        color: (!allCards && methodId === m.id) ? readableIconColor(m.color) : "var(--text-tertiary)",
+                        borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" } }, m.name))),
+                React.createElement("button", { onClick: () => setAllCards(true), style: { background: allCards ? "var(--surface-2)" : "var(--surface)",
+                        border: `1px solid ${allCards ? "var(--border-strong)" : "var(--border)"}`,
+                        color: allCards ? "var(--text-heading)" : "var(--text-muted)",
+                        borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" } }, "All cards")),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, marginBottom: 12 } }, allCards
+                ? "Every spend you've logged will be compared against this statement — useful for a single-account check, but spends on your other cards will look missing."
+                : `Only spends logged to ${methodName(methodId)} will be compared, so your other cards aren't wrongly flagged.`),
+            React.createElement("input", { type: "file", accept: ".csv,.txt,.tsv,text/csv,text/plain", onChange: onFile, style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 10, width: "100%" } }),
+            fileName && React.createElement("div", { style: { fontSize: 11, color: "var(--text-tertiary)", marginBottom: 8 } },
+                "Loaded ",
+                fileName),
+            React.createElement("textarea", { style: { ...S.input, height: 80, resize: "none", fontFamily: "monospace", fontSize: 11 }, placeholder: "\u2026or paste the statement here", value: text, onChange: e => setText(e.target.value) }),
+            err && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10 } }, err),
+            React.createElement("button", { style: { ...S.btn, background: text.trim() ? "#0369a1" : "var(--surface-2)",
+                    color: text.trim() ? "var(--on-accent)" : "var(--text-heading)",
+                    width: "100%", ...(text.trim() ? {} : { opacity: 0.5 }) }, disabled: !text.trim(), onClick: readStatement }, "Read statement")));
+    }
+    // ── Step 2: confirm the columns ─────────────────────────────────────────────
+    if (step === "map") {
+        const width = rows.reduce((w, r) => Math.max(w, r.length), 0);
+        const head = map.hasHeader ? rows[0] : null;
+        const colLabel = (i) => (head && String(head[i] || "").trim()) ? String(head[i]).trim() : "Column " + (i + 1);
+        const preview = (map.hasHeader ? rows.slice(1) : rows).slice(0, 3);
+        const set = (patch) => setMap(m => ({ ...m, ...patch }));
+        const pick = (label, value, onPick, allowNone) => (React.createElement("div", { style: { marginBottom: 10 } },
+            React.createElement("label", { style: { fontSize: 12, color: "var(--text-secondary)", display: "block", marginBottom: 4 } }, label),
+            React.createElement("select", { value: value == null ? "" : value, onChange: e => onPick(e.target.value === "" ? null : Number(e.target.value)), style: { ...S.input, marginBottom: 0 } },
+                allowNone && React.createElement("option", { value: "" }, "\u2014 none \u2014"),
+                Array.from({ length: width }, (_, i) => React.createElement("option", { key: i, value: i }, colLabel(i))))));
+        const seg = (on) => ({ flex: 1, background: on ? "var(--surface-2)" : "var(--surface)",
+            border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8,
+            color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
+        return (React.createElement(Modal, { onClose: onClose, title: "Check the columns" },
+            React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", lineHeight: 1.5, marginBottom: 12 } }, map.confidence === "high"
+                ? "We recognised this statement's layout. Have a quick look, then carry on."
+                : "We've had a guess at this layout — banks all export differently. Correct anything that's wrong before carrying on."),
+            pick("Date", map.dateCol, v => set({ dateCol: v })),
+            pick("Description", map.descCol, v => set({ descCol: v })),
+            map.debitCol != null || map.creditCol != null ? (React.createElement(React.Fragment, null,
+                pick("Money out", map.debitCol, v => set({ debitCol: v }), true),
+                pick("Money in", map.creditCol, v => set({ creditCol: v }), true))) : pick("Amount", map.amountCol, v => set({ amountCol: v })),
+            map.dateAmbiguous && (React.createElement("div", { style: { marginBottom: 10 } },
+                React.createElement("label", { style: { fontSize: 12, color: "var(--text-secondary)", display: "block", marginBottom: 4 } }, "Date order"),
+                React.createElement("div", { style: { display: "flex", gap: 6 } },
+                    React.createElement("button", { style: seg(map.dateFormat === "DMY"), onClick: () => set({ dateFormat: "DMY" }) }, "Day / month"),
+                    React.createElement("button", { style: seg(map.dateFormat === "MDY"), onClick: () => set({ dateFormat: "MDY" }) }, "Month / day")),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.5 } }, "Every date in this file could be read either way, so we've assumed day first. Check one against your statement."))),
+            map.debitCol == null && map.creditCol == null && (React.createElement("div", { style: { marginBottom: 10 } },
+                React.createElement("label", { style: { fontSize: 12, color: "var(--text-secondary)", display: "block", marginBottom: 4 } }, "A spend shows as"),
+                React.createElement("div", { style: { display: "flex", gap: 6 } },
+                    React.createElement("button", { style: seg(map.spendIsPositive), onClick: () => set({ spendIsPositive: true }) }, "A positive number"),
+                    React.createElement("button", { style: seg(!map.spendIsPositive), onClick: () => set({ spendIsPositive: false }) }, "A negative number")))),
+            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", margin: "14px 0 6px" } }, "How we read the first few rows"),
+            React.createElement("div", { style: { background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", marginBottom: 12 } }, preview.map((r, i) => {
+                const d = map.dateCol == null ? null : lib.parseDate(r[map.dateCol], map.dateFormat);
+                const amt = map.debitCol != null || map.creditCol != null
+                    ? (lib.parseAmount(r[map.debitCol]).ok && Math.abs(lib.parseAmount(r[map.debitCol]).value) > 0
+                        ? lib.parseAmount(r[map.debitCol]).value : -Math.abs(lib.parseAmount(r[map.creditCol]).value))
+                    : (map.spendIsPositive === false ? -lib.parseAmount(r[map.amountCol]).value : lib.parseAmount(r[map.amountCol]).value);
+                return (React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, padding: "4px 0",
+                        borderTop: i ? "1px solid var(--border)" : "none" } },
+                    React.createElement("span", { style: { color: d ? "var(--text-tertiary)" : "#f87171", flexShrink: 0 } }, d ? dayKeyLabel(d) : "unreadable"),
+                    React.createElement("span", { style: { color: "var(--text-body)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, map.descCol == null ? "—" : String(r[map.descCol] || "").trim()),
+                    React.createElement("span", { style: { color: amt > 0 ? "var(--text-heading)" : "#22c55e", fontWeight: 600, flexShrink: 0 } },
+                        amt > 0 ? "−" : "+",
+                        fmt(amt))));
+            })),
+            err && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10 } }, err),
+            React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setStep("upload") }, "Back"),
+                React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 2 }, onClick: runReconcile }, "Cross-reference"))));
+    }
+    // ── Step 3: the discrepancies ───────────────────────────────────────────────
+    const r = result;
+    const clean = !r.missingFromApp.length && !r.amountMismatch.length && !r.notOnStatement.length;
+    return (React.createElement(Modal, { onClose: onClose, title: "What we found" },
+        React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 12 } }, [["Matched", r.matched.length, "#22c55e"], ["Don't match", r.amountMismatch.length, "#f59e0b"],
+            ["Missing", r.missingFromApp.length, "#ef4444"], ["Extra", r.notOnStatement.length, "#a855f7"]].map(([l, n, c]) => (React.createElement("div", { key: l, style: { flex: 1, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 6px", textAlign: "center" } },
+            React.createElement("div", { style: { fontSize: 18, fontWeight: 800, color: n ? c : "var(--text-muted)" } }, n),
+            React.createElement("div", { style: { fontSize: 10, color: "var(--text-secondary)" } }, l))))),
+        clean && (React.createElement("div", { style: { background: chipColors("#22c55e").bg, border: "1px solid #22c55e", borderRadius: 10, padding: "12px 14px",
+                fontSize: 13, color: "#22c55e", lineHeight: 1.6, marginBottom: 12 } }, "Everything on this statement lines up with what you've logged. Nothing to fix.")),
+        React.createElement(Section, { id: "missing", colour: "#ef4444", title: "On your statement, not logged", count: r.missingFromApp.length, hint: `These were charged but never logged. Adding them files each one under its own date${allCards ? "" : `, on ${methodName(methodId)}`} — you can categorise them afterwards from the week log.` }, r.missingFromApp.map(row => {
+            const at = lib.periodIndexFor(row.date, dayIndex);
+            const tag = at ? periodTag(at.archiveIndex) : null;
+            return (React.createElement("div", { key: row.id, style: rowBox },
+                React.createElement(Tick, { on: !!picked[row.id], onToggle: () => toggle(row.id) }),
+                React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                    React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, row.description || "(no description)"),
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                        dayKeyLabel(row.date),
+                        tag ? ` · ${tag}` : "",
+                        row.direction === "credit" ? " · money in" : "")),
+                React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: row.direction === "credit" ? "#22c55e" : "var(--text-heading)" } }, fmt(row.amount))));
+        })),
+        React.createElement(Section, { id: "mismatch", colour: "#f59e0b", title: "Amounts don't match", count: r.amountMismatch.length, hint: "We're confident these are the same transaction, but the amount you logged differs from what was charged. Ticking one corrects it to the statement's figure." }, r.amountMismatch.map(m => {
+            const c = m.candidate, isPin = c.kind === "pin", isSplit = c.kind === "split";
+            const parts = isSplit ? lib.resplit(c.ref.your ? c.ref.your.amount : 0, c.ref.their ? c.ref.their.amount : 0, m.row.amount) : null;
+            const tag = periodTag(c.ref.archiveIndex);
+            return (React.createElement("div", { key: m.row.id, style: { ...rowBox, alignItems: "flex-start", flexWrap: "wrap" } },
+                React.createElement(Tick, { on: !!picked[m.row.id], onToggle: () => toggle(m.row.id) }),
+                React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                    React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, m.row.description || c.label),
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                        dayKeyLabel(m.row.date),
+                        tag ? ` · ${tag}` : "",
+                        isPin ? " · pinned cost" : isSplit ? " · split" : "")),
+                React.createElement("div", { style: { textAlign: "right" } },
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", textDecoration: "line-through" } }, fmt(c.amount)),
+                    React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#f59e0b" } }, fmt(m.row.amount))),
+                isSplit && (React.createElement("div", { style: { width: "100%", fontSize: 11, color: "var(--text-tertiary)", background: "var(--bg)",
+                        border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", marginTop: 2, lineHeight: 1.6 } },
+                    "Split in proportion: ",
+                    React.createElement("strong", { style: { color: "var(--text-heading)" } }, fmt(parts.your)),
+                    " yours,",
+                    " ",
+                    React.createElement("strong", { style: { color: "var(--text-heading)" } }, fmt(parts.their)),
+                    " theirs. If the whole difference is one person's, fix this one from the week log instead.")),
+                isPin && (React.createElement("div", { style: { width: "100%", display: "flex", gap: 6, marginTop: 4 } }, [["once", "Just this one"], ["rate", "This is the new price"]].map(([v, l]) => (React.createElement("button", { key: v, onClick: () => setPinMode(pm => ({ ...pm, [c.key]: v })), style: { flex: 1, background: (pinMode[c.key] || "once") === v ? "var(--surface-2)" : "var(--surface)",
+                        border: `1px solid ${(pinMode[c.key] || "once") === v ? "var(--border-strong)" : "var(--border)"}`,
+                        borderRadius: 8, color: (pinMode[c.key] || "once") === v ? "var(--text-heading)" : "var(--text-muted)",
+                        padding: "6px 4px", fontSize: 11, fontWeight: 600, cursor: "pointer" } }, l))))),
+                isPin && (React.createElement("div", { style: { width: "100%", fontSize: 11, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.5 } }, (pinMode[c.key] || "once") === "rate"
+                    ? "Changes this pinned cost everywhere from now on, leaving finished periods as they were."
+                    : "Changes only this month's charge. The pinned cost keeps its usual amount."))));
+        })),
+        React.createElement(Section, { id: "extra", colour: "#a855f7", title: "Logged, but not on your statement", count: r.notOnStatement.length, hint: "Cash spends, a transaction still pending, or something logged to the wrong card would all show up here \u2014 so check before removing anything. Nothing is ticked by default." }, r.notOnStatement.map(c => {
+            const tag = periodTag(c.ref.archiveIndex);
+            return (React.createElement("div", { key: c.key, style: rowBox },
+                React.createElement(Tick, { on: !!picked[c.key], onToggle: () => toggle(c.key) }),
+                React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                    React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, c.label || "(no description)"),
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                        c.day ? dayKeyLabel(c.day) : "undated",
+                        tag ? ` · ${tag}` : "",
+                        c.kind === "pin" ? " · pinned cost" : c.kind === "split" ? " · split" : c.kind === "credit" ? " · money in" : ""),
+                    c.kind === "pin" && picked[c.key] && (React.createElement("div", { style: { fontSize: 11, color: "#a855f7", marginTop: 2 } }, "This month's charge will be skipped; the pinned cost itself stays."))),
+                React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "var(--text-heading)" } }, fmt(c.amount))));
+        })),
+        React.createElement(Section, { id: "other", colour: "var(--text-tertiary)", title: "Skipped", count: r.skipped.length + r.outOfRange.length, hint: "Rows we've left alone. Card payments and transfers aren't spending, and dates outside every period you've tracked have nowhere to go." }, [...r.skipped, ...r.outOfRange].map(row => (React.createElement("div", { key: row.id, style: { ...rowBox, opacity: 0.75 } },
+            React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                React.createElement("div", { style: { fontSize: 13, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, row.description),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                    dayKeyLabel(row.date),
+                    " \u00B7 ",
+                    row.ignoreReason || "outside your tracked periods")),
+            React.createElement("div", { style: { fontSize: 13, color: "var(--text-muted)" } }, fmt(row.amount)))))),
+        React.createElement(Section, { id: "matched", colour: "#22c55e", title: "Matched", count: r.matched.length, hint: "These line up with what you logged. Nothing to do." }, r.matched.map(m => (React.createElement("div", { key: m.row.id, style: { ...rowBox, opacity: 0.8 } },
+            React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                React.createElement("div", { style: { fontSize: 13, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, m.row.description),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                    dayKeyLabel(m.row.date),
+                    m.how === "date-drift" ? " · posted later" : m.how === "remembered" ? " · reconciled before" : "")),
+            React.createElement("div", { style: { fontSize: 13, color: "var(--text-tertiary)" } }, fmt(m.row.amount)))))),
+        React.createElement("div", { style: { borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 } }, totalPicked === 0 ? (React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: onClose }, "Done")) : !confirm ? (React.createElement(React.Fragment, null,
+            React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 8, textAlign: "center" } }, [counts.add ? `Add ${counts.add}` : null, counts.fix ? `Correct ${counts.fix}` : null, counts.del ? `Remove ${counts.del}` : null].filter(Boolean).join(" · ")),
+            React.createElement("button", { style: { ...S.btn, background: "#0369a1", width: "100%" }, onClick: () => setConfirm(true) }, "Apply these changes\u2026"))) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirm(false) }, "Cancel"),
+            React.createElement("button", { style: { ...S.btn, background: counts.del ? "#dc2626" : "#0369a1", flex: 1 }, onClick: () => { onApply(buildOps()); onClose(); } }, counts.del ? `Apply, removing ${counts.del}` : "Apply"))))));
+}
 // ─── Modal ────────────────────────────────────────────────────────────────────
 function Modal({ children, onClose, title }) {
     return React.createElement("div", { style: S.modalOverlay, onClick: onClose },
@@ -2987,6 +3528,9 @@ const S = {
     tab: { flex: 1, background: "none", border: "none", borderBottom: "2px solid transparent", color: "var(--text-secondary)", padding: "10px 4px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
     tabActive: { color: "var(--text-heading)", borderBottom: "2px solid #0369a1" },
     weekNav: { display: "flex", gap: 6, marginBottom: 12, overflowX: "auto" },
+    periodNav: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "6px 8px", marginBottom: 10 },
+    periodNavBtn: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", width: 32, height: 32, fontSize: 13, cursor: "pointer", flexShrink: 0, padding: 0 },
+    periodNavBtnOff: { opacity: 0.3, cursor: "default" },
     weekPill: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 20, color: "var(--text-secondary)", padding: "6px 12px", fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 },
     // Both variants set the full `border` shorthand: mixing shorthand + borderColor longhand
     // makes React clear the colour to currentColor when a pill deactivates (white rings).

@@ -6,7 +6,16 @@ description: Build, run, and drive SpendTracker locally to verify changes end-to
 # Verifying SpendTracker changes
 
 Single-file React PWA. Browser runs `app.js` (compiled from `app.jsx`); `crypto.js` is the
-lock/setup layer; `index.html` loads React 18.3.1 UMD from unpkg.
+lock/setup layer; `reconcile.js` is the statement-reading/matching logic (plain JS, no compile
+step, no React or DOM — also loaded directly by the tests); `index.html` loads React 18.3.1 UMD
+from unpkg.
+
+## Unit tests
+
+`npm test` (Node's built-in runner, zero dependencies). Covers `reconcile.js` plus the app
+internals it touches, loaded out of the **compiled** `app.js` via `tests/harness.js` — so a
+forgotten rebuild fails the tests instead of silently shipping nothing. Run these before the
+browser pass; they're seconds rather than minutes.
 
 ## Build (after any app.jsx edit)
 
@@ -16,6 +25,7 @@ npx -y -p typescript@4.9.5 tsc app.jsx --allowJs --jsx react --target es2019 --m
 ```
 
 Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are expected noise.
+`crypto.js` and `reconcile.js` are not compiled — edit them directly.
 
 ## Run + drive
 
@@ -43,9 +53,26 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
 - **Theme check**: quick visual pass via `document.documentElement.dataset.theme = 'light'`
   (real toggle lives in Customisation).
 
+- **Reconcile**: Summary tab → "⇄ Reconcile". Paste a CSV into the textarea (faster than a file
+  input), "Read statement" → column-confirmation step → "Cross-reference". Results group into
+  collapsible sections; rows tick via `[aria-label="Select"]`. Statement dates must fall inside a
+  tracked pay period *and* inside the statement's own span, or rows/entries are set aside instead
+  of flagged — build fixtures around today's date or everything reads as "missing".
+- **Period history**: Week tab → the `◀ Month YYYY ▶` stepper (`[aria-label="Earlier period"]` /
+  `"Later period"`), which walks `state.monthHistory` oldest→newest then back to live.
+
 ## Gotchas
 
 - Vault state lives in IndexedDB — a fresh Playwright context = fresh account, no cleanup needed.
+- The **service worker** serves fetches itself once installed, which `page.route` can't intercept —
+  so a `page.reload()` loses the stubbed React and the app dies with "React is not defined". Stub it
+  before the first `goto`: `page.addInitScript(() => Object.defineProperty(navigator,
+  "serviceWorker", { get: () => undefined }))`.
+- The keypad's confirm key is `↵` normally but **`→` on the first step of a split** — match
+  `/^(↵|→)$/` or the split flow hangs.
+- The category grid's "None" tile has the accessible name `∅ ✓ None`, so `{ name: "None", exact:
+  true }` never matches; use `button:has-text("None")`. Missing it leaves the grid open and every
+  subsequent step fails somewhere confusing.
 - Scheduled pins expand into virtual week entries (`makePinEntry`); one-off pins stay in
   `state.pins`. Aggregations that add "entries + pins" rely on that split to avoid double-counting.
 - UI copy must be British English (CLAUDE.md).
