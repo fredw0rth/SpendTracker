@@ -3768,10 +3768,16 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
   // runReconcile so it can be re-run cheaply after an edit without re-parsing or re-saving.
   function computeResults(statement, card) {
     const idx = lib.buildDayIndex(periods.map(p => ({ archiveIndex: p.archiveIndex, weeks: p.weekKeys })));
+    // `card` null means every card — the "All cards" option. It is resolved once by the caller and
+    // stored, so a re-run after an edit filters exactly as the first run did.
     const candidates = [];
-    for (const p of periods) candidates.push(...reconcileCandidates(p, allCards && card == null ? null : card));
+    for (const p of periods) candidates.push(...reconcileCandidates(p, card));
     const res = lib.reconcile({ statement, candidates, dayIndex: idx });
-    setDisplay(periods.map(p => ({ archiveIndex: p.archiveIndex, label: p.label, weeks: p.weeks, items: reconcileCandidates(p, null) })));
+    // Filtered to the card being reconciled, exactly as the matching is: a spend on another card
+    // has no bearing on this statement, so listing it only pads the week out with rows carrying no
+    // verdict. Credits are unfiltered — reconcileCandidates never filters those by card, and an
+    // incoming refund is compared regardless of which card it landed on.
+    setDisplay(periods.map(p => ({ archiveIndex: p.archiveIndex, label: p.label, weeks: p.weeks, items: reconcileCandidates(p, card) })));
     setDayIndex(idx);
     setResult(res);
     return { res, idx };
@@ -3789,11 +3795,11 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
       // change nothing this time.
       onSaveStatement({ method: card, rows: lib.packStatement(statement), span: lib.statementSpan(statement) });
     }
-    // The week log shows EVERY logged item, not just the ones compared against this statement —
-    // spends on your other cards belong in the week as much as anything else, they simply have
-    // no verdict attached; computeResults builds that unfiltered list.
-    activeRef.current = { statement, card };
-    const { res, idx } = computeResults(statement, allCards && !presetMethod ? null : card);
+    // Resolve the filter once. Storing the raw card while running with null would mean an edit
+    // silently narrowed an "All cards" reconciliation to a single card on the next re-run.
+    const compareCard = allCards && !presetMethod ? null : card;
+    activeRef.current = { statement, card: compareCard };
+    const { res, idx } = computeResults(statement, compareCard);
     // Open the week log where the statement ends, which is the part being reconciled.
     const landing = res.span ? lib.periodIndexFor(res.span.to, idx) : null;
     setWkPeriod(landing ? landing.archiveIndex : null);
@@ -3916,8 +3922,8 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
             : "Upload the CSV your bank or card provider exports. SpendTracker reads it, cross-references it with what you've logged, and shows you anything that doesn't line up. Nothing is changed until you say so, and the file never leaves your phone."}
         </div>
 
-        <div style={{ fontSize:12, color:"var(--text-secondary)", marginBottom:6 }}>Which card is this statement for?</div>
-        <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:6 }}>
+        {!updating && <div style={{ fontSize:12, color:"var(--text-secondary)", marginBottom:6 }}>Which card is this statement for?</div>}
+        <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:6, ...(updating ? { display:"none" } : {}) }}>
           {(state.methods || []).map(m => (
             <button key={m.id} onClick={() => { setMethodId(m.id); setAllCards(false); }}
               style={{ background: (!allCards && methodId === m.id) ? m.color : "var(--surface)",
@@ -3931,11 +3937,13 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
                      color: allCards ? "var(--text-heading)" : "var(--text-muted)",
                      borderRadius:8, padding:"6px 12px", fontSize:12, fontWeight:600, cursor:"pointer" }}>All cards</button>
         </div>
-        <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.5, marginBottom:12 }}>
-          {allCards
-            ? "Every spend you've logged will be compared against this statement — useful for a single-account check, but spends on your other cards will look missing."
-            : `Only spends logged to ${methodName(methodId)} will be compared, so your other cards aren't wrongly flagged.`}
-        </div>
+        {!updating && (
+          <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.5, marginBottom:12 }}>
+            {allCards
+              ? "Every spend you've logged will be compared against this statement — useful for a single-account check, but spends on your other cards will look missing."
+              : `Only spends logged to ${methodName(methodId)} will be compared, so your other cards aren't wrongly flagged.`}
+          </div>
+        )}
 
         <input type="file" accept=".csv,.txt,.tsv,text/csv,text/plain" onChange={onFile}
           style={{ fontSize:12, color:"var(--text-secondary)", marginBottom:10, width:"100%" }} />
@@ -4184,9 +4192,9 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
   const weekLog = !wkP ? null : (() => {
     const rows = wkP.items.filter(c => c.weekIndex === wkWeek);
     // Everything listed below, added up — including work spends and the not-yours half of a
-    // split, because all of it hit a card. Deliberately NOT the Week tab's figure, which is
-    // personal spend against budget; hence the label, so two different numbers for one week
-    // can't be mistaken for each other.
+    // split, because all of it hit the card. Deliberately NOT the Week tab's figure, which is
+    // personal spend against budget across every card; hence the label, so two different numbers
+    // for one week can't be mistaken for each other.
     const dayTotal = (items) => items.filter(c => c.direction !== "credit").reduce((t, c) => t + c.amount, 0);
     const total = dayTotal(rows);
     // Newest day first, matching the Week tab — the same data one tab away must not read in the
@@ -4237,12 +4245,14 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
           </div>
           <div style={{ textAlign:"right", flexShrink:0 }}>
             <div style={{ fontSize:13, fontWeight:700, color:"var(--text-heading)" }}>{fmt(total)}</div>
-            <div style={{ fontSize:10, color:"var(--text-secondary)" }}>logged this week</div>
+            <div style={{ fontSize:10, color:"var(--text-secondary)" }}>{allCards ? "logged this week" : `logged to ${methodName(methodId)}`}</div>
           </div>
         </div>
 
         {rows.length === 0 ? (
-          <div style={{ ...S.empty, marginTop:4, textAlign:"center" }}>Nothing logged this week</div>
+          <div style={{ ...S.empty, marginTop:4, textAlign:"center" }}>
+            {allCards ? "Nothing logged this week" : `Nothing logged to ${methodName(methodId)} this week`}
+          </div>
         ) : days.map(day => (
           <div key={day.key} style={{ marginBottom:6 }}>
             {/* The shared day-heading styles, so this list and the Week tab's read as one system. */}
@@ -4252,12 +4262,10 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
             </div>
             {day.items.map(c => {
               const v = status[c.key];
-              const compared = allCards || c.direction === "credit" || c.method === methodId;
               // A glyph, not a filled dot: the Week tab already uses a coloured dot in this exact
               // position to mean "which card", and the two palettes overlap almost exactly.
               // Shape carries the verdict, colour only reinforces it.
-              const mark = !compared ? { g:"·", c:"var(--text-muted)", text:"not compared — other card" }
-                : !v ? { g:"·", c:"var(--text-muted)", text:"" }
+              const mark = !v ? { g:"·", c:"var(--text-muted)", text:"" }
                 : v.status === "matched" ? { g:"✓", c:acc("#22c55e"), text:"on the statement" }
                 : v.status === "mismatch" ? { g:"≠", c:acc("#f59e0b"), text:`statement says ${fmt(v.row.amount)}` }
                 : v.status === "extra" ? { g:"!", c:acc("#a855f7"), text:"not on the statement" }

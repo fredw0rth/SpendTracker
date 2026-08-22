@@ -17,6 +17,7 @@ const EXPORTS = [
   "weekIndexForDay", "todayWeekIndex", "groupByWeek", "effOrder",
   "isScheduledPin", "occKeyOf", "makePinEntry", "expandScheduledPins",
   "defaultState", "normalizeState", "reducer", "rawReducer",
+  "reconcilePeriods", "reconcileCandidates", "statementFor", "statementLabel",
   "DEFAULT_METHODS", "DEFAULT_CATEGORIES",
 ];
 

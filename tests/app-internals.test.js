@@ -267,3 +267,67 @@ test("a statement stored on an old account is not resurrected as undefined", () 
   const s = A.reducer(A.normalizeState({}), { type: "ADD_ENTRY", entry: entry() });
   assert.ok(Array.isArray(s.statements));
 });
+
+// ─── Which logged items a statement is compared against ───────────────────────
+
+const period = (over) => {
+  const d = Object.assign({ payYear: 2026, payMonth: 7, paydayKind: "last-working", monthLabel: "Aug 2026",
+    entries: [], credits: [], pins: [] }, over || {});
+  const { start, end } = A.periodBounds(d.payYear, d.payMonth, d.paydayKind);
+  const weeks = A.buildWeeks(start, end);
+  return { archiveIndex: null, label: d.monthLabel, data: d, weeks };
+};
+const spend = (id, method, over) => Object.assign(
+  { id, amount: 10, label: id, method, type: "personal", weekIndex: 1, day: "2026-08-01" }, over || {});
+
+test("only the card being reconciled is compared", () => {
+  const p = period({ entries: [spend("a", "Amex"), spend("b", "Lloyds"), spend("c", "Amex")] });
+  const amex = A.reconcileCandidates(p, "Amex");
+  assert.deepEqual(amex.map(c => c.ref.entry.id), ["a", "c"]);
+  assert.equal(A.reconcileCandidates(p, "Lloyds").length, 1);
+});
+
+test("passing no card compares everything, for the all-cards option", () => {
+  const p = period({ entries: [spend("a", "Amex"), spend("b", "Lloyds")] });
+  assert.equal(A.reconcileCandidates(p, null).length, 2);
+});
+
+test("credits are never filtered out by card", () => {
+  // A refund is compared whichever card it landed on — reconcileCandidates has no method filter
+  // for credits, and the week log relies on that to keep showing them.
+  const p = period({
+    entries: [spend("a", "Amex"), spend("b", "Lloyds")],
+    credits: [{ id: "cr", amount: 8, label: "Refund", weekIndex: 1, day: "2026-08-01" }],
+  });
+  const amex = A.reconcileCandidates(p, "Amex");
+  assert.deepEqual(amex.map(c => c.kind).sort(), ["credit", "entry"]);
+  assert.equal(amex.find(c => c.kind === "credit").direction, "credit");
+});
+
+test("a split is one candidate at the card total, and follows the card filter", () => {
+  const p = period({ entries: [
+    spend("y", "Amex", { amount: 25, splitGroupId: "g" }),
+    spend("t", "Amex", { amount: 35, type: "excluded", splitGroupId: "g" }),
+  ] });
+  const amex = A.reconcileCandidates(p, "Amex");
+  assert.equal(amex.length, 1, "two rows, one card transaction");
+  assert.equal(amex[0].kind, "split");
+  assert.equal(amex[0].amount, 60);
+  assert.equal(A.reconcileCandidates(p, "Lloyds").length, 0);
+});
+
+test("a scheduled pin on another card is not compared either", () => {
+  const pin = { id: "p1", label: "Rent", amount: 900, method: "Lloyds", type: "personal", freq: "monthly", day: 5 };
+  const p = period({ pins: [pin], entries: [spend("a", "Amex")] });
+  assert.deepEqual(A.reconcileCandidates(p, "Amex").map(c => c.kind), ["entry"]);
+  assert.ok(A.reconcileCandidates(p, "Lloyds").some(c => c.kind === "pin"));
+});
+
+test("candidates carry the week and type the log needs to render them", () => {
+  const p = period({ entries: [spend("a", "Amex", { weekIndex: 2, type: "business", category: "bills" })] });
+  const c = A.reconcileCandidates(p, "Amex")[0];
+  assert.equal(c.weekIndex, 2);
+  assert.equal(c.type, "business");
+  assert.equal(c.category, "bills");
+  assert.equal(c.direction, "debit");
+});
