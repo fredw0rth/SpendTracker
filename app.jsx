@@ -112,6 +112,31 @@ function readableChipColor(hex) {
   const { h, s, l } = hexToHsl(hex);
   return hslToHex(h, s, Math.min(65, Math.max(30, l)));
 }
+// Make an accent colour readable AS TEXT against the current theme's surface. readableChipColor
+// above only rescues colours that are near-white or near-black; a mid-lightness accent like amber
+// (#f59e0b, L≈50%) passes through it untouched and then renders at 2.1:1 on the light theme's
+// cream — illegible. This walks the lightness down (light theme) or up (dark) until the colour
+// clears 4.5:1 against the surface it sits on.
+//
+// Only TEXT goes through this. Fills, borders and tints keep the raw accent, so amber still looks
+// amber; it's the same hue, darkened just enough to read. In dark mode the accents already clear
+// 4.5:1, so this returns them unchanged and nothing shifts.
+const SURFACE_LUM = { light: relativeLuminance("#fffcf3"), dark: relativeLuminance("#0f172a") };
+function readableAccentText(hex) {
+  const light = document.documentElement.dataset.theme === "light";
+  const bg = light ? SURFACE_LUM.light : SURFACE_LUM.dark;
+  const ratio = (a, b) => { const hi = Math.max(a, b), lo = Math.min(a, b); return (hi + 0.05) / (lo + 0.05); };
+  const { h, s } = hexToHsl(hex);
+  let l = hexToHsl(hex).l;
+  const step = light ? -3 : 3;
+  for (let i = 0; i < 40 && l >= 0 && l <= 100; i++) {
+    const candidate = hslToHex(h, s, l);
+    if (ratio(relativeLuminance(candidate), bg) >= 4.5) return candidate;
+    l += step;
+  }
+  return hslToHex(h, s, Math.max(0, Math.min(100, l)));
+}
+
 // Derive a coherent chip palette (used by the selectors) from a single method colour. Reads the
 // live theme at call time (not cached) so every caller — inline in a component's render, never
 // baked into the static S style object below, which only evaluates once — stays correct across
@@ -3148,9 +3173,11 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 // evaluated once at load and this depends on which page is showing.
 const reconTabBtn = (on) => ({
   flex: 1, background: on ? "var(--surface-2)" : "transparent",
-  border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8,
-  color: on ? "var(--text-heading)" : "var(--text-muted)",
-  padding: "7px 4px", fontSize: 12, fontWeight: on ? 700 : 500, cursor: "pointer",
+  border: `1px solid ${on ? "var(--border-strong)" : "transparent"}`, borderRadius: 6,
+  // --text-muted here made the inactive tab look disabled rather than like the other half of a
+  // pair, which was most of why the second page went unnoticed.
+  color: on ? "var(--text-heading)" : "var(--text-tertiary)",
+  padding: "7px 4px", fontSize: 12, fontWeight: on ? 700 : 600, cursor: "pointer",
 });
 
 const spendSegBtn = (on) => ({ background: on ? "var(--surface-2)" : "transparent", border:`1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius:6, color: on ? "var(--text-heading)" : "var(--text-muted)", padding:"4px 8px", fontSize:11, fontWeight: on ? 600 : 500, cursor:"pointer" });
@@ -3637,7 +3664,7 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     // Open the week log where the statement ends, which is the part being reconciled.
     const landing = res.span ? lib.periodIndexFor(res.span.to, idx) : null;
     setWkPeriod(landing ? landing.archiveIndex : null);
-    setWkWeek(landing ? landing.weekIndex : 1);
+    setWkWeek(landing ? landing.weekIndex : (periods[0] ? todayWeekIndex(periods[0].weeks) : 1));
     setPage(0);
     setDayIndex(idx); setResult(res); setPicked(initial); setErr(""); setStep("review");
   }
@@ -3730,12 +3757,12 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
       <button onClick={() => setOpen(o => ({ ...o, [id]: !o[id] }))}
         style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between", gap:8,
                  background:"var(--surface)", border:"none", padding:"10px 12px", cursor:"pointer", textAlign:"left" }}>
-        <span style={{ fontSize:13, fontWeight:600, color: colour || "var(--text-heading)" }}>{title}</span>
+        <span style={{ fontSize:13, fontWeight:600, color: colour ? (colour.charAt(0) === "#" ? acc(colour) : colour) : "var(--text-heading)" }}>{title}</span>
         <span style={{ fontSize:12, color:"var(--text-secondary)" }}>{count} {open[id] ? "▾" : "▸"}</span>
       </button>
       {open[id] && (
         <div style={{ padding:"0 12px 10px" }}>
-          {hint && <div style={{ fontSize:11, color:"var(--text-muted)", lineHeight:1.5, margin:"2px 0 8px" }}>{hint}</div>}
+          {hint && <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.5, margin:"2px 0 8px" }}>{hint}</div>}
           {children}
         </div>
       )}
@@ -3773,7 +3800,7 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                      color: allCards ? "var(--text-heading)" : "var(--text-muted)",
                      borderRadius:8, padding:"6px 12px", fontSize:12, fontWeight:600, cursor:"pointer" }}>All cards</button>
         </div>
-        <div style={{ fontSize:11, color:"var(--text-muted)", lineHeight:1.5, marginBottom:12 }}>
+        <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.5, marginBottom:12 }}>
           {allCards
             ? "Every spend you've logged will be compared against this statement — useful for a single-account check, but spends on your other cards will look missing."
             : `Only spends logged to ${methodName(methodId)} will be compared, so your other cards aren't wrongly flagged.`}
@@ -3892,6 +3919,10 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
   const clean = !r.missingFromApp.length && !r.amountMismatch.length && !r.notOnStatement.length;
 
   const status = lib.statusIndex(r);
+  // Accent colours are fixed across themes by design, but at full strength several of them are
+  // near-illegible as TEXT on the light theme's cream surface (amber managed 2.1:1). Every accent
+  // used as text in this sheet goes through here; fills and tints keep the raw colour.
+  const acc = readableAccentText;
 
   const goPage = (i) => {
     setPage(i);
@@ -3912,21 +3943,21 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
         {[["Matched", r.matched.length, "#22c55e"], ["Don't match", r.amountMismatch.length, "#f59e0b"],
           ["Missing", r.missingFromApp.length, "#ef4444"], ["Extra", r.notOnStatement.length, "#a855f7"]].map(([l, n, c]) => (
           <div key={l} style={{ flex:1, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"8px 6px", textAlign:"center" }}>
-            <div style={{ fontSize:18, fontWeight:800, color: n ? c : "var(--text-muted)" }}>{n}</div>
+            <div style={{ fontSize:18, fontWeight:800, color: n ? acc(c) : "var(--text-muted)" }}>{n}</div>
             <div style={{ fontSize:10, color:"var(--text-secondary)" }}>{l}</div>
           </div>
         ))}
       </div>
 
       {clean && (
-        <div style={{ background:chipColors("#22c55e").bg, border:"1px solid #22c55e", borderRadius:10, padding:"12px 14px",
-                      fontSize:13, color:"#22c55e", lineHeight:1.6, marginBottom:12 }}>
-          Everything on this statement lines up with what you've logged. Nothing to fix.
+        <div style={{ background:chipColors("#22c55e").bg, border:`1px solid ${acc("#22c55e")}`, borderRadius:10, padding:"12px 14px",
+                      fontSize:13, color:acc("#22c55e"), lineHeight:1.6, marginBottom:12 }}>
+          Everything on this statement lines up with what you have logged. Nothing to fix.
         </div>
       )}
 
       <Section id="missing" colour="#ef4444" title="On your statement, not logged" count={r.missingFromApp.length}
-        hint={`These were charged but never logged. Adding them files each one under its own date${allCards ? "" : `, on ${methodName(methodId)}`} — you can categorise them afterwards from the week log.`}>
+        hint={`These were charged but never logged. Adding them files each one under its own date${allCards ? "" : `, on ${methodName(methodId)}`} — you can categorise them afterwards from the Week tab.`}>
         {r.missingFromApp.map(row => {
           const at = lib.periodIndexFor(row.date, dayIndex);
           const tag = at ? periodTag(at.archiveIndex) : null;
@@ -3935,11 +3966,11 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
               <Tick on={!!picked[row.id]} onToggle={() => toggle(row.id)} />
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ fontSize:13, color:"var(--text-primary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.description || "(no description)"}</div>
-                <div style={{ fontSize:11, color:"var(--text-muted)" }}>
+                <div style={{ fontSize:11, color:"var(--text-secondary)" }}>
                   {dayKeyLabel(row.date)}{tag ? ` · ${tag}` : ""}{row.direction === "credit" ? " · money in" : ""}
                 </div>
               </div>
-              <div style={{ fontSize:14, fontWeight:700, color: row.direction === "credit" ? "#22c55e" : "var(--text-heading)" }}>{fmt(row.amount)}</div>
+              <div style={{ fontSize:14, fontWeight:700, color: row.direction === "credit" ? acc("#22c55e") : "var(--text-heading)" }}>{fmt(row.amount)}</div>
             </div>
           );
         })}
@@ -3963,20 +3994,20 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                     you logged “{c.label}”
                   </div>
                 )}
-                <div style={{ fontSize:11, color:"var(--text-muted)" }}>
+                <div style={{ fontSize:11, color:"var(--text-secondary)" }}>
                   {dayKeyLabel(m.row.date)}{tag ? ` · ${tag}` : ""}{isPin ? " · pinned cost" : isSplit ? " · split" : ""}
                 </div>
               </div>
               <div style={{ textAlign:"right" }}>
-                <div style={{ fontSize:11, color:"var(--text-muted)", textDecoration:"line-through" }}>{fmt(c.amount)}</div>
-                <div style={{ fontSize:14, fontWeight:700, color:"#f59e0b" }}>{fmt(m.row.amount)}</div>
+                <div style={{ fontSize:11, color:"var(--text-tertiary)", textDecoration:"line-through" }}>{fmt(c.amount)}</div>
+                <div style={{ fontSize:14, fontWeight:700, color:acc("#f59e0b") }}>{fmt(m.row.amount)}</div>
               </div>
               {isSplit && (
                 <div style={{ width:"100%", fontSize:11, color:"var(--text-tertiary)", background:"var(--bg)",
                               border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", marginTop:2, lineHeight:1.6 }}>
                   Split in proportion: <strong style={{ color:"var(--text-heading)" }}>{fmt(parts.your)}</strong> yours,{" "}
                   <strong style={{ color:"var(--text-heading)" }}>{fmt(parts.their)}</strong> theirs. If the whole difference is
-                  one person's, fix this one from the week log instead.
+                  one person's, fix this one from the Week tab instead.
                 </div>
               )}
               {isPin && (
@@ -3991,7 +4022,7 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                 </div>
               )}
               {isPin && (
-                <div style={{ width:"100%", fontSize:11, color:"var(--text-muted)", marginTop:4, lineHeight:1.5 }}>
+                <div style={{ width:"100%", fontSize:11, color:"var(--text-secondary)", marginTop:4, lineHeight:1.5 }}>
                   {(pinMode[c.key] || "once") === "rate"
                     ? "Changes this pinned cost everywhere from now on, leaving finished periods as they were."
                     : "Changes only this month's charge. The pinned cost keeps its usual amount."}
@@ -4011,12 +4042,12 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
               <Tick on={!!picked[c.key]} onToggle={() => toggle(c.key)} />
               <div style={{ flex:1, minWidth:0 }}>
                 <div style={{ fontSize:13, color:"var(--text-primary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{c.label || "(no description)"}</div>
-                <div style={{ fontSize:11, color:"var(--text-muted)" }}>
+                <div style={{ fontSize:11, color:"var(--text-secondary)" }}>
                   {c.day ? dayKeyLabel(c.day) : "undated"}{tag ? ` · ${tag}` : ""}
                   {c.kind === "pin" ? " · pinned cost" : c.kind === "split" ? " · split" : c.kind === "credit" ? " · money in" : ""}
                 </div>
                 {c.kind === "pin" && picked[c.key] && (
-                  <div style={{ fontSize:11, color:"#a855f7", marginTop:2 }}>This month's charge will be skipped; the pinned cost itself stays.</div>
+                  <div style={{ fontSize:11, color:acc("#a855f7"), marginTop:2 }}>This month's charge will be skipped; the pinned cost itself stays.</div>
                 )}
               </div>
               <div style={{ fontSize:14, fontWeight:700, color:"var(--text-heading)" }}>{fmt(c.amount)}</div>
@@ -4031,7 +4062,7 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
           <div key={row.id} style={{ ...rowBox, opacity:0.75 }}>
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ fontSize:13, color:"var(--text-tertiary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{row.description}</div>
-              <div style={{ fontSize:11, color:"var(--text-muted)" }}>{dayKeyLabel(row.date)} · {row.ignoreReason || "outside your tracked periods"}</div>
+              <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{dayKeyLabel(row.date)} · {row.ignoreReason || "outside your tracked periods"}</div>
             </div>
             <div style={{ fontSize:13, color:"var(--text-muted)" }}>{fmt(row.amount)}</div>
           </div>
@@ -4044,7 +4075,7 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
           <div key={m.row.id} style={{ ...rowBox, opacity:0.8 }}>
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ fontSize:13, color:"var(--text-tertiary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{m.row.description}</div>
-              <div style={{ fontSize:11, color:"var(--text-muted)" }}>{dayKeyLabel(m.row.date)}{m.how === "date-drift" ? " · posted later" : m.how === "remembered" ? " · reconciled before" : ""}</div>
+              <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{dayKeyLabel(m.row.date)}{m.how === "date-drift" ? " · posted later" : m.how === "remembered" ? " · reconciled before" : ""}</div>
             </div>
             <div style={{ fontSize:13, color:"var(--text-tertiary)" }}>{fmt(m.row.amount)}</div>
           </div>
@@ -4056,14 +4087,22 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
   const wkP = display.find(d => d.archiveIndex === wkPeriod) || display[0];
   const weekLog = !wkP ? null : (() => {
     const rows = wkP.items.filter(c => c.weekIndex === wkWeek);
-    const spend = rows.filter(c => c.direction !== "credit" && c.type !== "excluded").reduce((t, c) => t + c.amount, 0);
-    // Dated rows first, oldest to newest, with undated ones after — the week log's own ordering.
+    // Everything listed below, added up — including work spends and the not-yours half of a
+    // split, because all of it hit a card. Deliberately NOT the Week tab's figure, which is
+    // personal spend against budget; hence the label, so two different numbers for one week
+    // can't be mistaken for each other.
+    const dayTotal = (items) => items.filter(c => c.direction !== "credit").reduce((t, c) => t + c.amount, 0);
+    const total = dayTotal(rows);
+    // Newest day first, matching the Week tab — the same data one tab away must not read in the
+    // opposite direction. Undated rows sort last.
     const days = [];
-    for (const c of rows.slice().sort((a, b) => (a.day || "9") < (b.day || "9") ? -1 : (a.day || "9") > (b.day || "9") ? 1 : 0)) {
+    for (const c of rows.slice().sort((a, b) => (b.day || "0") < (a.day || "0") ? -1 : (b.day || "0") > (a.day || "0") ? 1 : 0)) {
       const key = c.day || "undated";
       if (!days.length || days[days.length - 1].key !== key) days.push({ key, items: [] });
       days[days.length - 1].items.push(c);
     }
+    // Only the live period has a "this week"; an archived one is entirely in the past.
+    const currentWeek = wkP.archiveIndex == null ? weekIndexForDay(wkP.weeks, dayKey(londonNow())) : null;
     const wIdx = wkP.weeks.findIndex(w => w.index === wkWeek);
     const week = wkP.weeks[wIdx];
     const pIdx = display.findIndex(d => d.archiveIndex === wkP.archiveIndex);
@@ -4093,47 +4132,67 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
         <div style={{ display:"flex", flexWrap:"wrap", gap:6, marginBottom:10 }}>
           {wkP.weeks.map(w => (
             <button key={w.index} onClick={() => setWkWeek(w.index)}
-              style={{ ...S.weekPill, ...(wkWeek === w.index ? S.weekPillActive : {}) }}>W{w.index}</button>
+              style={{ ...S.weekPill, ...(w.index === currentWeek ? S.weekPillCurrent : {}), ...(wkWeek === w.index ? S.weekPillActive : {}) }}>W{w.index}</button>
           ))}
         </div>
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:8 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", gap:8, marginBottom:4 }}>
           <div style={{ fontSize:12, color:"var(--text-secondary)" }}>
             {week ? `${dateStr(week.start)} — ${dateStr(week.end)}` : `Week ${wkWeek}`}
           </div>
-          <div style={{ fontSize:13, fontWeight:700, color:"var(--text-heading)" }}>{fmt(spend)}</div>
+          <div style={{ textAlign:"right", flexShrink:0 }}>
+            <div style={{ fontSize:13, fontWeight:700, color:"var(--text-heading)" }}>{fmt(total)}</div>
+            <div style={{ fontSize:10, color:"var(--text-secondary)" }}>logged this week</div>
+          </div>
         </div>
 
         {rows.length === 0 ? (
-          <div style={{ ...S.empty, marginTop:4 }}>Nothing logged this week</div>
+          <div style={{ ...S.empty, marginTop:4, textAlign:"center" }}>Nothing logged this week</div>
         ) : days.map(day => (
-          <div key={day.key} style={{ marginBottom:10 }}>
-            <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", textTransform:"uppercase", margin:"6px 0 2px" }}>
-              {day.key === "undated" ? "Undated" : dayKeyLabel(day.key)}
+          <div key={day.key} style={{ marginBottom:6 }}>
+            {/* The shared day-heading styles, so this list and the Week tab's read as one system. */}
+            <div style={S.dayHead}>
+              <span style={S.dayHeadLabel}>{day.key === "undated" ? "Undated" : dayKeyLabel(day.key)}</span>
+              <span style={S.dayHeadTotal}>{fmt(dayTotal(day.items))}</span>
             </div>
             {day.items.map(c => {
               const v = status[c.key];
               const compared = allCards || c.direction === "credit" || c.method === methodId;
-              const mark = !compared ? { dot:"var(--text-muted)", text:"other card" }
-                : !v ? { dot:"var(--text-muted)", text:"" }
-                : v.status === "matched" ? { dot:"#22c55e", text:"on the statement" }
-                : v.status === "mismatch" ? { dot:"#f59e0b", text:`statement says ${fmt(v.row.amount)}` }
-                : v.status === "extra" ? { dot:"#a855f7", text:"not on the statement" }
-                : v.status === "undated" ? { dot:"var(--text-muted)", text:"undated" }
-                : { dot:"var(--text-muted)", text:"outside the statement" };
+              // A glyph, not a filled dot: the Week tab already uses a coloured dot in this exact
+              // position to mean "which card", and the two palettes overlap almost exactly.
+              // Shape carries the verdict, colour only reinforces it.
+              const mark = !compared ? { g:"·", c:"var(--text-muted)", text:"not compared — other card" }
+                : !v ? { g:"·", c:"var(--text-muted)", text:"" }
+                : v.status === "matched" ? { g:"✓", c:acc("#22c55e"), text:"on the statement" }
+                : v.status === "mismatch" ? { g:"≠", c:acc("#f59e0b"), text:`statement says ${fmt(v.row.amount)}` }
+                : v.status === "extra" ? { g:"!", c:acc("#a855f7"), text:"not on the statement" }
+                : v.status === "undated" ? { g:"·", c:"var(--text-muted)", text:"undated, so not compared" }
+                : { g:"·", c:"var(--text-muted)", text:"outside the statement's dates" };
+              // Built as a list so the separator can't be decided from the wrong subset — a credit
+              // with no card and no share once rendered as "money inon the statement".
+              const meta = [
+                c.method ? METHOD_NAME[c.method] || c.method : null,
+                c.kind === "pin" ? "pinned" : c.type === "split" ? "split" : c.type === "business" ? "work"
+                  : c.type === "excluded" ? "not yours" : c.direction === "credit" ? "money in" : null,
+                c.kind === "split" && c.ref.your ? `your share ${fmt(c.ref.your.amount)}` : null,
+              ].filter(Boolean);
               return (
-                <div key={c.key} style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderTop:"1px solid var(--border)" }}>
-                  <span title={mark.text} style={{ width:8, height:8, borderRadius:4, background:mark.dot, flexShrink:0 }} />
+                <div key={c.key} style={{ display:"flex", alignItems:"flex-start", gap:9, padding:"7px 0", borderTop:"1px solid var(--border)" }}>
+                  <span role="img" aria-label={mark.text || "no verdict"}
+                    style={{ width:14, flexShrink:0, textAlign:"center", fontSize:12, fontWeight:700, lineHeight:"18px", color:mark.c }}>{mark.g}</span>
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:13, color:"var(--text-primary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                       {c.label || "(no description)"}
                     </div>
-                    <div style={{ fontSize:11, color:"var(--text-muted)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                      {[c.method ? METHOD_NAME[c.method] || c.method : null,
-                        c.kind === "pin" ? "pinned" : c.type === "split" ? "split" : c.type === "business" ? "work" : c.type === "excluded" ? "not yours" : c.direction === "credit" ? "money in" : null,
-                        mark.text || null].filter(Boolean).join(" · ")}
+                    {/* Wraps rather than truncating: at 320px, or with a long payment-type name,
+                        an ellipsis here cut the verdict off and left colour as the only signal. */}
+                    <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.45 }}>
+                      {meta.join(" · ")}
+                      {mark.text && <span style={{ color:mark.c }}>{meta.length ? " · " : ""}{mark.text}</span>}
                     </div>
                   </div>
-                  <div style={{ fontSize:14, fontWeight:700, flexShrink:0, color: c.direction === "credit" ? "#22c55e" : "var(--text-heading)" }}>{fmt(c.amount)}</div>
+                  <div style={{ fontSize:14, fontWeight:700, flexShrink:0, color: c.direction === "credit" ? acc("#22c55e") : "var(--text-heading)" }}>
+                    {c.direction === "credit" ? "+" : ""}{fmt(c.amount)}
+                  </div>
                 </div>
               );
             })}
@@ -4145,20 +4204,24 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
 
   return (
     <Modal onClose={onClose} title="Reconciliation">
-      <div style={{ display:"flex", gap:6, marginBottom:10 }}>
+      <div role="tablist" aria-label="Reconciliation pages"
+        style={{ display:"flex", gap:4, marginBottom:10, background:"var(--bg)", border:"1px solid var(--border)", borderRadius:8, padding:3,
+                 position:"sticky", top:0, zIndex:2 }}>
         {["What we found", "Your week log"].map((l, i) => (
-          <button key={l} onClick={() => goPage(i)} style={reconTabBtn(page === i)}>{l}</button>
+          <button key={l} role="tab" aria-selected={page === i} id={`recon-tab-${i}`} aria-controls={`recon-page-${i}`}
+            onClick={() => goPage(i)} style={reconTabBtn(page === i)}>{l}</button>
         ))}
       </div>
 
       {/* Two pages side by side, swiped between or tapped above. Each scrolls on its own so the
           tabs and the apply bar stay put while you read either one. */}
       <div ref={pagerRef} onScroll={onPagerScroll} style={S.reconPager}>
-        <div style={S.reconPage}>{findings}</div>
-        <div style={S.reconPage}>{weekLog}</div>
+        <div role="tabpanel" id="recon-page-0" aria-labelledby="recon-tab-0" style={S.reconPage}>{findings}</div>
+        <div role="tabpanel" id="recon-page-1" aria-labelledby="recon-tab-1" style={S.reconPage}>{weekLog}</div>
       </div>
 
-      <div style={{ borderTop:"1px solid var(--border)", paddingTop:12, marginTop:4 }}>
+      <div style={{ borderTop:"1px solid var(--border)", paddingTop:12, marginTop:4,
+                    position:"sticky", bottom:0, background:"var(--surface)", zIndex:2 }}>
         {totalPicked === 0 ? (
           <button style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", width:"100%" }}
             onClick={onClose}>Done</button>
@@ -4211,8 +4274,14 @@ const S = {
   // The swipeable pair of pages inside the reconciliation sheet. A fixed height (rather than
   // letting the row grow to its tallest page) keeps the tabs and the apply bar in place, and
   // stops the short page dragging a screenful of blank space along behind it.
-  reconPager: { display:"flex", overflowX:"auto", overflowY:"hidden", scrollSnapType:"x mandatory", overscrollBehaviorX:"contain", WebkitOverflowScrolling:"touch", scrollbarWidth:"none", height:"56vh" },
-  reconPage: { flex:"0 0 100%", width:"100%", minWidth:0, scrollSnapAlign:"start", overflowY:"auto", overscrollBehaviorY:"contain", WebkitOverflowScrolling:"touch", paddingRight:2 },
+  // maxHeight, deliberately NOT height: a fixed height left a clean reconciliation showing half a
+  // screen of blank surface, and on a short viewport (landscape) it pushed the apply bar off the
+  // bottom. Capped instead, the pager is as tall as its content needs up to the cap.
+  reconPager: { display:"flex", overflowX:"auto", overflowY:"hidden", scrollSnapType:"x mandatory", overscrollBehaviorX:"contain", WebkitOverflowScrolling:"touch", scrollbarWidth:"none", maxHeight:"56vh" },
+  // No overscroll containment on the Y axis: with it, a flick inside a page refused to chain to
+  // the sheet, so on a short viewport there was no way to scroll down to the apply bar at all.
+  // The sheet body keeps its own containment, which is what stops the page behind scrolling.
+  reconPage: { flex:"0 0 100%", width:"100%", minWidth:0, scrollSnapAlign:"start", overflowY:"auto", WebkitOverflowScrolling:"touch", paddingRight:2 },
   periodNav: { display:"flex", alignItems:"center", justifyContent:"space-between", gap:8, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:10, padding:"6px 8px", marginBottom:10 },
   periodNavBtn: { background:"var(--surface-2)", border:"1px solid var(--border-strong)", borderRadius:8, color:"var(--text-tertiary)", width:32, height:32, fontSize:13, cursor:"pointer", flexShrink:0, padding:0 },
   periodNavBtnOff: { opacity:0.3, cursor:"default" },

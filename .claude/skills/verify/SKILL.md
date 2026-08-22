@@ -56,12 +56,20 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
 - **Modals scroll**: `Modal` is a flex column — a fixed `S.modalHeader` and a scrolling
   `S.modalBody` capped at `88vh`. Content below the fold is reached by scrolling that body, not
   the page. Before this, a sheet taller than the screen was simply unreachable.
+- **The reconcile tabs are `role="tab"`, not buttons** — `getByRole("button", {name: "Your week log"})`
+  will not match; use `getByRole("tab", ...)`.
+- **Seeding state directly**: `window.SpendVault.save(s)` is queued through a promise chain — wait
+  ~1s before `page.reload()` or the seed is lost.
 - **Reconcile**: Summary tab → "⇄ Reconcile". Paste a CSV into the textarea (faster than a file
   input), "Read statement" → column-confirmation step → "Cross-reference". Results group into
   collapsible sections; rows tick via `[aria-label="Select"]`. Statement dates must fall inside a
   tracked pay period *and* inside the statement's own span, or rows/entries are set aside instead
   of flagged — build fixtures around today's date or everything reads as "missing". Matching keys
   on date + amount only, so a fixture whose names differ from the logged labels still matches.
+- **Reconcile week log**: page 2 of the review step, reached by swiping or the tabs. Rows are
+  read-only and annotated with a verdict glyph (✓ / ≠ / !). Its header total is every row listed
+  added up ("logged this week") — deliberately NOT the Week tab's personal-spend-against-budget
+  figure, which is a different number for the same week.
 - **Period history**: Week tab → the `◀ Month YYYY ▶` stepper (`[aria-label="Earlier period"]` /
   `"Later period"`), which walks `state.monthHistory` oldest→newest then back to live.
 
@@ -72,6 +80,11 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
   so a `page.reload()` loses the stubbed React and the app dies with "React is not defined". Stub it
   before the first `goto`: `page.addInitScript(() => Object.defineProperty(navigator,
   "serviceWorker", { get: () => undefined }))`.
+- A **mouse drag cannot scroll a scroll-snap container** in Chromium — the pager only responds to
+  real touch. Use a `hasTouch` context and CDP `Input.dispatchTouchEvent` (see `swipe.js` pattern),
+  or the page will appear stuck on 0.
+- Accent colours as TEXT go through `readableAccentText` — at full strength amber and green are
+  ~2.1:1 on the light theme's cream and effectively illegible. Fills and tints keep the raw colour.
 - The keypad's confirm key is `↵` normally but **`→` on the first step of a split** — match
   `/^(↵|→)$/` or the split flow hangs.
 - The category grid's "None" tile has the accessible name `∅ ✓ None`, so `{ name: "None", exact:
