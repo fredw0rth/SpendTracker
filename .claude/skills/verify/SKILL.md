@@ -53,11 +53,15 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
 - **Theme check**: quick visual pass via `document.documentElement.dataset.theme = 'light'`
   (real toggle lives in Customisation).
 
+- **Modals scroll**: `Modal` is a flex column — a fixed `S.modalHeader` and a scrolling
+  `S.modalBody` capped at `88vh`. Content below the fold is reached by scrolling that body, not
+  the page. Before this, a sheet taller than the screen was simply unreachable.
 - **Reconcile**: Summary tab → "⇄ Reconcile". Paste a CSV into the textarea (faster than a file
   input), "Read statement" → column-confirmation step → "Cross-reference". Results group into
   collapsible sections; rows tick via `[aria-label="Select"]`. Statement dates must fall inside a
   tracked pay period *and* inside the statement's own span, or rows/entries are set aside instead
-  of flagged — build fixtures around today's date or everything reads as "missing".
+  of flagged — build fixtures around today's date or everything reads as "missing". Matching keys
+  on date + amount only, so a fixture whose names differ from the logged labels still matches.
 - **Period history**: Week tab → the `◀ Month YYYY ▶` stepper (`[aria-label="Earlier period"]` /
   `"Later period"`), which walks `state.monthHistory` oldest→newest then back to live.
 

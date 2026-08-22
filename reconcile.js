@@ -417,6 +417,16 @@
 
   const pence = (n) => Math.round(Number(n) * 100);
   const samePenny = (a, b) => pence(a) === pence(b);
+  // How far apart two amounts are, as a fraction of the larger one.
+  const amountDrift = (a, b) => {
+    const hi = Math.max(Math.abs(a), Math.abs(b));
+    return hi === 0 ? 0 : Math.abs(a - b) / hi;
+  };
+  // Lexicographic tuple comparison, so a ranking reads as a list of tie-breakers.
+  function lexLess(a, b) {
+    for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) return a[i] < b[i]; }
+    return false;
+  }
   function daysApart(a, b) {
     const pa = a.split("-").map(Number), pb = b.split("-").map(Number);
     const da = Date.UTC(pa[0], pa[1] - 1, pa[2]), db = Date.UTC(pb[0], pb[1] - 1, pb[2]);
@@ -426,7 +436,9 @@
   function reconcile(opts) {
     const o = opts || {};
     const dayWindow = o.dayWindow == null ? 3 : o.dayWindow;      // card postings lag the purchase
-    const simThreshold = o.simThreshold == null ? 0.55 : o.simThreshold;
+    // How far two amounts may differ and still be treated as the same charge, as a fraction of the
+    // larger: 0.75 keeps £8-vs-£18 (a dropped digit) while rejecting £4.20-vs-£30.
+    const amountTolerance = o.amountTolerance == null ? 0.75 : o.amountTolerance;
     const dayIndex = o.dayIndex || null;
     const all = (o.statement || []).slice();
 
@@ -494,17 +506,28 @@
       }
       if (best) take(row, best, "date-drift");
     }
-    // Pass 3 — the description and date agree but the amount doesn't. This is what catches a
-    // mistyped amount, and it's the only pass that can produce an amountMismatch.
+    // Pass 3 — the date lines up but the amount doesn't, which is what catches a mistyped figure.
+    // The DESCRIPTION IS NOT REQUIRED TO AGREE: what you type is a note to yourself ("Lunch"),
+    // while the statement carries the acquirer's descriptor ("PRET A MANGER 4392 LONDON"), and
+    // gating on that would report one transaction as two separate problems. So the pairing runs
+    // on date proximity and on the amounts being close enough to be the same charge mistyped;
+    // similarity only breaks ties between candidates that are otherwise equally plausible.
     for (const row of inRange) {
       if (usedRow.has(row.id)) continue;
-      let best = null, bestSim = simThreshold;
+      let best = null, bestScore = null;
       for (const c of free(row)) {
-        if (!c.day || daysApart(c.day, row.date) > dayWindow) continue;
-        const sim = similarity(row.description, c.label);
-        if (sim >= bestSim) { best = c; bestSim = sim; }
+        if (!c.day) continue;
+        const gap = daysApart(c.day, row.date);
+        if (gap > dayWindow) continue;
+        // Past a point two amounts are simply different transactions. Without this guard, a £30
+        // cash spend and a forgotten £4.20 coffee on the same day would pair up and "correcting"
+        // one would quietly destroy both.
+        const drift = amountDrift(row.amount, c.amount);
+        if (drift > amountTolerance) continue;
+        const score = [gap, drift, -similarity(row.description, c.label)];
+        if (!bestScore || lexLess(score, bestScore)) { best = c; bestScore = score; }
       }
-      if (best) take(row, best, "description");
+      if (best) take(row, best, "amount");
     }
 
     const missingFromApp = inRange.filter(r => !usedRow.has(r.id));
