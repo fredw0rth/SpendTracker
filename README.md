@@ -202,6 +202,11 @@ doesn't line up, the name is only used to break ties, and both names are shown s
 can see what got paired before you accept it. Amounts too far apart to be the same charge mistyped
 are deliberately left as two separate entries rather than merged.
 
+Credits are reconciled too. A refund lands on a card like anything else, so logging one now
+records which card it went back to, and it's matched against the incoming rows on that card's
+statement. Credits logged before this can't say which card they belong to, so they only appear
+when you reconcile with "All cards" — open one and pick a card to bring it back in.
+
 Card payments, transfers and salary are recognised and skipped — they aren't spending. Splits are
 treated as the single card transaction they really are, and a pinned cost opens its own editor,
 with deleting it skipping just that month's charge. The file is read on your phone and never stored or sent anywhere;

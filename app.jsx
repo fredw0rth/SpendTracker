@@ -640,9 +640,13 @@ function reconcileCandidates(period, methodId) {
     });
   }
   for (const c of (d.credits || [])) {
+    // Filtered by card exactly like a spend. A credit logged before credits carried a card has no
+    // method, so it only appears under "All cards" — assigning it one from the editor brings it
+    // back into that card's reconciliation.
+    if (!wanted(c.method)) continue;
     out.push({
       key: kp + ":credit:" + c.id, kind: "credit", direction: "credit",
-      amount: c.amount, day: c.day || null, label: c.label || "", method: null,
+      amount: c.amount, day: c.day || null, label: c.label || "", method: c.method || null,
       weekIndex: c.weekIndex, type: "credit",
       recon: c.recon || null, ref: { archiveIndex: period.archiveIndex, credit: c },
     });
@@ -1994,7 +1998,9 @@ function SplitLine({ group, onEdit, onDel, hideDelete }) {
 function CreditLine({ credit, onDel, onEdit, hideDelete }) {
   return (
     <div onClick={onEdit} style={{ ...S.entryRow, cursor: onEdit ? "pointer" : "default" }}>
-      <span style={{ ...S.dot, background:"#22c55e" }} />
+      {/* The card dot, as on every other row — a credit lands on a card like anything else.
+          Credits logged before they carried one fall back to the old plain green. */}
+      <span style={{ ...S.dot, background: METHOD_COLOR[credit.method] || "#22c55e" }} />
       <span style={{ flex:1, color:"#22c55e", fontSize:13 }}>{credit.label || "Credit"}{credit.from && <span style={{ color:"var(--text-secondary)" }}> from {credit.from}</span>}</span>
       <span style={{ color:"#22c55e", fontWeight:600, fontSize:13 }}>+{fmt(credit.amount)}</span>
       {!hideDelete && <ConfirmDeleteButton onConfirm={onDel} style={S.delBtn} />}
@@ -2407,7 +2413,9 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
   const selectedWeek = weekIndexForDay(weeks, selectedDay) || weekIndex;
   // Fall back to the first method if the seeded id no longer exists (e.g. its type was removed).
   const [method, setMethod] = useState(() => {
-    const seed = editEntry ? editEntry.method : (splitRef ? splitRef.method : ((prefill && prefill.method) || defaultMethod));
+    const seed = editEntry ? editEntry.method
+      : editCredit ? (editCredit.method || defaultMethod)
+      : (splitRef ? splitRef.method : ((prefill && prefill.method) || defaultMethod));
     return METHOD_NAME[seed] ? seed : METHODS[0].id;
   });
   const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : ((prefill && prefill.type) || "personal")));
@@ -2554,7 +2562,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
     // Editing an existing item: write the change back in place, keeping id/date/week/split.
     if (isEdit) {
       if (editCredit) {
-        onUpdateCredit({ ...editCredit, amount, label: note.trim() });
+        onUpdateCredit({ ...editCredit, amount, label: note.trim(), method });
       } else {
         // Personal entries carry the (possibly changed) category; other kinds keep none.
         onUpdate({ ...editEntry, amount: isSplitEdit ? editEntry.amount : amount, label: note.trim(), note: note.trim(), method, type, category: (type === "personal" && !isSplitEdit) ? (category || undefined) : undefined });
@@ -2593,7 +2601,10 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
     }
 
     if (type === "credit") {
-      onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), weekIndex: selectedWeek, day: selectedDay || undefined, from: "", date: new Date().toISOString(), order: Date.now() });
+      // `method` matters: a refund lands on a specific card, so without it a credit can't be
+      // reconciled against that card's statement. The selector above was already being shown and
+      // its choice quietly discarded.
+      onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), method, weekIndex: selectedWeek, day: selectedDay || undefined, from: "", date: new Date().toISOString(), order: Date.now() });
       setFlash({ amount, credit: true });
       setTimeout(() => setFlash(null), 900);
       resetAfterSave();
@@ -4195,16 +4206,12 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
     // split, because all of it hit the card. Deliberately NOT the Week tab's figure, which is
     // personal spend against budget across every card; hence the label, so two different numbers
     // for one week can't be mistaken for each other.
-    const dayTotal = (items) => items.filter(c => c.direction !== "credit").reduce((t, c) => t + c.amount, 0);
-    const total = dayTotal(rows);
-    // Newest day first, matching the Week tab — the same data one tab away must not read in the
-    // opposite direction. Undated rows sort last.
-    const days = [];
-    for (const c of rows.slice().sort((a, b) => (b.day || "0") < (a.day || "0") ? -1 : (b.day || "0") > (a.day || "0") ? 1 : 0)) {
-      const key = c.day || "undated";
-      if (!days.length || days[days.length - 1].key !== key) days.push({ key, items: [] });
-      days[days.length - 1].items.push(c);
-    }
+    const total = rows.filter(c => c.direction !== "credit").reduce((t, c) => t + c.amount, 0);
+    // A flat list, newest first, with each row carrying its own date. Day headings work on the
+    // Week tab because a week there is a dozen rows of one card's worth of life; here the list is
+    // already filtered to one card and is mostly read by scanning dates against a statement, which
+    // is easier when every row states its own.
+    const ordered = rows.slice().sort((a, b) => (b.day || "0") < (a.day || "0") ? -1 : (b.day || "0") > (a.day || "0") ? 1 : 0);
     // Only the live period has a "this week"; an archived one is entirely in the past.
     const currentWeek = wkP.archiveIndex == null ? weekIndexForDay(wkP.weeks, dayKey(londonNow())) : null;
     const wIdx = wkP.weeks.findIndex(w => w.index === wkWeek);
@@ -4253,14 +4260,9 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
           <div style={{ ...S.empty, marginTop:4, textAlign:"center" }}>
             {allCards ? "Nothing logged this week" : `Nothing logged to ${methodName(methodId)} this week`}
           </div>
-        ) : days.map(day => (
-          <div key={day.key} style={{ marginBottom:6 }}>
-            {/* The shared day-heading styles, so this list and the Week tab's read as one system. */}
-            <div style={S.dayHead}>
-              <span style={S.dayHeadLabel}>{day.key === "undated" ? "Undated" : dayKeyLabel(day.key)}</span>
-              <span style={S.dayHeadTotal}>{fmt(dayTotal(day.items))}</span>
-            </div>
-            {day.items.map(c => {
+        ) : (
+          <div>
+            {ordered.map(c => {
               const v = status[c.key];
               // A glyph, not a filled dot: the Week tab already uses a coloured dot in this exact
               // position to mean "which card", and the two palettes overlap almost exactly.
@@ -4274,7 +4276,10 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
               // Built as a list so the separator can't be decided from the wrong subset — a credit
               // with no card and no share once rendered as "money inon the statement".
               const meta = [
-                c.method ? METHOD_NAME[c.method] || c.method : null,
+                // Only worth naming the card when several are in play — otherwise the header
+                // already says which card this is, and repeating it on every row is what pushes
+                // the line onto a second row.
+                allCards && c.method ? METHOD_NAME[c.method] || c.method : null,
                 c.kind === "pin" ? "pinned" : c.type === "split" ? "split" : c.type === "business" ? "work"
                   : c.type === "excluded" ? "not yours" : c.direction === "credit" ? "money in" : null,
                 c.kind === "split" && c.ref.your ? `your share ${fmt(c.ref.your.amount)}` : null,
@@ -4290,8 +4295,9 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
                     {/* Wraps rather than truncating: at 320px, or with a long payment-type name,
                         an ellipsis here cut the verdict off and left colour as the only signal. */}
                     <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.45 }}>
-                      {meta.join(" · ")}
-                      {mark.text && <span style={{ color:mark.c }}>{meta.length ? " · " : ""}{mark.text}</span>}
+                      <span style={{ color:"var(--text-tertiary)", fontWeight:600 }}>{c.day ? dayKeyLabel(c.day) : "Undated"}</span>
+                      {meta.length > 0 && ` · ${meta.join(" · ")}`}
+                      {mark.text && <span style={{ color:mark.c }}> · {mark.text}</span>}
                     </div>
                   </div>
                   <div style={{ fontSize:14, fontWeight:700, flexShrink:0, color: c.direction === "credit" ? acc("#22c55e") : "var(--text-heading)" }}>
@@ -4301,7 +4307,7 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
               );
             })}
           </div>
-        ))}
+        )}
       </div>
     );
   })();
@@ -4311,7 +4317,7 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
       <div role="tablist" aria-label="Reconciliation pages"
         style={{ display:"flex", gap:4, marginBottom:10, background:"var(--bg)", border:"1px solid var(--border)", borderRadius:8, padding:3,
                  position:"sticky", top:0, zIndex:2 }}>
-        {["What we found", "Your week log"].map((l, i) => (
+        {["Findings", "Your week log"].map((l, i) => (
           <button key={l} role="tab" aria-selected={page === i} id={`recon-tab-${i}`} aria-controls={`recon-page-${i}`}
             onClick={() => goPage(i)} style={reconTabBtn(page === i)}>{l}</button>
         ))}

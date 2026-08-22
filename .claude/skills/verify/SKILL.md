@@ -59,6 +59,7 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
 - Text like "Coffee" appears BOTH in the reconcile sheet and on the Summary tab behind it —
   `getByText(...).first()` picks the one behind the overlay and the click is "intercepted". Scope
   queries to the pager's pane before clicking.
+- The review step's tabs are **"Findings"** and **"Your week log"**.
 - **The reconcile tabs are `role="tab"`, not buttons** — `getByRole("button", {name: "Your week log"})`
   will not match; use `getByRole("tab", ...)`.
 - **Seeding state directly**: `window.SpendVault.save(s)` is queued through a promise chain — wait
@@ -72,12 +73,14 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
   tracked pay period *and* inside the statement's own span, or rows/entries are set aside instead
   of flagged — build fixtures around today's date or everything reads as "missing". Matching keys
   on date + amount only, so a fixture whose names differ from the logged labels still matches.
-- **Reconcile week log**: page 2 of the review step, reached by swiping or the tabs. Rows are
-  read-only and annotated with a verdict glyph (✓ / ≠ / !). Scoped to the card being reconciled
-  (credits excepted — `reconcileCandidates` never filters those by card), so every row shown
-  carries a verdict. Its header total is every row listed added up ("logged to <card>") —
-  deliberately NOT the Week tab's personal-spend-against-budget figure across all cards, which is
-  a different number for the same week.
+- **Reconcile week log**: page 2 of the review step, reached by swiping or the tabs. A flat list,
+  newest first, each row carrying its own date — no day headings, unlike the Week tab. Rows are
+  read-only and annotated with a verdict glyph (✓ / ≠ / !). Scoped to the card being reconciled,
+  credits included (they carry `method` too), so every row shown has a verdict. The card name is
+  omitted from rows unless "All cards" is on, since the header already states it. Its header total
+  is every row listed added up ("logged to <card>") — deliberately NOT the Week tab's
+  personal-spend-against-budget figure across all cards, which is a different number for the same
+  week.
 - **Saved statements**: one per payment method in `state.statements`, stored packed
   (`packStatement`/`unpackStatement` in reconcile.js — fingerprints survive the round trip, which
   is what keeps `recon` stamps working). Summary shows a chip per card; tapping opens the modal via
