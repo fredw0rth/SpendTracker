@@ -598,6 +598,7 @@ function reconcileCandidates(period, methodId) {
             out.push({
                 key: kp + ":pin:" + e.pinId + ":" + e.occKey, kind: "pin", direction: "debit",
                 amount: e.amount, day: e.day || null, label: e.label || "", method: e.method,
+                weekIndex: e.weekIndex, type: e.type, category: e.category,
                 recon: recons[e.occKey] || null,
                 ref: { archiveIndex: period.archiveIndex, pinId: e.pinId, occKey: e.occKey, entry: e },
             });
@@ -615,6 +616,7 @@ function reconcileCandidates(period, methodId) {
                 amount: Math.round(group.reduce((t, x) => t + (x.amount || 0), 0) * 100) / 100,
                 // The fingerprint is kept on the personal half, which is the one every fix rewrites.
                 day: e.day || null, label: e.label || "", method: e.method,
+                weekIndex: e.weekIndex, type: "split", category: your ? your.category : undefined,
                 recon: (your && your.recon) || (their && their.recon) || null,
                 ref: { archiveIndex: period.archiveIndex, groupId: e.splitGroupId, your, their },
             });
@@ -623,6 +625,7 @@ function reconcileCandidates(period, methodId) {
         out.push({
             key: kp + ":entry:" + e.id, kind: "entry", direction: "debit",
             amount: e.amount, day: e.day || null, label: e.label || "", method: e.method,
+            weekIndex: e.weekIndex, type: e.type, category: e.category,
             recon: e.recon || null, ref: { archiveIndex: period.archiveIndex, entry: e },
         });
     }
@@ -630,6 +633,7 @@ function reconcileCandidates(period, methodId) {
         out.push({
             key: kp + ":credit:" + c.id, kind: "credit", direction: "credit",
             amount: c.amount, day: c.day || null, label: c.label || "", method: null,
+            weekIndex: c.weekIndex, type: "credit",
             recon: c.recon || null, ref: { archiveIndex: period.archiveIndex, credit: c },
         });
     }
@@ -2790,6 +2794,14 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 // ─── Largest Spends rows ──────────────────────────────────────────────────────
 // Shared by the Summary card (which previews the leading few) and the "View all" modal (which shows
 // the complete ranking), so the two renderings can't drift apart.
+// Tabs for the reconciliation sheet's two pages. A function, not an entry in S, because S is
+// evaluated once at load and this depends on which page is showing.
+const reconTabBtn = (on) => ({
+    flex: 1, background: on ? "var(--surface-2)" : "transparent",
+    border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8,
+    color: on ? "var(--text-heading)" : "var(--text-muted)",
+    padding: "7px 4px", fontSize: 12, fontWeight: on ? 700 : 500, cursor: "pointer",
+});
 const spendSegBtn = (on) => ({ background: on ? "var(--surface-2)" : "transparent", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 6, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "4px 8px", fontSize: 11, fontWeight: on ? 600 : 500, cursor: "pointer" });
 function SpendTxnRow({ item, sep, onEditEntry }) {
     // Real entries tap to edit; pins (no entry ref) stay read-only.
@@ -3165,6 +3177,11 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     const [pinMode, setPinMode] = useState({}); // candidate key → "once" | "rate"
     const [open, setOpen] = useState({ missing: true, mismatch: true, extra: true, matched: false, other: false });
     const [confirm, setConfirm] = useState(false);
+    const [page, setPage] = useState(0); // 0 = findings, 1 = week log
+    const [display, setDisplay] = useState([]); // every logged item, per period, for the week log
+    const [wkPeriod, setWkPeriod] = useState(null);
+    const [wkWeek, setWkWeek] = useState(1);
+    const pagerRef = useRef(null);
     const lib = REC();
     const methodName = (id) => METHOD_NAME[id] || id;
     function onFile(e) {
@@ -3215,6 +3232,15 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
             initial[r.id] = true;
         for (const m of res.amountMismatch)
             initial[m.row.id] = true;
+        // The week log shows EVERY logged item, not just the ones compared against this statement —
+        // spends on your other cards belong in the week as much as anything else, they simply have
+        // no verdict attached. Hence a second, unfiltered pass.
+        setDisplay(periods.map(p => ({ archiveIndex: p.archiveIndex, label: p.label, weeks: p.weeks, items: reconcileCandidates(p, null) })));
+        // Open the week log where the statement ends, which is the part being reconciled.
+        const landing = res.span ? lib.periodIndexFor(res.span.to, idx) : null;
+        setWkPeriod(landing ? landing.archiveIndex : null);
+        setWkWeek(landing ? landing.weekIndex : 1);
+        setPage(0);
         setDayIndex(idx);
         setResult(res);
         setPicked(initial);
@@ -3418,7 +3444,23 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     // ── Step 3: the discrepancies ───────────────────────────────────────────────
     const r = result;
     const clean = !r.missingFromApp.length && !r.amountMismatch.length && !r.notOnStatement.length;
-    return (React.createElement(Modal, { onClose: onClose, title: "What we found" },
+    const status = lib.statusIndex(r);
+    const goPage = (i) => {
+        setPage(i);
+        const el = pagerRef.current;
+        if (el)
+            el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    };
+    // Keep the tabs honest when the page is changed by swiping rather than tapping.
+    const onPagerScroll = (e) => {
+        const el = e.currentTarget;
+        if (!el.clientWidth)
+            return;
+        const i = Math.round(el.scrollLeft / el.clientWidth);
+        if (i !== page)
+            setPage(i);
+    };
+    const findings = (React.createElement(React.Fragment, null,
         React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 12 } }, [["Matched", r.matched.length, "#22c55e"], ["Don't match", r.amountMismatch.length, "#f59e0b"],
             ["Missing", r.missingFromApp.length, "#ef4444"], ["Extra", r.notOnStatement.length, "#a855f7"]].map(([l, n, c]) => (React.createElement("div", { key: l, style: { flex: 1, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 6px", textAlign: "center" } },
             React.createElement("div", { style: { fontSize: 18, fontWeight: 800, color: n ? c : "var(--text-muted)" } }, n),
@@ -3500,7 +3542,69 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                 React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
                     dayKeyLabel(m.row.date),
                     m.how === "date-drift" ? " · posted later" : m.how === "remembered" ? " · reconciled before" : "")),
-            React.createElement("div", { style: { fontSize: 13, color: "var(--text-tertiary)" } }, fmt(m.row.amount)))))),
+            React.createElement("div", { style: { fontSize: 13, color: "var(--text-tertiary)" } }, fmt(m.row.amount))))))));
+    const wkP = display.find(d => d.archiveIndex === wkPeriod) || display[0];
+    const weekLog = !wkP ? null : (() => {
+        const rows = wkP.items.filter(c => c.weekIndex === wkWeek);
+        const spend = rows.filter(c => c.direction !== "credit" && c.type !== "excluded").reduce((t, c) => t + c.amount, 0);
+        // Dated rows first, oldest to newest, with undated ones after — the week log's own ordering.
+        const days = [];
+        for (const c of rows.slice().sort((a, b) => (a.day || "9") < (b.day || "9") ? -1 : (a.day || "9") > (b.day || "9") ? 1 : 0)) {
+            const key = c.day || "undated";
+            if (!days.length || days[days.length - 1].key !== key)
+                days.push({ key, items: [] });
+            days[days.length - 1].items.push(c);
+        }
+        const wIdx = wkP.weeks.findIndex(w => w.index === wkWeek);
+        const week = wkP.weeks[wIdx];
+        const pIdx = display.findIndex(d => d.archiveIndex === wkP.archiveIndex);
+        const jumpPeriod = (delta) => {
+            const next = display[pIdx + delta];
+            if (!next)
+                return;
+            setWkPeriod(next.archiveIndex);
+            setWkWeek(next.weeks.length ? next.weeks[next.weeks.length - 1].index : 1);
+        };
+        return (React.createElement("div", null,
+            display.length > 1 && (React.createElement("div", { style: { ...S.periodNav, marginBottom: 8 } },
+                React.createElement("button", { style: { ...S.periodNavBtn, ...(display[pIdx + 1] ? {} : S.periodNavBtnOff) }, disabled: !display[pIdx + 1], "aria-label": "Earlier period in log", onClick: () => jumpPeriod(1) }, "\u25C0"),
+                React.createElement("div", { style: { textAlign: "center", lineHeight: 1.2 } },
+                    React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-heading)" } }, wkP.label),
+                    React.createElement("div", { style: { fontSize: 10, color: "var(--text-muted)" } }, wkP.archiveIndex == null ? "current period" : "finished period")),
+                React.createElement("button", { style: { ...S.periodNavBtn, ...(display[pIdx - 1] ? {} : S.periodNavBtnOff) }, disabled: !display[pIdx - 1], "aria-label": "Later period in log", onClick: () => jumpPeriod(-1) }, "\u25B6"))),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 } }, wkP.weeks.map(w => (React.createElement("button", { key: w.index, onClick: () => setWkWeek(w.index), style: { ...S.weekPill, ...(wkWeek === w.index ? S.weekPillActive : {}) } },
+                "W",
+                w.index)))),
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 } },
+                React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)" } }, week ? `${dateStr(week.start)} — ${dateStr(week.end)}` : `Week ${wkWeek}`),
+                React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-heading)" } }, fmt(spend))),
+            rows.length === 0 ? (React.createElement("div", { style: { ...S.empty, marginTop: 4 } }, "Nothing logged this week")) : days.map(day => (React.createElement("div", { key: day.key, style: { marginBottom: 10 } },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", margin: "6px 0 2px" } }, day.key === "undated" ? "Undated" : dayKeyLabel(day.key)),
+                day.items.map(c => {
+                    const v = status[c.key];
+                    const compared = allCards || c.direction === "credit" || c.method === methodId;
+                    const mark = !compared ? { dot: "var(--text-muted)", text: "other card" }
+                        : !v ? { dot: "var(--text-muted)", text: "" }
+                            : v.status === "matched" ? { dot: "#22c55e", text: "on the statement" }
+                                : v.status === "mismatch" ? { dot: "#f59e0b", text: `statement says ${fmt(v.row.amount)}` }
+                                    : v.status === "extra" ? { dot: "#a855f7", text: "not on the statement" }
+                                        : v.status === "undated" ? { dot: "var(--text-muted)", text: "undated" }
+                                            : { dot: "var(--text-muted)", text: "outside the statement" };
+                    return (React.createElement("div", { key: c.key, style: { display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderTop: "1px solid var(--border)" } },
+                        React.createElement("span", { title: mark.text, style: { width: 8, height: 8, borderRadius: 4, background: mark.dot, flexShrink: 0 } }),
+                        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                            React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, c.label || "(no description)"),
+                            React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, [c.method ? METHOD_NAME[c.method] || c.method : null,
+                                c.kind === "pin" ? "pinned" : c.type === "split" ? "split" : c.type === "business" ? "work" : c.type === "excluded" ? "not yours" : c.direction === "credit" ? "money in" : null,
+                                mark.text || null].filter(Boolean).join(" · "))),
+                        React.createElement("div", { style: { fontSize: 14, fontWeight: 700, flexShrink: 0, color: c.direction === "credit" ? "#22c55e" : "var(--text-heading)" } }, fmt(c.amount))));
+                }))))));
+    })();
+    return (React.createElement(Modal, { onClose: onClose, title: "Reconciliation" },
+        React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, ["What we found", "Your week log"].map((l, i) => (React.createElement("button", { key: l, onClick: () => goPage(i), style: reconTabBtn(page === i) }, l)))),
+        React.createElement("div", { ref: pagerRef, onScroll: onPagerScroll, style: S.reconPager },
+            React.createElement("div", { style: S.reconPage }, findings),
+            React.createElement("div", { style: S.reconPage }, weekLog)),
         React.createElement("div", { style: { borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 } }, totalPicked === 0 ? (React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: onClose }, "Done")) : !confirm ? (React.createElement(React.Fragment, null,
             React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 8, textAlign: "center" } }, [counts.add ? `Add ${counts.add}` : null, counts.fix ? `Correct ${counts.fix}` : null, counts.del ? `Remove ${counts.del}` : null].filter(Boolean).join(" · ")),
             React.createElement("button", { style: { ...S.btn, background: "#0369a1", width: "100%" }, onClick: () => setConfirm(true) }, "Apply these changes\u2026"))) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
@@ -3535,6 +3639,11 @@ const S = {
     tab: { flex: 1, background: "none", border: "none", borderBottom: "2px solid transparent", color: "var(--text-secondary)", padding: "10px 4px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
     tabActive: { color: "var(--text-heading)", borderBottom: "2px solid #0369a1" },
     weekNav: { display: "flex", gap: 6, marginBottom: 12, overflowX: "auto" },
+    // The swipeable pair of pages inside the reconciliation sheet. A fixed height (rather than
+    // letting the row grow to its tallest page) keeps the tabs and the apply bar in place, and
+    // stops the short page dragging a screenful of blank space along behind it.
+    reconPager: { display: "flex", overflowX: "auto", overflowY: "hidden", scrollSnapType: "x mandatory", overscrollBehaviorX: "contain", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", height: "56vh" },
+    reconPage: { flex: "0 0 100%", width: "100%", minWidth: 0, scrollSnapAlign: "start", overflowY: "auto", overscrollBehaviorY: "contain", WebkitOverflowScrolling: "touch", paddingRight: 2 },
     periodNav: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "6px 8px", marginBottom: 10 },
     periodNavBtn: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", width: 32, height: 32, fontSize: 13, cursor: "pointer", flexShrink: 0, padding: 0 },
     periodNavBtnOff: { opacity: 0.3, cursor: "default" },

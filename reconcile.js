@@ -559,6 +559,24 @@
     };
   }
 
+  // ─── Reconciliation status, by logged item ──────────────────────────────────
+  // The result buckets are organised by what needs doing. A view that lists what you LOGGED —
+  // the week log alongside the findings — needs the opposite: given one logged item, what did
+  // the statement say about it? This inverts the buckets once so such a view can annotate rows
+  // without re-running the matcher or scanning the buckets per row.
+  function statusIndex(result) {
+    const out = Object.create(null);
+    if (!result) return out;
+    const put = (key, v) => { if (key != null && !(key in out)) out[key] = v; };
+    for (const m of result.matched || []) put(m.candidate.key, { status: "matched", how: m.how, row: m.row });
+    for (const m of result.amountMismatch || []) put(m.candidate.key, { status: "mismatch", delta: m.delta, row: m.row });
+    for (const c of result.notOnStatement || []) put(c.key, { status: "extra" });
+    // Not problems — the statement simply has nothing to say about these.
+    for (const c of result.undated || []) put(c.key, { status: "undated" });
+    for (const c of result.outsideStatement || []) put(c.key, { status: "uncovered" });
+    return out;
+  }
+
   // ─── Split re-weighting ─────────────────────────────────────────────────────
   // A split is one card transaction stored as two entries (a personal half that counts against
   // the budget, and an excluded half that doesn't). Correcting its total has to decide where the
@@ -579,7 +597,7 @@
     parseCSV, parseAmount, dateParts, detectDateFormat, parseDate,
     normaliseDescription, similarity, hashStr, rowFingerprint,
     sniffColumns, buildStatement, ignoreReasonFor,
-    buildDayIndex, periodIndexFor, reconcile, resplit,
+    buildDayIndex, periodIndexFor, reconcile, statusIndex, resplit,
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = API;
