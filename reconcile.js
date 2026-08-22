@@ -630,27 +630,11 @@
     return out;
   }
 
-  // ─── Split re-weighting ─────────────────────────────────────────────────────
-  // A split is one card transaction stored as two entries (a personal half that counts against
-  // the budget, and an excluded half that doesn't). Correcting its total has to decide where the
-  // difference lands; proportional is the honest default, and the caller shows both resulting
-  // halves before the fix can be applied. Rounds to the penny with the remainder going to the
-  // personal half, so the two always sum back to exactly `total`.
-  function resplit(yourAmount, theirAmount, total) {
-    const oldTotal = Math.round((Number(yourAmount) + Number(theirAmount)) * 100);
-    const target = Math.round(Number(total) * 100);
-    if (target <= 0) return { your: 0, their: 0 };
-    if (oldTotal <= 0) return { your: Math.round(target) / 100, their: 0 };
-    const their = Math.round((Number(theirAmount) * 100 / oldTotal) * target);
-    const your = target - their;
-    return { your: your / 100, their: their / 100 };
-  }
-
   const API = {
     parseCSV, parseAmount, dateParts, detectDateFormat, parseDate,
     normaliseDescription, similarity, hashStr, rowFingerprint,
     sniffColumns, buildStatement, ignoreReasonFor,
-    buildDayIndex, periodIndexFor, reconcile, statusIndex, resplit,
+    buildDayIndex, periodIndexFor, reconcile, statusIndex,
     packStatement, unpackStatement, statementSpan,
   };
 
