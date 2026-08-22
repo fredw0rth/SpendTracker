@@ -412,3 +412,92 @@ test("the tolerance is adjustable", () => {
   assert.equal(R.reconcile({ ...opts, amountTolerance: 0.9 }).amountMismatch.length, 1);
   assert.equal(R.reconcile({ ...opts, amountTolerance: 0.5 }).amountMismatch.length, 0);
 });
+
+// ─── statusIndex: the findings, inverted per logged item ──────────────────────
+// The buckets are organised around what needs doing. The week log needs the opposite view —
+// given something you logged, what did the statement say about it?
+
+test("every logged item gets exactly one verdict", () => {
+  const res = R.reconcile({
+    statement: [row("2026-08-01", "TESCO", 5), row("2026-08-02", "ODEON", 18), row("2026-08-03", "GAILS", 6.4)],
+    candidates: [
+      cand("m1", "2026-08-01", 5, "Tesco"),          // matches
+      cand("x1", "2026-08-02", 12, "Odeon"),         // amount differs
+      cand("e1", "2026-08-02", 30, "Haircut, cash"), // nothing on the statement
+      cand("u1", null, 9, "Undated"),                // no date to judge
+    ],
+    dayIndex: augustIndex(),
+  });
+  const idx = R.statusIndex(res);
+  assert.equal(idx.m1.status, "matched");
+  assert.equal(idx.x1.status, "mismatch");
+  assert.equal(idx.e1.status, "extra");
+  assert.equal(idx.u1.status, "undated");
+  assert.equal(Object.keys(idx).length, 4, "no item counted twice, none left out");
+});
+
+test("a matched verdict carries the statement row it matched", () => {
+  const res = R.reconcile({
+    statement: [row("2026-08-04", "TESCO STORES 3792", 12.5)],
+    candidates: [cand("m1", "2026-08-01", 12.5, "Tesco")],
+    dayIndex: augustIndex(),
+  });
+  const v = R.statusIndex(res).m1;
+  assert.equal(v.status, "matched");
+  assert.equal(v.how, "date-drift");
+  assert.equal(v.row.description, "TESCO STORES 3792");
+});
+
+test("a mismatch verdict carries what the statement actually said", () => {
+  const res = R.reconcile({
+    statement: [row("2026-08-01", "ODEON CINEMA", 18)],
+    candidates: [cand("x1", "2026-08-01", 8, "Odeon")],
+    dayIndex: augustIndex(),
+  });
+  const v = R.statusIndex(res).x1;
+  assert.equal(v.status, "mismatch");
+  assert.equal(v.delta, 10);
+  assert.equal(v.row.amount, 18, "so the week log can show the charged figure alongside yours");
+});
+
+test("items the statement cannot speak to are marked, not called problems", () => {
+  const res = R.reconcile({
+    statement: [row("2026-08-10", "TESCO", 5)],
+    candidates: [cand("m1", "2026-08-10", 5, "Tesco"), cand("o1", "2026-08-01", 20, "Before this statement")],
+    dayIndex: augustIndex(),
+  });
+  const idx = R.statusIndex(res);
+  assert.equal(idx.o1.status, "uncovered");
+  assert.equal(res.notOnStatement.length, 0, "and it is not in the actionable bucket");
+});
+
+test("an item with no verdict is simply absent, so a caller can tell them apart", () => {
+  // A spend on another card is never compared; the week log shows it without a verdict.
+  const res = R.reconcile({
+    statement: [row("2026-08-01", "TESCO", 5)],
+    candidates: [cand("m1", "2026-08-01", 5, "Tesco")],
+    dayIndex: augustIndex(),
+  });
+  const idx = R.statusIndex(res);
+  assert.equal(idx["never-compared"], undefined);
+  assert.equal("m1" in idx, true);
+});
+
+test("statusIndex survives being handed nothing", () => {
+  assert.deepEqual(R.statusIndex(null), {});
+  assert.deepEqual(R.statusIndex({}), {});
+  assert.deepEqual(R.statusIndex(R.reconcile()), {});
+});
+
+test("a key cannot be claimed by a prototype property", () => {
+  // The index is keyed by candidate keys, which are built from user data.
+  const res = R.reconcile({
+    statement: [row("2026-08-01", "TESCO", 5)],
+    candidates: [cand("__proto__", "2026-08-01", 5, "Tesco"), cand("toString", "2026-08-01", 99, "Odd")],
+    dayIndex: augustIndex(),
+  });
+  const idx = R.statusIndex(res);
+  assert.equal(idx["__proto__"].status, "matched");
+  assert.equal(idx["toString"].status, "extra");
+  assert.equal(typeof {}.toString, "function", "and the real prototype is untouched");
+});

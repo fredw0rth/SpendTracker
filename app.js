@@ -127,6 +127,31 @@ function readableChipColor(hex) {
     const { h, s, l } = hexToHsl(hex);
     return hslToHex(h, s, Math.min(65, Math.max(30, l)));
 }
+// Make an accent colour readable AS TEXT against the current theme's surface. readableChipColor
+// above only rescues colours that are near-white or near-black; a mid-lightness accent like amber
+// (#f59e0b, L≈50%) passes through it untouched and then renders at 2.1:1 on the light theme's
+// cream — illegible. This walks the lightness down (light theme) or up (dark) until the colour
+// clears 4.5:1 against the surface it sits on.
+//
+// Only TEXT goes through this. Fills, borders and tints keep the raw accent, so amber still looks
+// amber; it's the same hue, darkened just enough to read. In dark mode the accents already clear
+// 4.5:1, so this returns them unchanged and nothing shifts.
+const SURFACE_LUM = { light: relativeLuminance("#fffcf3"), dark: relativeLuminance("#0f172a") };
+function readableAccentText(hex) {
+    const light = document.documentElement.dataset.theme === "light";
+    const bg = light ? SURFACE_LUM.light : SURFACE_LUM.dark;
+    const ratio = (a, b) => { const hi = Math.max(a, b), lo = Math.min(a, b); return (hi + 0.05) / (lo + 0.05); };
+    const { h, s } = hexToHsl(hex);
+    let l = hexToHsl(hex).l;
+    const step = light ? -3 : 3;
+    for (let i = 0; i < 40 && l >= 0 && l <= 100; i++) {
+        const candidate = hslToHex(h, s, l);
+        if (ratio(relativeLuminance(candidate), bg) >= 4.5)
+            return candidate;
+        l += step;
+    }
+    return hslToHex(h, s, Math.max(0, Math.min(100, l)));
+}
 // Derive a coherent chip palette (used by the selectors) from a single method colour. Reads the
 // live theme at call time (not cached) so every caller — inline in a component's render, never
 // baked into the static S style object below, which only evaluates once — stays correct across
@@ -598,6 +623,7 @@ function reconcileCandidates(period, methodId) {
             out.push({
                 key: kp + ":pin:" + e.pinId + ":" + e.occKey, kind: "pin", direction: "debit",
                 amount: e.amount, day: e.day || null, label: e.label || "", method: e.method,
+                weekIndex: e.weekIndex, type: e.type, category: e.category,
                 recon: recons[e.occKey] || null,
                 ref: { archiveIndex: period.archiveIndex, pinId: e.pinId, occKey: e.occKey, entry: e },
             });
@@ -615,6 +641,7 @@ function reconcileCandidates(period, methodId) {
                 amount: Math.round(group.reduce((t, x) => t + (x.amount || 0), 0) * 100) / 100,
                 // The fingerprint is kept on the personal half, which is the one every fix rewrites.
                 day: e.day || null, label: e.label || "", method: e.method,
+                weekIndex: e.weekIndex, type: "split", category: your ? your.category : undefined,
                 recon: (your && your.recon) || (their && their.recon) || null,
                 ref: { archiveIndex: period.archiveIndex, groupId: e.splitGroupId, your, their },
             });
@@ -623,6 +650,7 @@ function reconcileCandidates(period, methodId) {
         out.push({
             key: kp + ":entry:" + e.id, kind: "entry", direction: "debit",
             amount: e.amount, day: e.day || null, label: e.label || "", method: e.method,
+            weekIndex: e.weekIndex, type: e.type, category: e.category,
             recon: e.recon || null, ref: { archiveIndex: period.archiveIndex, entry: e },
         });
     }
@@ -630,6 +658,7 @@ function reconcileCandidates(period, methodId) {
         out.push({
             key: kp + ":credit:" + c.id, kind: "credit", direction: "credit",
             amount: c.amount, day: c.day || null, label: c.label || "", method: null,
+            weekIndex: c.weekIndex, type: "credit",
             recon: c.recon || null, ref: { archiveIndex: period.archiveIndex, credit: c },
         });
     }
@@ -2790,6 +2819,16 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 // ─── Largest Spends rows ──────────────────────────────────────────────────────
 // Shared by the Summary card (which previews the leading few) and the "View all" modal (which shows
 // the complete ranking), so the two renderings can't drift apart.
+// Tabs for the reconciliation sheet's two pages. A function, not an entry in S, because S is
+// evaluated once at load and this depends on which page is showing.
+const reconTabBtn = (on) => ({
+    flex: 1, background: on ? "var(--surface-2)" : "transparent",
+    border: `1px solid ${on ? "var(--border-strong)" : "transparent"}`, borderRadius: 6,
+    // --text-muted here made the inactive tab look disabled rather than like the other half of a
+    // pair, which was most of why the second page went unnoticed.
+    color: on ? "var(--text-heading)" : "var(--text-tertiary)",
+    padding: "7px 4px", fontSize: 12, fontWeight: on ? 700 : 600, cursor: "pointer",
+});
 const spendSegBtn = (on) => ({ background: on ? "var(--surface-2)" : "transparent", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 6, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "4px 8px", fontSize: 11, fontWeight: on ? 600 : 500, cursor: "pointer" });
 function SpendTxnRow({ item, sep, onEditEntry }) {
     // Real entries tap to edit; pins (no entry ref) stay read-only.
@@ -3165,6 +3204,11 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     const [pinMode, setPinMode] = useState({}); // candidate key → "once" | "rate"
     const [open, setOpen] = useState({ missing: true, mismatch: true, extra: true, matched: false, other: false });
     const [confirm, setConfirm] = useState(false);
+    const [page, setPage] = useState(0); // 0 = findings, 1 = week log
+    const [display, setDisplay] = useState([]); // every logged item, per period, for the week log
+    const [wkPeriod, setWkPeriod] = useState(null);
+    const [wkWeek, setWkWeek] = useState(1);
+    const pagerRef = useRef(null);
     const lib = REC();
     const methodName = (id) => METHOD_NAME[id] || id;
     function onFile(e) {
@@ -3215,6 +3259,15 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
             initial[r.id] = true;
         for (const m of res.amountMismatch)
             initial[m.row.id] = true;
+        // The week log shows EVERY logged item, not just the ones compared against this statement —
+        // spends on your other cards belong in the week as much as anything else, they simply have
+        // no verdict attached. Hence a second, unfiltered pass.
+        setDisplay(periods.map(p => ({ archiveIndex: p.archiveIndex, label: p.label, weeks: p.weeks, items: reconcileCandidates(p, null) })));
+        // Open the week log where the statement ends, which is the part being reconciled.
+        const landing = res.span ? lib.periodIndexFor(res.span.to, idx) : null;
+        setWkPeriod(landing ? landing.archiveIndex : null);
+        setWkWeek(landing ? landing.weekIndex : (periods[0] ? todayWeekIndex(periods[0].weeks) : 1));
+        setPage(0);
         setDayIndex(idx);
         setResult(res);
         setPicked(initial);
@@ -3320,13 +3373,13 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     const Section = ({ id, title, colour, count, hint, children }) => count === 0 ? null : (React.createElement("div", { style: { border: "1px solid var(--border)", borderRadius: 10, marginBottom: 10, overflow: "hidden" } },
         React.createElement("button", { onClick: () => setOpen(o => ({ ...o, [id]: !o[id] })), style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
                 background: "var(--surface)", border: "none", padding: "10px 12px", cursor: "pointer", textAlign: "left" } },
-            React.createElement("span", { style: { fontSize: 13, fontWeight: 600, color: colour || "var(--text-heading)" } }, title),
+            React.createElement("span", { style: { fontSize: 13, fontWeight: 600, color: colour ? (colour.charAt(0) === "#" ? acc(colour) : colour) : "var(--text-heading)" } }, title),
             React.createElement("span", { style: { fontSize: 12, color: "var(--text-secondary)" } },
                 count,
                 " ",
                 open[id] ? "▾" : "▸")),
         open[id] && (React.createElement("div", { style: { padding: "0 12px 10px" } },
-            hint && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, margin: "2px 0 8px" } }, hint),
+            hint && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, margin: "2px 0 8px" } }, hint),
             children))));
     const rowBox = { display: "flex", alignItems: "center", gap: 10, padding: "8px 0", borderTop: "1px solid var(--border)" };
     const periodTag = (archiveIndex) => {
@@ -3347,7 +3400,7 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                         border: `1px solid ${allCards ? "var(--border-strong)" : "var(--border)"}`,
                         color: allCards ? "var(--text-heading)" : "var(--text-muted)",
                         borderRadius: 8, padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer" } }, "All cards")),
-            React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", lineHeight: 1.5, marginBottom: 12 } }, allCards
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 12 } }, allCards
                 ? "Every spend you've logged will be compared against this statement — useful for a single-account check, but spends on your other cards will look missing."
                 : `Only spends logged to ${methodName(methodId)} will be compared, so your other cards aren't wrongly flagged.`),
             React.createElement("input", { type: "file", accept: ".csv,.txt,.tsv,text/csv,text/plain", onChange: onFile, style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 10, width: "100%" } }),
@@ -3418,25 +3471,45 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     // ── Step 3: the discrepancies ───────────────────────────────────────────────
     const r = result;
     const clean = !r.missingFromApp.length && !r.amountMismatch.length && !r.notOnStatement.length;
-    return (React.createElement(Modal, { onClose: onClose, title: "What we found" },
+    const status = lib.statusIndex(r);
+    // Accent colours are fixed across themes by design, but at full strength several of them are
+    // near-illegible as TEXT on the light theme's cream surface (amber managed 2.1:1). Every accent
+    // used as text in this sheet goes through here; fills and tints keep the raw colour.
+    const acc = readableAccentText;
+    const goPage = (i) => {
+        setPage(i);
+        const el = pagerRef.current;
+        if (el)
+            el.scrollTo({ left: i * el.clientWidth, behavior: "smooth" });
+    };
+    // Keep the tabs honest when the page is changed by swiping rather than tapping.
+    const onPagerScroll = (e) => {
+        const el = e.currentTarget;
+        if (!el.clientWidth)
+            return;
+        const i = Math.round(el.scrollLeft / el.clientWidth);
+        if (i !== page)
+            setPage(i);
+    };
+    const findings = (React.createElement(React.Fragment, null,
         React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 12 } }, [["Matched", r.matched.length, "#22c55e"], ["Don't match", r.amountMismatch.length, "#f59e0b"],
             ["Missing", r.missingFromApp.length, "#ef4444"], ["Extra", r.notOnStatement.length, "#a855f7"]].map(([l, n, c]) => (React.createElement("div", { key: l, style: { flex: 1, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 6px", textAlign: "center" } },
-            React.createElement("div", { style: { fontSize: 18, fontWeight: 800, color: n ? c : "var(--text-muted)" } }, n),
+            React.createElement("div", { style: { fontSize: 18, fontWeight: 800, color: n ? acc(c) : "var(--text-muted)" } }, n),
             React.createElement("div", { style: { fontSize: 10, color: "var(--text-secondary)" } }, l))))),
-        clean && (React.createElement("div", { style: { background: chipColors("#22c55e").bg, border: "1px solid #22c55e", borderRadius: 10, padding: "12px 14px",
-                fontSize: 13, color: "#22c55e", lineHeight: 1.6, marginBottom: 12 } }, "Everything on this statement lines up with what you've logged. Nothing to fix.")),
-        React.createElement(Section, { id: "missing", colour: "#ef4444", title: "On your statement, not logged", count: r.missingFromApp.length, hint: `These were charged but never logged. Adding them files each one under its own date${allCards ? "" : `, on ${methodName(methodId)}`} — you can categorise them afterwards from the week log.` }, r.missingFromApp.map(row => {
+        clean && (React.createElement("div", { style: { background: chipColors("#22c55e").bg, border: `1px solid ${acc("#22c55e")}`, borderRadius: 10, padding: "12px 14px",
+                fontSize: 13, color: acc("#22c55e"), lineHeight: 1.6, marginBottom: 12 } }, "Everything on this statement lines up with what you have logged. Nothing to fix.")),
+        React.createElement(Section, { id: "missing", colour: "#ef4444", title: "On your statement, not logged", count: r.missingFromApp.length, hint: `These were charged but never logged. Adding them files each one under its own date${allCards ? "" : `, on ${methodName(methodId)}`} — you can categorise them afterwards from the Week tab.` }, r.missingFromApp.map(row => {
             const at = lib.periodIndexFor(row.date, dayIndex);
             const tag = at ? periodTag(at.archiveIndex) : null;
             return (React.createElement("div", { key: row.id, style: rowBox },
                 React.createElement(Tick, { on: !!picked[row.id], onToggle: () => toggle(row.id) }),
                 React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                     React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, row.description || "(no description)"),
-                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
                         dayKeyLabel(row.date),
                         tag ? ` · ${tag}` : "",
                         row.direction === "credit" ? " · money in" : "")),
-                React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: row.direction === "credit" ? "#22c55e" : "var(--text-heading)" } }, fmt(row.amount))));
+                React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: row.direction === "credit" ? acc("#22c55e") : "var(--text-heading)" } }, fmt(row.amount))));
         })),
         React.createElement(Section, { id: "mismatch", colour: "#f59e0b", title: "Amounts don't match", count: r.amountMismatch.length, hint: "These look like the same transaction on the same date, but the amount you logged differs from what was charged. Matching goes on the date and the amount, not the name \u2014 what you type is a note to yourself, while your bank writes something else entirely \u2014 so check the pairing below before ticking it." }, r.amountMismatch.map(m => {
             const c = m.candidate, isPin = c.kind === "pin", isSplit = c.kind === "split";
@@ -3450,13 +3523,13 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                         "you logged \u201C",
                         c.label,
                         "\u201D")),
-                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
                         dayKeyLabel(m.row.date),
                         tag ? ` · ${tag}` : "",
                         isPin ? " · pinned cost" : isSplit ? " · split" : "")),
                 React.createElement("div", { style: { textAlign: "right" } },
-                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", textDecoration: "line-through" } }, fmt(c.amount)),
-                    React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "#f59e0b" } }, fmt(m.row.amount))),
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-tertiary)", textDecoration: "line-through" } }, fmt(c.amount)),
+                    React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: acc("#f59e0b") } }, fmt(m.row.amount))),
                 isSplit && (React.createElement("div", { style: { width: "100%", fontSize: 11, color: "var(--text-tertiary)", background: "var(--bg)",
                         border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", marginTop: 2, lineHeight: 1.6 } },
                     "Split in proportion: ",
@@ -3464,12 +3537,12 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                     " yours,",
                     " ",
                     React.createElement("strong", { style: { color: "var(--text-heading)" } }, fmt(parts.their)),
-                    " theirs. If the whole difference is one person's, fix this one from the week log instead.")),
+                    " theirs. If the whole difference is one person's, fix this one from the Week tab instead.")),
                 isPin && (React.createElement("div", { style: { width: "100%", display: "flex", gap: 6, marginTop: 4 } }, [["once", "Just this one"], ["rate", "This is the new price"]].map(([v, l]) => (React.createElement("button", { key: v, onClick: () => setPinMode(pm => ({ ...pm, [c.key]: v })), style: { flex: 1, background: (pinMode[c.key] || "once") === v ? "var(--surface-2)" : "var(--surface)",
                         border: `1px solid ${(pinMode[c.key] || "once") === v ? "var(--border-strong)" : "var(--border)"}`,
                         borderRadius: 8, color: (pinMode[c.key] || "once") === v ? "var(--text-heading)" : "var(--text-muted)",
                         padding: "6px 4px", fontSize: 11, fontWeight: 600, cursor: "pointer" } }, l))))),
-                isPin && (React.createElement("div", { style: { width: "100%", fontSize: 11, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.5 } }, (pinMode[c.key] || "once") === "rate"
+                isPin && (React.createElement("div", { style: { width: "100%", fontSize: 11, color: "var(--text-secondary)", marginTop: 4, lineHeight: 1.5 } }, (pinMode[c.key] || "once") === "rate"
                     ? "Changes this pinned cost everywhere from now on, leaving finished periods as they were."
                     : "Changes only this month's charge. The pinned cost keeps its usual amount."))));
         })),
@@ -3479,17 +3552,17 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                 React.createElement(Tick, { on: !!picked[c.key], onToggle: () => toggle(c.key) }),
                 React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                     React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, c.label || "(no description)"),
-                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
                         c.day ? dayKeyLabel(c.day) : "undated",
                         tag ? ` · ${tag}` : "",
                         c.kind === "pin" ? " · pinned cost" : c.kind === "split" ? " · split" : c.kind === "credit" ? " · money in" : ""),
-                    c.kind === "pin" && picked[c.key] && (React.createElement("div", { style: { fontSize: 11, color: "#a855f7", marginTop: 2 } }, "This month's charge will be skipped; the pinned cost itself stays."))),
+                    c.kind === "pin" && picked[c.key] && (React.createElement("div", { style: { fontSize: 11, color: acc("#a855f7"), marginTop: 2 } }, "This month's charge will be skipped; the pinned cost itself stays."))),
                 React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: "var(--text-heading)" } }, fmt(c.amount))));
         })),
         React.createElement(Section, { id: "other", colour: "var(--text-tertiary)", title: "Skipped", count: r.skipped.length + r.outOfRange.length, hint: "Rows we've left alone. Card payments and transfers aren't spending, and dates outside every period you've tracked have nowhere to go." }, [...r.skipped, ...r.outOfRange].map(row => (React.createElement("div", { key: row.id, style: { ...rowBox, opacity: 0.75 } },
             React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, row.description),
-                React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
                     dayKeyLabel(row.date),
                     " \u00B7 ",
                     row.ignoreReason || "outside your tracked periods")),
@@ -3497,11 +3570,102 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
         React.createElement(Section, { id: "matched", colour: "#22c55e", title: "Matched", count: r.matched.length, hint: "These line up with what you logged. Nothing to do." }, r.matched.map(m => (React.createElement("div", { key: m.row.id, style: { ...rowBox, opacity: 0.8 } },
             React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, m.row.description),
-                React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
                     dayKeyLabel(m.row.date),
                     m.how === "date-drift" ? " · posted later" : m.how === "remembered" ? " · reconciled before" : "")),
-            React.createElement("div", { style: { fontSize: 13, color: "var(--text-tertiary)" } }, fmt(m.row.amount)))))),
-        React.createElement("div", { style: { borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4 } }, totalPicked === 0 ? (React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: onClose }, "Done")) : !confirm ? (React.createElement(React.Fragment, null,
+            React.createElement("div", { style: { fontSize: 13, color: "var(--text-tertiary)" } }, fmt(m.row.amount))))))));
+    const wkP = display.find(d => d.archiveIndex === wkPeriod) || display[0];
+    const weekLog = !wkP ? null : (() => {
+        const rows = wkP.items.filter(c => c.weekIndex === wkWeek);
+        // Everything listed below, added up — including work spends and the not-yours half of a
+        // split, because all of it hit a card. Deliberately NOT the Week tab's figure, which is
+        // personal spend against budget; hence the label, so two different numbers for one week
+        // can't be mistaken for each other.
+        const dayTotal = (items) => items.filter(c => c.direction !== "credit").reduce((t, c) => t + c.amount, 0);
+        const total = dayTotal(rows);
+        // Newest day first, matching the Week tab — the same data one tab away must not read in the
+        // opposite direction. Undated rows sort last.
+        const days = [];
+        for (const c of rows.slice().sort((a, b) => (b.day || "0") < (a.day || "0") ? -1 : (b.day || "0") > (a.day || "0") ? 1 : 0)) {
+            const key = c.day || "undated";
+            if (!days.length || days[days.length - 1].key !== key)
+                days.push({ key, items: [] });
+            days[days.length - 1].items.push(c);
+        }
+        // Only the live period has a "this week"; an archived one is entirely in the past.
+        const currentWeek = wkP.archiveIndex == null ? weekIndexForDay(wkP.weeks, dayKey(londonNow())) : null;
+        const wIdx = wkP.weeks.findIndex(w => w.index === wkWeek);
+        const week = wkP.weeks[wIdx];
+        const pIdx = display.findIndex(d => d.archiveIndex === wkP.archiveIndex);
+        const jumpPeriod = (delta) => {
+            const next = display[pIdx + delta];
+            if (!next)
+                return;
+            setWkPeriod(next.archiveIndex);
+            setWkWeek(next.weeks.length ? next.weeks[next.weeks.length - 1].index : 1);
+        };
+        return (React.createElement("div", null,
+            display.length > 1 && (React.createElement("div", { style: { ...S.periodNav, marginBottom: 8 } },
+                React.createElement("button", { style: { ...S.periodNavBtn, ...(display[pIdx + 1] ? {} : S.periodNavBtnOff) }, disabled: !display[pIdx + 1], "aria-label": "Earlier period in log", onClick: () => jumpPeriod(1) }, "\u25C0"),
+                React.createElement("div", { style: { textAlign: "center", lineHeight: 1.2 } },
+                    React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-heading)" } }, wkP.label),
+                    React.createElement("div", { style: { fontSize: 10, color: "var(--text-muted)" } }, wkP.archiveIndex == null ? "current period" : "finished period")),
+                React.createElement("button", { style: { ...S.periodNavBtn, ...(display[pIdx - 1] ? {} : S.periodNavBtnOff) }, disabled: !display[pIdx - 1], "aria-label": "Later period in log", onClick: () => jumpPeriod(-1) }, "\u25B6"))),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 10 } }, wkP.weeks.map(w => (React.createElement("button", { key: w.index, onClick: () => setWkWeek(w.index), style: { ...S.weekPill, ...(w.index === currentWeek ? S.weekPillCurrent : {}), ...(wkWeek === w.index ? S.weekPillActive : {}) } },
+                "W",
+                w.index)))),
+            React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, marginBottom: 4 } },
+                React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)" } }, week ? `${dateStr(week.start)} — ${dateStr(week.end)}` : `Week ${wkWeek}`),
+                React.createElement("div", { style: { textAlign: "right", flexShrink: 0 } },
+                    React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "var(--text-heading)" } }, fmt(total)),
+                    React.createElement("div", { style: { fontSize: 10, color: "var(--text-secondary)" } }, "logged this week"))),
+            rows.length === 0 ? (React.createElement("div", { style: { ...S.empty, marginTop: 4, textAlign: "center" } }, "Nothing logged this week")) : days.map(day => (React.createElement("div", { key: day.key, style: { marginBottom: 6 } },
+                React.createElement("div", { style: S.dayHead },
+                    React.createElement("span", { style: S.dayHeadLabel }, day.key === "undated" ? "Undated" : dayKeyLabel(day.key)),
+                    React.createElement("span", { style: S.dayHeadTotal }, fmt(dayTotal(day.items)))),
+                day.items.map(c => {
+                    const v = status[c.key];
+                    const compared = allCards || c.direction === "credit" || c.method === methodId;
+                    // A glyph, not a filled dot: the Week tab already uses a coloured dot in this exact
+                    // position to mean "which card", and the two palettes overlap almost exactly.
+                    // Shape carries the verdict, colour only reinforces it.
+                    const mark = !compared ? { g: "·", c: "var(--text-muted)", text: "not compared — other card" }
+                        : !v ? { g: "·", c: "var(--text-muted)", text: "" }
+                            : v.status === "matched" ? { g: "✓", c: acc("#22c55e"), text: "on the statement" }
+                                : v.status === "mismatch" ? { g: "≠", c: acc("#f59e0b"), text: `statement says ${fmt(v.row.amount)}` }
+                                    : v.status === "extra" ? { g: "!", c: acc("#a855f7"), text: "not on the statement" }
+                                        : v.status === "undated" ? { g: "·", c: "var(--text-muted)", text: "undated, so not compared" }
+                                            : { g: "·", c: "var(--text-muted)", text: "outside the statement's dates" };
+                    // Built as a list so the separator can't be decided from the wrong subset — a credit
+                    // with no card and no share once rendered as "money inon the statement".
+                    const meta = [
+                        c.method ? METHOD_NAME[c.method] || c.method : null,
+                        c.kind === "pin" ? "pinned" : c.type === "split" ? "split" : c.type === "business" ? "work"
+                            : c.type === "excluded" ? "not yours" : c.direction === "credit" ? "money in" : null,
+                        c.kind === "split" && c.ref.your ? `your share ${fmt(c.ref.your.amount)}` : null,
+                    ].filter(Boolean);
+                    return (React.createElement("div", { key: c.key, style: { display: "flex", alignItems: "flex-start", gap: 9, padding: "7px 0", borderTop: "1px solid var(--border)" } },
+                        React.createElement("span", { role: "img", "aria-label": mark.text || "no verdict", style: { width: 14, flexShrink: 0, textAlign: "center", fontSize: 12, fontWeight: 700, lineHeight: "18px", color: mark.c } }, mark.g),
+                        React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                            React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, c.label || "(no description)"),
+                            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.45 } },
+                                meta.join(" · "),
+                                mark.text && React.createElement("span", { style: { color: mark.c } },
+                                    meta.length ? " · " : "",
+                                    mark.text))),
+                        React.createElement("div", { style: { fontSize: 14, fontWeight: 700, flexShrink: 0, color: c.direction === "credit" ? acc("#22c55e") : "var(--text-heading)" } },
+                            c.direction === "credit" ? "+" : "",
+                            fmt(c.amount))));
+                }))))));
+    })();
+    return (React.createElement(Modal, { onClose: onClose, title: "Reconciliation" },
+        React.createElement("div", { role: "tablist", "aria-label": "Reconciliation pages", style: { display: "flex", gap: 4, marginBottom: 10, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 3,
+                position: "sticky", top: 0, zIndex: 2 } }, ["What we found", "Your week log"].map((l, i) => (React.createElement("button", { key: l, role: "tab", "aria-selected": page === i, id: `recon-tab-${i}`, "aria-controls": `recon-page-${i}`, onClick: () => goPage(i), style: reconTabBtn(page === i) }, l)))),
+        React.createElement("div", { ref: pagerRef, onScroll: onPagerScroll, style: S.reconPager },
+            React.createElement("div", { role: "tabpanel", id: "recon-page-0", "aria-labelledby": "recon-tab-0", style: S.reconPage }, findings),
+            React.createElement("div", { role: "tabpanel", id: "recon-page-1", "aria-labelledby": "recon-tab-1", style: S.reconPage }, weekLog)),
+        React.createElement("div", { style: { borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 4,
+                position: "sticky", bottom: 0, background: "var(--surface)", zIndex: 2 } }, totalPicked === 0 ? (React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: onClose }, "Done")) : !confirm ? (React.createElement(React.Fragment, null,
             React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 8, textAlign: "center" } }, [counts.add ? `Add ${counts.add}` : null, counts.fix ? `Correct ${counts.fix}` : null, counts.del ? `Remove ${counts.del}` : null].filter(Boolean).join(" · ")),
             React.createElement("button", { style: { ...S.btn, background: "#0369a1", width: "100%" }, onClick: () => setConfirm(true) }, "Apply these changes\u2026"))) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
             React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirm(false) }, "Cancel"),
@@ -3535,6 +3699,17 @@ const S = {
     tab: { flex: 1, background: "none", border: "none", borderBottom: "2px solid transparent", color: "var(--text-secondary)", padding: "10px 4px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
     tabActive: { color: "var(--text-heading)", borderBottom: "2px solid #0369a1" },
     weekNav: { display: "flex", gap: 6, marginBottom: 12, overflowX: "auto" },
+    // The swipeable pair of pages inside the reconciliation sheet. A fixed height (rather than
+    // letting the row grow to its tallest page) keeps the tabs and the apply bar in place, and
+    // stops the short page dragging a screenful of blank space along behind it.
+    // maxHeight, deliberately NOT height: a fixed height left a clean reconciliation showing half a
+    // screen of blank surface, and on a short viewport (landscape) it pushed the apply bar off the
+    // bottom. Capped instead, the pager is as tall as its content needs up to the cap.
+    reconPager: { display: "flex", overflowX: "auto", overflowY: "hidden", scrollSnapType: "x mandatory", overscrollBehaviorX: "contain", WebkitOverflowScrolling: "touch", scrollbarWidth: "none", maxHeight: "56vh" },
+    // No overscroll containment on the Y axis: with it, a flick inside a page refused to chain to
+    // the sheet, so on a short viewport there was no way to scroll down to the apply bar at all.
+    // The sheet body keeps its own containment, which is what stops the page behind scrolling.
+    reconPage: { flex: "0 0 100%", width: "100%", minWidth: 0, scrollSnapAlign: "start", overflowY: "auto", WebkitOverflowScrolling: "touch", paddingRight: 2 },
     periodNav: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "6px 8px", marginBottom: 10 },
     periodNavBtn: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", width: 32, height: 32, fontSize: 13, cursor: "pointer", flexShrink: 0, padding: 0 },
     periodNavBtnOff: { opacity: 0.3, cursor: "default" },
