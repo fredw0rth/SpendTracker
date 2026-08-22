@@ -73,9 +73,11 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
   of flagged — build fixtures around today's date or everything reads as "missing". Matching keys
   on date + amount only, so a fixture whose names differ from the logged labels still matches.
 - **Reconcile week log**: page 2 of the review step, reached by swiping or the tabs. Rows are
-  read-only and annotated with a verdict glyph (✓ / ≠ / !). Its header total is every row listed
-  added up ("logged this week") — deliberately NOT the Week tab's personal-spend-against-budget
-  figure, which is a different number for the same week.
+  read-only and annotated with a verdict glyph (✓ / ≠ / !). Scoped to the card being reconciled
+  (credits excepted — `reconcileCandidates` never filters those by card), so every row shown
+  carries a verdict. Its header total is every row listed added up ("logged to <card>") —
+  deliberately NOT the Week tab's personal-spend-against-budget figure across all cards, which is
+  a different number for the same week.
 - **Saved statements**: one per payment method in `state.statements`, stored packed
   (`packStatement`/`unpackStatement` in reconcile.js — fingerprints survive the round trip, which
   is what keeps `recon` stamps working). Summary shows a chip per card; tapping opens the modal via
