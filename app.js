@@ -1373,7 +1373,10 @@ function App() {
                 !confirmWipe ? (React.createElement("button", { style: { ...S.btn, background: "var(--danger-soft-bg)", border: "1px solid var(--danger-soft-border)", color: "var(--danger-soft-text)", width: "100%" }, onClick: () => setConfirmWipe(true) }, "Reset app & erase all data")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
                     React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirmWipe(false) }, "Cancel"),
                     React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (window.SpendVault && window.SpendVault.wipe)
-                            window.SpendVault.wipe(); } }, "Erase everything")))))),
+                            window.SpendVault.wipe(); } }, "Erase everything")))),
+            React.createElement("div", { style: { textAlign: "center", fontSize: 11, color: "var(--text-muted)", padding: "4px 0 8px" } },
+                "SpendTracker build ",
+                (window.SpendVault && window.SpendVault.build) || "unknown"))),
         !viewingPast && (React.createElement("button", { "aria-label": "Quick add spend", onClick: () => setShowEntryFor(todayWeekIndex(weeks)), style: S.quickAdd }, "+")),
         showReconcile && React.createElement(ReconcileModal, { state: state, periods: reconcilePeriods(state), openWith: reconcileWith, onEditItem: (c) => {
                 const ref = c.ref;

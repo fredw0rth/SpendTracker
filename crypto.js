@@ -71,9 +71,11 @@
   // quick glance at a notification. Tune here.
   const AUTO_LOCK_MS = 2 * 60 * 1000; // 2 minutes
 
-  // Build identifier, surfaced in crash diagnostics so a report can be tied to a specific
-  // release. Bump in lockstep with CACHE_NAME in sw.js.
-  const BUILD = "v49";
+  // Build identifier, surfaced in crash diagnostics AND at the bottom of Settings, so "which
+  // version am I actually running?" is answerable without a crash — the deployed copy of a PWA can
+  // lag the repository, and there was previously no way to tell from inside the app.
+  // Bump in lockstep with CACHE_NAME in sw.js. (It had drifted 17 releases behind before this.)
+  const BUILD = "v66";
 
   const enc = new TextEncoder();
   const dec = new TextDecoder();
@@ -422,6 +424,7 @@
   };
 
   window.SpendVault = {
+    build: BUILD,
     getState: () => Session.getState(),
     save: (s) => Session.save(s),
     requestLock: () => Session.lock(),

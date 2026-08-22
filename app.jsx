@@ -1422,6 +1422,12 @@ function App() {
               </div>
             )}
           </div>
+
+          {/* Which build this device is actually running. A PWA serves whatever its cache holds,
+              so this is the only way to tell a stale copy from a current one from inside the app. */}
+          <div style={{ textAlign:"center", fontSize:11, color:"var(--text-muted)", padding:"4px 0 8px" }}>
+            SpendTracker build {(window.SpendVault && window.SpendVault.build) || "unknown"}
+          </div>
         </div>
       )}
 
