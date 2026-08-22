@@ -70,6 +70,11 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
   read-only and annotated with a verdict glyph (✓ / ≠ / !). Its header total is every row listed
   added up ("logged this week") — deliberately NOT the Week tab's personal-spend-against-budget
   figure, which is a different number for the same week.
+- **Saved statements**: one per payment method in `state.statements`, stored packed
+  (`packStatement`/`unpackStatement` in reconcile.js — fingerprints survive the round trip, which
+  is what keeps `recon` stamps working). Summary shows a chip per card; tapping opens the modal via
+  `openWith` straight to that statement's results, skipping upload and column-mapping. "Update
+  statement" on the results returns to step 1 in update mode.
 - **Period history**: Week tab → the `◀ Month YYYY ▶` stepper (`[aria-label="Earlier period"]` /
   `"Later period"`), which walks `state.monthHistory` oldest→newest then back to live.
 

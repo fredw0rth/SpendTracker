@@ -559,6 +559,59 @@
     };
   }
 
+  // ─── Saving a statement for reuse ───────────────────────────────────────────
+  // A saved statement lives in the encrypted vault, which is re-encrypted and rewritten in full on
+  // every state change — so it is stored as the four fields that cannot be derived, and everything
+  // else is recomputed on the way out. Roughly a third the size of keeping the parsed rows, and it
+  // sidesteps having to migrate the row shape if the parser ever gains a field.
+  //
+  // Crucially the fingerprints come back identical: they are a pure function of date, normalised
+  // description, amount and duplicate index, all of which survive the round trip. That is what
+  // lets a reopened statement still recognise the rows already reconciled against it.
+  function packStatement(rows) {
+    const out = [];
+    for (const r of rows || []) {
+      if (!r || !r.date) continue;
+      out.push({ d: r.date, t: r.description || "", a: r.amount, c: r.direction === "credit" ? 1 : 0 });
+    }
+    return out;
+  }
+
+  function unpackStatement(packed) {
+    const out = [];
+    const seen = new Map();
+    (packed || []).forEach((p, i) => {
+      if (!p || !p.d) return;
+      const amount = Math.round(Number(p.a) * 100) / 100;
+      if (!(amount > 0)) return;
+      const description = String(p.t == null ? "" : p.t);
+      const normDesc = normaliseDescription(description);
+      const key = p.d + "|" + normDesc + "|" + amount.toFixed(2);
+      const dupIndex = seen.get(key) || 0;
+      seen.set(key, dupIndex + 1);
+      const reason = ignoreReasonFor(normDesc);
+      const row = {
+        id: "s" + i, date: p.d, description, normDesc, amount,
+        direction: p.c ? "credit" : "debit",
+        ignored: !!reason, ignoreReason: reason, dupIndex, raw: null,
+      };
+      row.fingerprint = rowFingerprint(row);
+      out.push(row);
+    });
+    return out;
+  }
+
+  // What a saved statement covers, for the "Amex · 26 Jul – 25 Aug" label on its button.
+  function statementSpan(rows) {
+    let from = null, to = null;
+    for (const r of rows || []) {
+      if (!r || !r.date) continue;
+      if (from === null || r.date < from) from = r.date;
+      if (to === null || r.date > to) to = r.date;
+    }
+    return from === null ? null : { from, to };
+  }
+
   // ─── Reconciliation status, by logged item ──────────────────────────────────
   // The result buckets are organised by what needs doing. A view that lists what you LOGGED —
   // the week log alongside the findings — needs the opposite: given one logged item, what did
@@ -598,6 +651,7 @@
     normaliseDescription, similarity, hashStr, rowFingerprint,
     sniffColumns, buildStatement, ignoreReasonFor,
     buildDayIndex, periodIndexFor, reconcile, statusIndex, resplit,
+    packStatement, unpackStatement, statementSpan,
   };
 
   if (typeof module !== "undefined" && module.exports) module.exports = API;

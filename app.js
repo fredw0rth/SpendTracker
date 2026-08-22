@@ -531,6 +531,9 @@ function defaultState() {
         pins: [],
         credits: [],
         monthHistory: [],
+        // One saved bank statement per payment method, so a card is uploaded once and re-reconciled
+        // from a button rather than re-uploaded every time. See reconcile.js's packStatement.
+        statements: [],
     };
 }
 // ─── State normalisation ──────────────────────────────────────────────────────
@@ -565,6 +568,7 @@ function normalizeState(s) {
         pins: src.pins || [],
         credits: src.credits || [],
         monthHistory: src.monthHistory || [],
+        statements: src.statements || [],
     };
 }
 // ─── Reducer ──────────────────────────────────────────────────────────────────
@@ -574,6 +578,21 @@ function normalizeState(s) {
 function reducer(s, a) {
     const next = rawReducer(s, a);
     return next === s ? s : normalizeState(next);
+}
+// ─── Saved statements ─────────────────────────────────────────────────────────
+// Keyed by payment method: a card has one current statement, and re-uploading updates it rather
+// than accumulating copies. Stored packed (see reconcile.js) because the whole vault is
+// re-encrypted on every state change.
+const statementFor = (state, methodId) => (state.statements || []).find(st => st.method === methodId) || null;
+// "26 Jul – 25 Aug" — what the statement covers, which is more use on a button than when it was
+// uploaded. Falls back to the upload date for a statement with no readable rows.
+function statementLabel(st) {
+    if (!st)
+        return "";
+    const short = (key) => { const d = dayKeyToDate(key); return `${d.getDate()} ${MONTH_NAMES[d.getMonth()]}`; };
+    if (st.from && st.to)
+        return st.from === st.to ? short(st.to) : `${short(st.from)} – ${short(st.to)}`;
+    return st.savedAt ? relativeTime(st.savedAt) : "";
 }
 // ─── Reconciliation: adapting app data to reconcile.js ────────────────────────
 // reconcile.js is deliberately ignorant of the app's object shapes. These two helpers are the
@@ -885,6 +904,7 @@ function App() {
     const [confirmWipe, setConfirmWipe] = useState(false); // two-step guard on the "erase all data" button
     const [showCustomise, setShowCustomise] = useState(false); // appearance / payment types / categories modal
     const [showReconcile, setShowReconcile] = useState(false); // bank-statement reconciliation modal
+    const [reconcileWith, setReconcileWith] = useState(null); // a saved statement's method id, to open straight into it
     // The most recently deleted entry/credit (or split pair), kept verbatim so Undo can restore it
     // exactly. Global (not per-week/tab) and not persisted — survives navigation, clears on reload.
     const [lastDeleted, setLastDeleted] = useState(null); // {kind:"entry",entry} | {kind:"credit",credit} | {kind:"split",your,their} | {kind:"pin",pin} | {kind:"pinSkip",pinId,occKey}
@@ -1272,7 +1292,7 @@ function App() {
                                 fmt(r.budget))),
                         React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#22c55e" : "#f87171" } }, signed(r.saved))))))));
         })(),
-        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onReconcile: () => setShowReconcile(true), onEditEntry: openEditEntry, onEditCredit: openEditCredit, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
+        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onReconcile: (methodId) => { setReconcileWith(methodId || null); setShowReconcile(true); }, statements: state.statements || [], onEditEntry: openEditEntry, onEditCredit: openEditCredit, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
@@ -1344,8 +1364,12 @@ function App() {
             catch (e) { /* ignore */ } } }),
         showImportAcct && React.createElement(ImportBackupModal, { onClose: () => setShowImportAcct(false) }),
         showCustomise && React.createElement(CustomiseModal, { state: state, dispatch: dispatch, onClose: () => setShowCustomise(false) }),
-        showReconcile && React.createElement(ReconcileModal, { state: state, periods: reconcilePeriods(state), onApply: ops => { if (ops && ops.length)
-                dispatch({ type: "RECONCILE_APPLY", ops }); }, onClose: () => setShowReconcile(false) })));
+        showReconcile && React.createElement(ReconcileModal, { state: state, periods: reconcilePeriods(state), openWith: reconcileWith, onApply: ops => { if (ops && ops.length)
+                dispatch({ type: "RECONCILE_APPLY", ops }); }, onSaveStatement: st => dispatch({ type: "SETTINGS", patch: { statements: [
+                        // One statement per card: uploading again updates that card's rather than stacking copies.
+                        ...(state.statements || []).filter(x => x.method !== st.method),
+                        { method: st.method, rows: st.rows, from: st.span ? st.span.from : null, to: st.span ? st.span.to : null, savedAt: new Date().toISOString() },
+                    ] } }), onForgetStatement: methodId => dispatch({ type: "SETTINGS", patch: { statements: (state.statements || []).filter(x => x.method !== methodId) } }), onClose: () => { setShowReconcile(false); setReconcileWith(null); } })));
 }
 // ─── Week Panel ───────────────────────────────────────────────────────────────
 function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, categories, onAddCategory, onAddEntry, onDelEntry, onDelCredit, onEditEntry, onEditCredit, onUpdEntry, onUpdCredit, onCapture, lastDeleted, onUndo, onSkipPin, onMovePin, onReorderPin }) {
@@ -2562,7 +2586,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
             } }, "Save")));
 }
 // ─── Summary View ─────────────────────────────────────────────────────────────
-function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onReconcile, onEditEntry, onEditCredit, onGoToWeek }) {
+function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onReconcile, statements, onEditEntry, onEditCredit, onGoToWeek }) {
     const [methodDetail, setMethodDetail] = useState(null); // method name or null
     const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
     const [spendView, setSpendView] = useState("txn"); // "txn" = largest individual, "label" = grouped by name
@@ -2695,8 +2719,16 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     const sourcePct = totalSpent > 0 ? Math.round((totalPinned / totalSpent) * 100) : 0;
     return (React.createElement("div", { style: { padding: "12px 16px" } },
         React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", gap: 6, marginBottom: 10 } },
-            React.createElement("button", { style: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 500 }, onClick: onReconcile }, "\u21C4 Reconcile"),
+            React.createElement("button", { style: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 500 }, onClick: () => onReconcile() }, "\u21C4 Reconcile"),
             React.createElement("button", { style: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 8, color: "var(--text-tertiary)", padding: "6px 12px", fontSize: 12, cursor: "pointer", fontWeight: 500 }, onClick: onExport }, "\u2197 Export")),
+        (statements || []).length > 0 && (React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 12, justifyContent: "flex-end" } }, (statements || []).map(st => {
+            const colour = METHOD_COLOR[st.method] || "var(--text-muted)";
+            return (React.createElement("button", { key: st.method, onClick: () => onReconcile(st.method), style: { display: "flex", alignItems: "center", gap: 7, background: "var(--surface)", border: `1px solid ${colour}`,
+                    borderRadius: 20, padding: "5px 12px", cursor: "pointer" } },
+                React.createElement("span", { style: { ...S.dot, background: colour } }),
+                React.createElement("span", { style: { fontSize: 12, fontWeight: 600, color: "var(--text-heading)" } }, METHOD_NAME[st.method] || st.method),
+                React.createElement("span", { style: { fontSize: 11, color: "var(--text-secondary)" } }, statementLabel(st))));
+        }))),
         React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "18px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6, textTransform: "uppercase" } }, "Month overview"),
             React.createElement("div", { style: { fontSize: 32, fontWeight: 800, color: remaining < 0 ? "#ef4444" : remaining < state.monthlyBudget * 0.15 ? "#f97316" : "#22c55e", marginBottom: 12 } }, fmt(remaining)),
@@ -3189,7 +3221,7 @@ function ImportBackupModal({ onClose }) {
 // the discrepancies. Nothing is written until the footer's two-step confirm, and everything it
 // does write goes out as a single RECONCILE_APPLY so the vault is re-encrypted once, not once
 // per fix.
-function ReconcileModal({ state, periods, onApply, onClose }) {
+function ReconcileModal({ state, periods, openWith, onApply, onSaveStatement, onForgetStatement, onClose }) {
     const [step, setStep] = useState("upload");
     const [text, setText] = useState("");
     const [fileName, setFileName] = useState("");
@@ -3204,6 +3236,8 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     const [pinMode, setPinMode] = useState({}); // candidate key → "once" | "rate"
     const [open, setOpen] = useState({ missing: true, mismatch: true, extra: true, matched: false, other: false });
     const [confirm, setConfirm] = useState(false);
+    const [updating, setUpdating] = useState(false); // replacing a saved statement rather than adding one
+    const [forget, setForget] = useState(false); // two-step guard on removing a saved statement
     const [page, setPage] = useState(0); // 0 = findings, 1 = week log
     const [display, setDisplay] = useState([]); // every logged item, per period, for the week log
     const [wkPeriod, setWkPeriod] = useState(null);
@@ -3211,6 +3245,15 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     const pagerRef = useRef(null);
     const lib = REC();
     const methodName = (id) => METHOD_NAME[id] || id;
+    const saved = state.statements || [];
+    // Launched from a saved statement's button: go straight to its results. Runs once, on mount.
+    useEffect(() => {
+        if (!openWith || !lib)
+            return;
+        const st = statementFor(state, openWith);
+        if (st)
+            runReconcile(lib.unpackStatement(st.rows), st.method);
+    }, []);
     function onFile(e) {
         const f = e.target.files && e.target.files[0];
         if (!f)
@@ -3241,16 +3284,26 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
         setMap(sniffed);
         setStep("map");
     }
-    function runReconcile() {
-        const statement = lib.buildStatement(rows, map);
+    // `preset` is a saved statement's rows, already normalised — reopening one skips parsing and
+    // the column step entirely, which is the whole point of saving it.
+    function runReconcile(preset, presetMethod) {
+        const statement = preset || lib.buildStatement(rows, map);
         if (!statement.length) {
             setErr("None of those rows read as transactions. Check the columns above.");
             return;
         }
+        const card = presetMethod || methodId;
+        if (presetMethod)
+            setMethodId(presetMethod);
+        if (!preset && onSaveStatement) {
+            // Saved on cross-reference, not on apply: an upload is worth keeping even if you decide to
+            // change nothing this time.
+            onSaveStatement({ method: card, rows: lib.packStatement(statement), span: lib.statementSpan(statement) });
+        }
         const idx = lib.buildDayIndex(periods.map(p => ({ archiveIndex: p.archiveIndex, weeks: p.weekKeys })));
         const candidates = [];
         for (const p of periods)
-            candidates.push(...reconcileCandidates(p, allCards ? null : methodId));
+            candidates.push(...reconcileCandidates(p, allCards && !presetMethod ? null : card));
         const res = lib.reconcile({ statement, candidates, dayIndex: idx });
         // Additions and corrections start ticked; deletions never do — removing something you logged
         // is the one action here you can't eyeball afterwards.
@@ -3272,6 +3325,7 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
         setResult(res);
         setPicked(initial);
         setErr("");
+        setUpdating(false);
         setStep("review");
     }
     const toggle = (k) => setPicked(p => ({ ...p, [k]: !p[k] }));
@@ -3388,8 +3442,25 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     };
     // ── Step 1: upload ──────────────────────────────────────────────────────────
     if (step === "upload") {
-        return (React.createElement(Modal, { onClose: onClose, title: "Reconcile a statement" },
-            React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", lineHeight: 1.5, marginBottom: 12 } }, "Upload the CSV your bank or card provider exports. SpendTracker reads it, cross-references it with what you've logged, and shows you anything that doesn't line up. Nothing is changed until you say so, and the file never leaves your phone."),
+        return (React.createElement(Modal, { onClose: onClose, title: updating ? "Update statement" : "Reconcile a statement" },
+            saved.length > 0 && !updating && (React.createElement("div", { style: { marginBottom: 14 } },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", marginBottom: 6 } }, "Saved statements"),
+                React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 6 } }, saved.map(st => (React.createElement("button", { key: st.method, onClick: () => runReconcile(lib.unpackStatement(st.rows), st.method), style: { display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", cursor: "pointer",
+                        background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 10, padding: "10px 12px" } },
+                    React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[st.method] || "var(--text-muted)" } }),
+                    React.createElement("span", { style: { flex: 1, minWidth: 0 } },
+                        React.createElement("span", { style: { display: "block", fontSize: 13, fontWeight: 600, color: "var(--text-heading)" } }, methodName(st.method)),
+                        React.createElement("span", { style: { display: "block", fontSize: 11, color: "var(--text-secondary)" } },
+                            statementLabel(st),
+                            " \u00B7 ",
+                            (st.rows || []).length,
+                            " transaction",
+                            (st.rows || []).length === 1 ? "" : "s")),
+                    React.createElement("span", { style: { fontSize: 13, color: "var(--text-tertiary)", flexShrink: 0 } }, "\u203A"))))),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginTop: 8 } }, "Tap one to cross-reference it again \u2014 no need to upload it a second time. Upload below to replace whichever card's statement you choose."))),
+            React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", lineHeight: 1.5, marginBottom: 12 } }, updating
+                ? `Upload the latest CSV for ${methodName(methodId)}. It replaces the statement saved for this card — your logged spending isn't touched.`
+                : "Upload the CSV your bank or card provider exports. SpendTracker reads it, cross-references it with what you've logged, and shows you anything that doesn't line up. Nothing is changed until you say so, and the file never leaves your phone."),
             React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 } }, "Which card is this statement for?"),
             React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 } },
                 (state.methods || []).map(m => (React.createElement("button", { key: m.id, onClick: () => { setMethodId(m.id); setAllCards(false); }, style: { background: (!allCards && methodId === m.id) ? m.color : "var(--surface)",
@@ -3411,7 +3482,13 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
             err && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10 } }, err),
             React.createElement("button", { style: { ...S.btn, background: text.trim() ? "#0369a1" : "var(--surface-2)",
                     color: text.trim() ? "var(--on-accent)" : "var(--text-heading)",
-                    width: "100%", ...(text.trim() ? {} : { opacity: 0.5 }) }, disabled: !text.trim(), onClick: readStatement }, "Read statement")));
+                    width: "100%", ...(text.trim() ? {} : { opacity: 0.5 }) }, disabled: !text.trim(), onClick: readStatement }, "Read statement"),
+            updating && statementFor(state, methodId) && (React.createElement("div", { style: { marginTop: 10 } },
+                !forget ? (React.createElement("button", { style: { ...S.btn, width: "100%", background: "var(--danger-soft-bg)", border: "1px solid var(--danger-soft-border)", color: "var(--danger-soft-text)" }, onClick: () => setForget(true) }, "Forget this saved statement")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
+                    React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setForget(false) }, "Cancel"),
+                    React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: () => { if (onForgetStatement)
+                            onForgetStatement(methodId); onClose(); } }, "Forget it"))),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 6, lineHeight: 1.5 } }, "This removes only the copy of the statement held here. Nothing you have logged changes.")))));
     }
     // ── Step 2: confirm the columns ─────────────────────────────────────────────
     if (step === "map") {
@@ -3466,7 +3543,7 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
             err && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10 } }, err),
             React.createElement("div", { style: { display: "flex", gap: 8 } },
                 React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setStep("upload") }, "Back"),
-                React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 2 }, onClick: runReconcile }, "Cross-reference"))));
+                React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 2 }, onClick: () => runReconcile() }, "Cross-reference"))));
     }
     // ── Step 3: the discrepancies ───────────────────────────────────────────────
     const r = result;
@@ -3661,6 +3738,19 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
     return (React.createElement(Modal, { onClose: onClose, title: "Reconciliation" },
         React.createElement("div", { role: "tablist", "aria-label": "Reconciliation pages", style: { display: "flex", gap: 4, marginBottom: 10, background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: 3,
                 position: "sticky", top: 0, zIndex: 2 } }, ["What we found", "Your week log"].map((l, i) => (React.createElement("button", { key: l, role: "tab", "aria-selected": page === i, id: `recon-tab-${i}`, "aria-controls": `recon-page-${i}`, onClick: () => goPage(i), style: reconTabBtn(page === i) }, l)))),
+        (() => {
+            const st = statementFor(state, methodId);
+            if (!st)
+                return null;
+            return (React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 10, fontSize: 11, color: "var(--text-secondary)" } },
+                React.createElement("span", { style: { ...S.dot, background: METHOD_COLOR[st.method] || "var(--text-muted)" } }),
+                React.createElement("span", { style: { flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                    methodName(st.method),
+                    " \u00B7 ",
+                    statementLabel(st)),
+                React.createElement("button", { onClick: () => { setUpdating(true); setForget(false); setText(""); setFileName(""); setErr(""); setStep("upload"); }, style: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 6, color: "var(--text-tertiary)",
+                        padding: "4px 9px", fontSize: 11, fontWeight: 600, cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap" } }, "Update statement")));
+        })(),
         React.createElement("div", { ref: pagerRef, onScroll: onPagerScroll, style: S.reconPager },
             React.createElement("div", { role: "tabpanel", id: "recon-page-0", "aria-labelledby": "recon-tab-0", style: S.reconPage }, findings),
             React.createElement("div", { role: "tabpanel", id: "recon-page-1", "aria-labelledby": "recon-tab-1", style: S.reconPage }, weekLog)),
