@@ -1,0 +1,8 @@
+{
+  "name": "spendtracker",
+  "private": true,
+  "description": "SpendTracker \u2014 a static, dependency-free PWA. This file exists only to hold the test script; the app itself is plain <script> tags and installs nothing.",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  }
+}

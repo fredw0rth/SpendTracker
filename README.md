@@ -8,6 +8,8 @@
 | `app.js` | **The tracker code your phone runs.** Plain JavaScript, ready to execute — no compiling needed at launch. |
 | `app.jsx` | **The readable source for `app.js`.** This is what Claude edits when you ask for a change. Written in JSX (React's HTML-in-JS syntax), which browsers can't run directly. |
 | `crypto.js` | **The security layer.** Encryption, the passphrase/Face ID lock screen, first-run setup, and the recovery code. Plain JavaScript with no compiled twin — edit it directly. |
+| `reconcile.js` | **Statement reconciliation.** Reads a bank/card CSV and cross-references it with what you've logged. Plain JavaScript with no compiled twin, and no React or DOM in it at all — which is what lets the unit tests load it directly. |
+| `tests/` | Unit tests for the above. Run with `npm test`. No dependencies to install. |
 | `manifest.json` | Tells iOS this is an installable app — name, icon, colours, fullscreen behaviour. |
 | `sw.js` | The service worker. Caches the app so it still opens if you have no signal. |
 | `icon-192.png` / `icon-512.png` | The home screen icon. |
@@ -38,10 +40,28 @@ npx -y -p typescript@4.9.5 tsc app.jsx --allowJs --jsx react --target es2019 --m
   --strict false --alwaysStrict --skipLibCheck --noEmitOnError false --outDir .
 ```
 
+`reconcile.js` and `crypto.js` are **not** compiled — they're already plain JavaScript, so edit
+them directly and they ship as-is.
+
 (The type-check *warnings* it prints — `React` undefined, `window.SpendVault`, etc. —
 are expected and harmless; there are no type declarations, and `--noEmitOnError false`
 still writes a correct `app.js`.) After regenerating, bump `CACHE_NAME` in `sw.js` so
 returning phones fetch the new files instead of a stale cache.
+
+## Checking a change didn't break anything
+
+```
+npm test
+```
+
+That runs the unit tests with Node's own built-in test runner. There is **nothing to install** —
+no `node_modules`, no dependencies; `package.json` exists only to hold that one command, and none
+of it is downloaded by your phone.
+
+The tests cover the statement reconciliation (reading the CSV, matching rows against what you've
+logged) and the parts of the app it touches — pay periods, week allocation, the reducer, and
+pinned costs. They load the **compiled** `app.js`, deliberately: if `app.jsx` is edited without
+regenerating `app.js`, the tests notice rather than the change silently doing nothing on your phone.
 
 ## How future updates actually work
 
@@ -50,7 +70,8 @@ changed, same as always. Claude will:
 
 1. Edit `app.jsx` (the readable source)
 2. Recompile it into a fresh `app.js`
-3. Hand you both files again, ready to re-upload
+3. Run `npm test` to check nothing broke
+4. Hand you the files again, ready to re-upload
 
 **Your side, to get the update onto your phone:**
 
@@ -144,6 +165,24 @@ yourself:
   ("Been here before? Import a previous account") or in **Settings → Import account**.
   Importing **replaces** whatever's on that device with the backup, then you unlock it
   with that account's passphrase. Export the current one first if you might want it back.
+
+## Checking your logging against a real statement
+
+The Summary tab has a **⇄ Reconcile** button. Export the CSV from your bank or card provider,
+upload it there, and SpendTracker compares it against everything you've logged — across the
+current period *and* finished ones, since a card statement rarely lines up with a payday.
+
+It then shows you four things: spends on the statement you never logged, amounts that don't
+match what was charged, things you logged that aren't on the statement at all (cash, a pending
+transaction, or the wrong card picked), and everything that lines up fine. You tick what you want
+fixing and it's applied in one go. Nothing is deleted unless you explicitly tick it.
+
+Card payments, transfers and salary are recognised and skipped — they aren't spending. Splits are
+treated as the single card transaction they really are, and pinned costs can be corrected for one
+month or repriced from now on. The file is read on your phone and never stored or sent anywhere;
+re-uploading the same statement later won't re-flag what you already dealt with.
+
+## Moving your account between browsers/devices — the details
 
 This is manual (a button, not live sync). True automatic cloud sync would need a small
 backend — and because the vault is already encrypted client-side, such a server would
