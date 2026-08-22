@@ -56,13 +56,19 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
 - **Modals scroll**: `Modal` is a flex column — a fixed `S.modalHeader` and a scrolling
   `S.modalBody` capped at `88vh`. Content below the fold is reached by scrolling that body, not
   the page. Before this, a sheet taller than the screen was simply unreachable.
+- Text like "Coffee" appears BOTH in the reconcile sheet and on the Summary tab behind it —
+  `getByText(...).first()` picks the one behind the overlay and the click is "intercepted". Scope
+  queries to the pager's pane before clicking.
 - **The reconcile tabs are `role="tab"`, not buttons** — `getByRole("button", {name: "Your week log"})`
   will not match; use `getByRole("tab", ...)`.
 - **Seeding state directly**: `window.SpendVault.save(s)` is queued through a promise chain — wait
   ~1s before `page.reload()` or the seed is lost.
 - **Reconcile**: Summary tab → "⇄ Reconcile". Paste a CSV into the textarea (faster than a file
   input), "Read statement" → column-confirmation step → "Cross-reference". Results group into
-  collapsible sections; rows tick via `[aria-label="Select"]`. Statement dates must fall inside a
+  collapsible sections. Rows render with the week log's own components (`EntryLine`/`SplitLine`/
+  `CreditLine`) and tapping one opens the app's spend sheet ON TOP — `ReconcileModal` is mounted
+  BEFORE `EntryModal` in App so the sheet paints above it. Results recompute on any data change, so
+  a fixed row leaves its category without re-uploading. Statement dates must fall inside a
   tracked pay period *and* inside the statement's own span, or rows/entries are set aside instead
   of flagged — build fixtures around today's date or everything reads as "missing". Matching keys
   on date + amount only, so a fixture whose names differ from the logged labels still matches.
@@ -70,6 +76,11 @@ Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are
   read-only and annotated with a verdict glyph (✓ / ≠ / !). Its header total is every row listed
   added up ("logged this week") — deliberately NOT the Week tab's personal-spend-against-budget
   figure, which is a different number for the same week.
+- **Saved statements**: one per payment method in `state.statements`, stored packed
+  (`packStatement`/`unpackStatement` in reconcile.js — fingerprints survive the round trip, which
+  is what keeps `recon` stamps working). Summary shows a chip per card; tapping opens the modal via
+  `openWith` straight to that statement's results, skipping upload and column-mapping. "Update
+  statement" on the results returns to step 1 in update mode.
 - **Period history**: Week tab → the `◀ Month YYYY ▶` stepper (`[aria-label="Earlier period"]` /
   `"Later period"`), which walks `state.monthHistory` oldest→newest then back to live.
 

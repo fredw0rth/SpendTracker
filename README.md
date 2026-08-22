@@ -172,10 +172,28 @@ The Summary tab has a **⇄ Reconcile** button. Export the CSV from your bank or
 upload it there, and SpendTracker compares it against everything you've logged — across the
 current period *and* finished ones, since a card statement rarely lines up with a payday.
 
-It then shows you four things: spends on the statement you never logged, amounts that don't
-match what was charged, things you logged that aren't on the statement at all (cash, a pending
-transaction, or the wrong card picked), and everything that lines up fine. You tick what you want
-fixing and it's applied in one go. Nothing is deleted unless you explicitly tick it.
+It then shows you four things, kept separate: spends on the statement you never logged, amounts
+that don't match what was charged, things you logged that aren't on the statement at all (cash, a
+pending transaction, or the wrong card picked), and everything that lines up fine.
+
+**It doesn't decide anything for you.** Every row is shown the way it appears in your week log,
+grouped by day, and tapping one opens the same spend sheet you'd get from the Week tab — same
+editing, same delete. A statement row with nothing logged against it opens that sheet filled in
+from the statement, for you to check and save. Nothing is written until you save it, and the
+results update as you go, so a row you've just sorted moves into Matched while you watch.
+
+**Statements are remembered per card.** The first time you upload one it's saved, and after that
+the Summary tab shows a button for each card — "Amex · 20 Aug – 24 Aug" — that takes you straight
+back into its results with nothing to re-upload. The dates on the button are what the statement
+covers, not when you uploaded it. When a newer export is available, **Update statement** on the
+results screen replaces that card's copy; **Forget this saved statement** removes it. Neither
+touches anything you've logged.
+
+Only the four things that can't be worked out again are stored — date, description, amount, and
+whether it was money in — and the rest is rebuilt on the way out. That keeps roughly two-thirds of
+the bulk out of the vault, which matters because the whole vault is re-encrypted every time
+anything changes. Reconciled rows stay reconciled across a save, so reopening a statement doesn't
+re-flag work you've already done.
 
 Matching goes on **date and amount**, not on the name. What you type is a note to yourself
 ("Lunch") while your bank writes the acquirer's descriptor ("PRET A MANGER 4392 LONDON"), so
@@ -185,8 +203,8 @@ can see what got paired before you accept it. Amounts too far apart to be the sa
 are deliberately left as two separate entries rather than merged.
 
 Card payments, transfers and salary are recognised and skipped — they aren't spending. Splits are
-treated as the single card transaction they really are, and pinned costs can be corrected for one
-month or repriced from now on. The file is read on your phone and never stored or sent anywhere;
+treated as the single card transaction they really are, and a pinned cost opens its own editor,
+with deleting it skipping just that month's charge. The file is read on your phone and never stored or sent anywhere;
 re-uploading the same statement later won't re-flag what you already dealt with.
 
 ## Moving your account between browsers/devices — the details

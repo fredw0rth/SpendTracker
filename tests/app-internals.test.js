@@ -219,3 +219,51 @@ test("groupByWeek keeps every item and sends unweeked ones to fixed costs", () =
   assert.equal(groups.reduce((n, g) => n + g.items.length, 0), 3);
   assert.ok(groups.some(g => g.key === "fixed"));
 });
+
+// ─── Saved statements ─────────────────────────────────────────────────────────
+
+test("an account created before saved statements existed gets an empty list", () => {
+  assert.deepEqual(A.normalizeState({}).statements, []);
+  assert.deepEqual(A.normalizeState({ entries: [] }).statements, []);
+  assert.deepEqual(A.defaultState().statements, []);
+});
+
+test("a saved statement survives a dispatch that has nothing to do with it", () => {
+  const st = { method: "Amex", rows: [{ d: "2026-08-01", t: "TESCO", a: 5, c: 0 }], from: "2026-08-01", to: "2026-08-01", savedAt: "2026-08-22T00:00:00.000Z" };
+  let s = A.normalizeState({ statements: [st] });
+  s = A.reducer(s, { type: "ADD_ENTRY", entry: entry() });
+  s = A.reducer(s, { type: "RECONCILE_APPLY", ops: [{ archiveIndex: null, kind: "entry", op: "upd", entry: entry({ recon: "abc" }) }] });
+  assert.deepEqual(s.statements, [st]);
+});
+
+test("saving a card's statement replaces that card's, never stacks copies", () => {
+  // The UI holds one statement per payment method; this is the shape it dispatches.
+  const older = { method: "Amex", rows: [{ d: "2026-07-01", t: "OLD", a: 1, c: 0 }], to: "2026-07-01" };
+  const other = { method: "Lloyds", rows: [{ d: "2026-08-01", t: "X", a: 2, c: 0 }], to: "2026-08-01" };
+  const newer = { method: "Amex", rows: [{ d: "2026-08-20", t: "NEW", a: 3, c: 0 }], to: "2026-08-20" };
+  const s0 = A.normalizeState({ statements: [older, other] });
+  const s = A.reducer(s0, { type: "SETTINGS", patch: { statements: [...s0.statements.filter(x => x.method !== newer.method), newer] } });
+  assert.equal(s.statements.length, 2);
+  assert.deepEqual(s.statements.map(x => x.method).sort(), ["Amex", "Lloyds"]);
+  assert.equal(s.statements.find(x => x.method === "Amex").to, "2026-08-20");
+  assert.equal(s.statements.find(x => x.method === "Lloyds").to, "2026-08-01", "the other card is untouched");
+});
+
+test("forgetting one card's statement leaves the others alone", () => {
+  const s0 = A.normalizeState({ statements: [{ method: "Amex", rows: [] }, { method: "Lloyds", rows: [] }] });
+  const s = A.reducer(s0, { type: "SETTINGS", patch: { statements: s0.statements.filter(x => x.method !== "Amex") } });
+  assert.deepEqual(s.statements.map(x => x.method), ["Lloyds"]);
+});
+
+test("statements carry across a period rollover", () => {
+  // They belong to a card, not to a pay period, so a rollover must not clear them.
+  const s0 = A.normalizeState({ statements: [{ method: "Amex", rows: [{ d: "2026-08-01", t: "T", a: 5, c: 0 }] }], entries: [entry()] });
+  const s = A.reducer(s0, { type: "MONTH_ROLLOVER", newYear: 2026, newMonth: 8, newLabel: "Sep 2026" });
+  assert.equal(s.statements.length, 1);
+  assert.equal(s.entries.length, 0, "entries are period-scoped and do clear");
+});
+
+test("a statement stored on an old account is not resurrected as undefined", () => {
+  const s = A.reducer(A.normalizeState({}), { type: "ADD_ENTRY", entry: entry() });
+  assert.ok(Array.isArray(s.statements));
+});
