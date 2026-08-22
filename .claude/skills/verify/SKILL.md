@@ -24,8 +24,10 @@ npx -y -p typescript@4.9.5 tsc app.jsx --allowJs --jsx react --target es2019 --m
   --strict false --alwaysStrict --skipLibCheck --noEmitOnError false --outDir .
 ```
 
-Then bump `CACHE_NAME` in `sw.js` (line 3). Type warnings about `React` etc. are expected noise.
-`crypto.js` and `reconcile.js` are not compiled — edit them directly.
+Then bump `CACHE_NAME` in `sw.js` (line 3) **and `BUILD` in `crypto.js` to match** — they are meant
+to move together, and `BUILD` is what the "SpendTracker build vNN" line at the bottom of Settings
+shows, which is how you tell a stale deployed copy from a current one. Type warnings about `React`
+etc. are expected noise. `crypto.js` and `reconcile.js` are not compiled — edit them directly.
 
 ## Run + drive
 
