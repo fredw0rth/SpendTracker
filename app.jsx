@@ -2413,8 +2413,11 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
   const selectedWeek = weekIndexForDay(weeks, selectedDay) || weekIndex;
   // Fall back to the first method if the seeded id no longer exists (e.g. its type was removed).
   const [method, setMethod] = useState(() => {
+    // A credit logged before credits carried a card has none, and nothing here can honestly guess
+    // which it was. Leave it unset — null, not a default — so opening the credit and saving it
+    // can't quietly stamp it with whichever card happens to be the current default.
+    if (editCredit) return (editCredit.method && METHOD_NAME[editCredit.method]) ? editCredit.method : null;
     const seed = editEntry ? editEntry.method
-      : editCredit ? (editCredit.method || defaultMethod)
       : (splitRef ? splitRef.method : ((prefill && prefill.method) || defaultMethod));
     return METHOD_NAME[seed] ? seed : METHODS[0].id;
   });
@@ -2562,7 +2565,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
     // Editing an existing item: write the change back in place, keeping id/date/week/split.
     if (isEdit) {
       if (editCredit) {
-        onUpdateCredit({ ...editCredit, amount, label: note.trim(), method });
+        onUpdateCredit({ ...editCredit, amount, label: note.trim(), method: method || undefined });
       } else {
         // Personal entries carry the (possibly changed) category; other kinds keep none.
         onUpdate({ ...editEntry, amount: isSplitEdit ? editEntry.amount : amount, label: note.trim(), note: note.trim(), method, type, category: (type === "personal" && !isSplitEdit) ? (category || undefined) : undefined });
@@ -2771,10 +2774,16 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
         </div>
       </div>
 
-      {!editCredit && <>
-        <div style={subheading}>Payment type</div>
-        <MethodSelector value={method} onChange={setMethod} dimmed={type === "credit"} />
-      </>}
+      <div style={subheading}>Payment type</div>
+      {/* Shown for credits too, and no longer dimmed for them: a refund lands on a card like any
+          other transaction, and that's what lets it be reconciled against that card's statement. */}
+      <MethodSelector value={method} onChange={setMethod} />
+      {type === "credit" && !method && (
+        <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.5, marginTop:-6, marginBottom:12 }}>
+          Not linked to a card yet. Pick the card the money went back to so it can be checked
+          against that statement — leave it and the credit stays as it is.
+        </div>
+      )}
 
       {classOptions.length > 0 && <>
         <div style={subheading}>Classification</div>

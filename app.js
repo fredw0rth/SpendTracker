@@ -2254,9 +2254,13 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
     const selectedWeek = weekIndexForDay(weeks, selectedDay) || weekIndex;
     // Fall back to the first method if the seeded id no longer exists (e.g. its type was removed).
     const [method, setMethod] = useState(() => {
+        // A credit logged before credits carried a card has none, and nothing here can honestly guess
+        // which it was. Leave it unset — null, not a default — so opening the credit and saving it
+        // can't quietly stamp it with whichever card happens to be the current default.
+        if (editCredit)
+            return (editCredit.method && METHOD_NAME[editCredit.method]) ? editCredit.method : null;
         const seed = editEntry ? editEntry.method
-            : editCredit ? (editCredit.method || defaultMethod)
-                : (splitRef ? splitRef.method : ((prefill && prefill.method) || defaultMethod));
+            : (splitRef ? splitRef.method : ((prefill && prefill.method) || defaultMethod));
         return METHOD_NAME[seed] ? seed : METHODS[0].id;
     });
     const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : ((prefill && prefill.type) || "personal")));
@@ -2413,7 +2417,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
         // Editing an existing item: write the change back in place, keeping id/date/week/split.
         if (isEdit) {
             if (editCredit) {
-                onUpdateCredit({ ...editCredit, amount, label: note.trim(), method });
+                onUpdateCredit({ ...editCredit, amount, label: note.trim(), method: method || undefined });
             }
             else {
                 // Personal entries carry the (possibly changed) category; other kinds keep none.
@@ -2581,9 +2585,9 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
         React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "var(--border-strong)"}`, opacity: isSplitEdit ? 0.7 : 1 } },
             displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a855f7", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
             React.createElement("div", { style: { fontSize: displayStr.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#22c55e" : "var(--text-heading)" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`)),
-        !editCredit && React.createElement(React.Fragment, null,
-            React.createElement("div", { style: subheading }, "Payment type"),
-            React.createElement(MethodSelector, { value: method, onChange: setMethod, dimmed: type === "credit" })),
+        React.createElement("div", { style: subheading }, "Payment type"),
+        React.createElement(MethodSelector, { value: method, onChange: setMethod }),
+        type === "credit" && !method && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginTop: -6, marginBottom: 12 } }, "Not linked to a card yet. Pick the card the money went back to so it can be checked against that statement \u2014 leave it and the credit stays as it is.")),
         classOptions.length > 0 && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Classification"),
             React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#22c55e" : v === "split" ? "#a855f7" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
