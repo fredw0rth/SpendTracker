@@ -177,6 +177,13 @@ match what was charged, things you logged that aren't on the statement at all (c
 transaction, or the wrong card picked), and everything that lines up fine. You tick what you want
 fixing and it's applied in one go. Nothing is deleted unless you explicitly tick it.
 
+Matching goes on **date and amount**, not on the name. What you type is a note to yourself
+("Lunch") while your bank writes the acquirer's descriptor ("PRET A MANGER 4392 LONDON"), so
+requiring those to agree would report one transaction as two separate problems. Where an amount
+doesn't line up, the name is only used to break ties, and both names are shown side by side so you
+can see what got paired before you accept it. Amounts too far apart to be the same charge mistyped
+are deliberately left as two separate entries rather than merged.
+
 Card payments, transfers and salary are recognised and skipped — they aren't spending. Splits are
 treated as the single card transaction they really are, and pinned costs can be corrected for one
 month or repriced from now on. The file is read on your phone and never stored or sent anywhere;

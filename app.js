@@ -3438,7 +3438,7 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                         row.direction === "credit" ? " · money in" : "")),
                 React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: row.direction === "credit" ? "#22c55e" : "var(--text-heading)" } }, fmt(row.amount))));
         })),
-        React.createElement(Section, { id: "mismatch", colour: "#f59e0b", title: "Amounts don't match", count: r.amountMismatch.length, hint: "We're confident these are the same transaction, but the amount you logged differs from what was charged. Ticking one corrects it to the statement's figure." }, r.amountMismatch.map(m => {
+        React.createElement(Section, { id: "mismatch", colour: "#f59e0b", title: "Amounts don't match", count: r.amountMismatch.length, hint: "These look like the same transaction on the same date, but the amount you logged differs from what was charged. Matching goes on the date and the amount, not the name \u2014 what you type is a note to yourself, while your bank writes something else entirely \u2014 so check the pairing below before ticking it." }, r.amountMismatch.map(m => {
             const c = m.candidate, isPin = c.kind === "pin", isSplit = c.kind === "split";
             const parts = isSplit ? lib.resplit(c.ref.your ? c.ref.your.amount : 0, c.ref.their ? c.ref.their.amount : 0, m.row.amount) : null;
             const tag = periodTag(c.ref.archiveIndex);
@@ -3446,6 +3446,10 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
                 React.createElement(Tick, { on: !!picked[m.row.id], onToggle: () => toggle(m.row.id) }),
                 React.createElement("div", { style: { flex: 1, minWidth: 0 } },
                     React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, m.row.description || c.label),
+                    c.label && c.label !== m.row.description && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                        "you logged \u201C",
+                        c.label,
+                        "\u201D")),
                     React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)" } },
                         dayKeyLabel(m.row.date),
                         tag ? ` · ${tag}` : "",
@@ -3505,12 +3509,15 @@ function ReconcileModal({ state, periods, onApply, onClose }) {
 }
 // ─── Modal ────────────────────────────────────────────────────────────────────
 function Modal({ children, onClose, title }) {
+    // The sheet is a column: a header that stays put and a body that scrolls. Without this the
+    // sheet simply grew past the bottom of the screen with no way to reach the rest of it — which
+    // only showed up once a modal (reconciliation) had more content than a phone screen.
     return React.createElement("div", { style: S.modalOverlay, onClick: onClose },
         React.createElement("div", { style: S.modalSheet, onClick: e => e.stopPropagation() },
             React.createElement("div", { style: S.modalHeader },
                 React.createElement("span", { style: S.modalTitle }, title),
                 React.createElement("button", { style: S.delBtn, onClick: onClose }, "\u2715")),
-            children));
+            React.createElement("div", { style: S.modalBody }, children)));
 }
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
@@ -3569,8 +3576,11 @@ const S = {
     btn: { border: "none", borderRadius: 8, padding: "12px", fontSize: 14, fontWeight: 600, cursor: "pointer", color: "var(--on-accent)" },
     settingsCard: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "14px", marginBottom: 12 },
     modalOverlay: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", display: "flex", alignItems: "flex-end", zIndex: 100 },
-    modalSheet: { background: "var(--surface)", borderRadius: "16px 16px 0 0", padding: "20px 16px 32px", width: "100%", maxWidth: 480, margin: "0 auto", border: "1px solid var(--border)" },
-    modalHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 },
+    modalSheet: { background: "var(--surface)", borderRadius: "16px 16px 0 0", padding: "20px 16px 0", width: "100%", maxWidth: 480, margin: "0 auto", border: "1px solid var(--border)", display: "flex", flexDirection: "column", maxHeight: "88vh" },
+    // Scrolls independently of the page behind it; overscrollBehavior stops iOS handing the scroll
+    // back to the page when the body reaches its end.
+    modalBody: { overflowY: "auto", overscrollBehavior: "contain", WebkitOverflowScrolling: "touch", paddingBottom: 32, flex: 1, minHeight: 0 },
+    modalHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexShrink: 0 },
     modalTitle: { fontSize: 15, fontWeight: 700, color: "var(--text-heading)" },
     weekSelect: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 6, color: "var(--text-heading)", fontSize: 14, fontWeight: 700, padding: "3px 6px", cursor: "pointer", outline: "none", fontFamily: "inherit" },
     daySelectBtn: { background: "var(--surface-2)", border: "1px solid var(--border-strong)", borderRadius: 6, color: "var(--text-heading)", fontSize: 14, fontWeight: 700, padding: "3px 8px", cursor: "pointer", outline: "none", fontFamily: "inherit", display: "inline-flex", alignItems: "center", gap: 4 },

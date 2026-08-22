@@ -315,3 +315,100 @@ test("a spend never matches a logged credit", () => {
   assert.equal(res.matched.length, 0);
   assert.equal(res.missingFromApp.length, 1);
 });
+
+// ─── Matching on date and amount, not on what you called it ───────────────────
+
+test("a mistyped amount is caught even when the names share nothing", () => {
+  // You logged "Lunch"; the statement calls it "PRET A MANGER 4392 LONDON". Requiring the names
+  // to agree would report one transaction as a missing spend AND an extra entry.
+  const res = R.reconcile({
+    statement: [row("2026-08-01", "PRET A MANGER 4392 LONDON", 12.4)],
+    candidates: [cand("e1", "2026-08-01", 4.2, "Lunch")],
+    dayIndex: augustIndex(),
+  });
+  assert.equal(R.similarity("PRET A MANGER 4392 LONDON", "Lunch"), 0, "no name signal at all");
+  assert.equal(res.amountMismatch.length, 1);
+  assert.equal(res.missingFromApp.length, 0);
+  assert.equal(res.notOnStatement.length, 0);
+});
+
+test("a late posting matches on amount alone, whatever it is called", () => {
+  const res = R.reconcile({
+    statement: [row("2026-08-04", "SQ *THE COFFEE JAR", 3.6)],
+    candidates: [cand("e1", "2026-08-01", 3.6, "Flat white")],
+    dayIndex: augustIndex(),
+  });
+  assert.equal(res.matched.length, 1);
+  assert.equal(res.matched[0].how, "date-drift");
+});
+
+test("amounts too far apart are left as two separate problems", () => {
+  // A £30 cash spend and a forgotten £4.20 coffee on the same day are not one mistyped charge.
+  const res = R.reconcile({
+    statement: [row("2026-08-01", "PRET A MANGER", 4.2)],
+    candidates: [cand("e1", "2026-08-01", 30, "Haircut, cash")],
+    dayIndex: augustIndex(),
+  });
+  assert.equal(res.amountMismatch.length, 0, "pairing these would destroy both if corrected");
+  assert.equal(res.missingFromApp.length, 1);
+  assert.equal(res.notOnStatement.length, 1);
+});
+
+test("the tolerance boundary is where it says it is", () => {
+  const at = (logged) => R.reconcile({
+    statement: [row("2026-08-01", "SHOP", 100)],
+    candidates: [cand("e1", "2026-08-01", logged, "Thing")],
+    dayIndex: augustIndex(),
+  }).amountMismatch.length;
+  assert.equal(at(25), 1, "75% drift is still the same transaction");
+  assert.equal(at(24), 0, "76% is not");
+});
+
+test("the closest amount wins when several could be the one", () => {
+  const res = R.reconcile({
+    statement: [row("2026-08-01", "SHOP", 20)],
+    candidates: [cand("e1", "2026-08-01", 9, "A"), cand("e2", "2026-08-01", 18, "B")],
+    dayIndex: augustIndex(),
+  });
+  assert.equal(res.amountMismatch.length, 1);
+  assert.equal(res.amountMismatch[0].candidate.key, "e2");
+});
+
+test("the nearer date wins over the closer amount", () => {
+  const res = R.reconcile({
+    statement: [row("2026-08-04", "SHOP", 20)],
+    candidates: [cand("e1", "2026-08-04", 12, "same day, further amount"),
+                 cand("e2", "2026-08-02", 19, "closer amount, two days off")],
+    dayIndex: augustIndex(),
+  });
+  assert.equal(res.amountMismatch[0].candidate.key, "e1");
+});
+
+test("the description breaks a tie it cannot decide on its own", () => {
+  // Both candidates are the same distance out on date and amount; only the name separates them.
+  const res = R.reconcile({
+    statement: [row("2026-08-01", "ODEON CINEMA LEICESTER SQ", 20)],
+    candidates: [cand("e1", "2026-08-01", 15, "Tesco big shop"),
+                 cand("e2", "2026-08-01", 15, "Odeon cinema")],
+    dayIndex: augustIndex(),
+  });
+  assert.equal(res.amountMismatch.length, 1);
+  assert.equal(res.amountMismatch[0].candidate.key, "e2");
+});
+
+test("an exact amount is always preferred over a near one", () => {
+  const res = R.reconcile({
+    statement: [row("2026-08-01", "SHOP", 20)],
+    candidates: [cand("e1", "2026-08-01", 19, "nearly"), cand("e2", "2026-08-01", 20, "exactly")],
+    dayIndex: augustIndex(),
+  });
+  assert.equal(res.matched.length, 1);
+  assert.equal(res.matched[0].candidate.key, "e2");
+  assert.equal(res.notOnStatement.length, 1, "and the near miss stays flagged rather than paired");
+});
+
+test("the tolerance is adjustable", () => {
+  const opts = { statement: [row("2026-08-01", "SHOP", 100)], candidates: [cand("e1", "2026-08-01", 30, "Thing")], dayIndex: augustIndex() };
+  assert.equal(R.reconcile({ ...opts, amountTolerance: 0.9 }).amountMismatch.length, 1);
+  assert.equal(R.reconcile({ ...opts, amountTolerance: 0.5 }).amountMismatch.length, 0);
+});
