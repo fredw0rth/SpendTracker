@@ -292,16 +292,47 @@ test("passing no card compares everything, for the all-cards option", () => {
   assert.equal(A.reconcileCandidates(p, null).length, 2);
 });
 
-test("credits are never filtered out by card", () => {
-  // A refund is compared whichever card it landed on — reconcileCandidates has no method filter
-  // for credits, and the week log relies on that to keep showing them.
+test("a credit belongs to the card it landed on, and is filtered like a spend", () => {
   const p = period({
-    entries: [spend("a", "Amex"), spend("b", "Lloyds")],
-    credits: [{ id: "cr", amount: 8, label: "Refund", weekIndex: 1, day: "2026-08-01" }],
+    entries: [spend("a", "Amex")],
+    credits: [
+      { id: "cr1", amount: 8, label: "Amex refund", method: "Amex", weekIndex: 1, day: "2026-08-01" },
+      { id: "cr2", amount: 12, label: "Lloyds refund", method: "Lloyds", weekIndex: 1, day: "2026-08-01" },
+    ],
   });
   const amex = A.reconcileCandidates(p, "Amex");
-  assert.deepEqual(amex.map(c => c.kind).sort(), ["credit", "entry"]);
-  assert.equal(amex.find(c => c.kind === "credit").direction, "credit");
+  assert.deepEqual(amex.map(c => c.ref.credit && c.ref.credit.id).filter(Boolean), ["cr1"]);
+  const credit = amex.find(c => c.kind === "credit");
+  assert.equal(credit.direction, "credit");
+  assert.equal(credit.method, "Amex");
+
+  const lloyds = A.reconcileCandidates(p, "Lloyds");
+  assert.deepEqual(lloyds.map(c => c.kind), ["credit"], "and the Amex spend is not compared here");
+});
+
+test("a credit logged before credits carried a card shows only under All cards", () => {
+  // Nothing can honestly claim which card an old credit landed on, so it is not attributed to one.
+  const p = period({ credits: [{ id: "old", amount: 8, label: "Refund", weekIndex: 1, day: "2026-08-01" }] });
+  assert.equal(A.reconcileCandidates(p, "Amex").length, 0);
+  assert.equal(A.reconcileCandidates(p, null).length, 1);
+  assert.equal(A.reconcileCandidates(p, null)[0].method, null);
+});
+
+test("a refund only ever matches an incoming statement row", () => {
+  const R = require("../reconcile.js");
+  const dayKeys = ["2026-08-01"];
+  const dayIndex = R.buildDayIndex([{ archiveIndex: null, weeks: [{ index: 1, dayKeys }] }]);
+  const p = period({
+    entries: [spend("a", "Amex", { amount: 8 })],
+    credits: [{ id: "cr", amount: 8, label: "Refund", method: "Amex", weekIndex: 1, day: "2026-08-01" }],
+  });
+  const candidates = A.reconcileCandidates(p, "Amex");
+  const row = { id: "s0", date: "2026-08-01", description: "REFUND ODEON", normDesc: "REFUND ODEON",
+                amount: 8, direction: "credit", ignored: false, ignoreReason: "", dupIndex: 0 };
+  row.fingerprint = R.rowFingerprint(row);
+  const res = R.reconcile({ statement: [row], candidates, dayIndex });
+  assert.equal(res.matched.length, 1);
+  assert.equal(res.matched[0].candidate.kind, "credit", "not the £8 spend on the same day");
 });
 
 test("a split is one candidate at the card total, and follows the card filter", () => {
