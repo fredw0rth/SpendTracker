@@ -156,7 +156,15 @@ const STORAGE_KEY = "spendtracker_v6";
 function load() { return (window.SpendVault && window.SpendVault.getState) ? window.SpendVault.getState() : null; }
 function save(s) { if (window.SpendVault && window.SpendVault.save) window.SpendVault.save(s); }
 
-const fmt = (n) => "£" + Number(Math.abs(n)).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Money. fmt is sign-correct: a negative renders with a leading minus, because a figure that can
+// go negative (the per-day allowance once you're over, a month's leftover on the Savings ledger)
+// has to read as negative — printing its magnitude made overspending look like the budget growing.
+// Testing n < 0 rather than formatting n keeps fmt(-0) rendering as "£0.00".
+// fmtAbs is the magnitude, for the places that carry the sense in their own words or glyph instead:
+// the reconcile rows, which pick +/− from the direction of the row, and the headline "left"/"over"
+// figure, which says it in a word — see remainingDisplay.
+const fmtAbs = (n) => "£" + Number(Math.abs(n)).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmt = (n) => (n < 0 ? "-" : "") + fmtAbs(n);
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const dayName = (d) => ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()];
 const monthName = (d) => MONTH_NAMES[d.getMonth()];
@@ -832,6 +840,79 @@ function HelpCard({ focus }) {
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
+// Weekly budget rebalancing. weeklyBudget here is a per-7-day RATE for DISCRETIONARY spend — the
+// monthly budget with flat fixed costs already taken off, divided by the weeks in the period (see
+// computeBudgetSummary's spendableWeekly). Flat pins have no weekIndex, so they can never land in a
+// week of their own; taking them off the rate first is what keeps the per-week budgets summing to
+// the same pot "remaining" is measured against, instead of the two drifting apart by the whole
+// fixed-cost total. Each week's base budget is that rate scaled by the week's own day count — the
+// payday week and the final stub week are partial, and pro-rating this way avoids over-allocating
+// the short weeks. A week's overspend — measured against its own (already-reduced) budget — is then
+// spread across the DAYS of every week that comes after it, so every later week keeps the same
+// reduced daily allowance (a short week gives up proportionally less than a full one) and going over
+// isn't a cliff on the next week alone. This cascades: a later week's overspend spreads across the
+// days still after it. The final week has nowhere left to spread to, so an overspend there just
+// shows as "over" (the period's last absorber). Lapsed earlier weeks are never touched. Underspend
+// does not roll forward (month-level "remaining" and the per-day-of-month figure already reflect it).
+function getRebalancedBudgets(weeks, entries, weeklyBudget, credits) {
+  const N = weeks.length;
+  const dailyRate = weeklyBudget / 7;
+  const spend = weeks.map(w => {
+    const gross = entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s,e)=>s+e.amount,0);
+    const wCredits = (credits || []).filter(c => c.weekIndex === w.index).reduce((s,c)=>s+c.amount,0);
+    return gross - wCredits;
+  });
+  const reduction = new Array(N).fill(0); // budget cut carried into each week from earlier overspends
+  const budgets = {};
+  weeks.forEach((w, i) => {
+    const eff = Math.max(dailyRate * w.days.length - reduction[i], 0);
+    budgets[w.index] = eff;
+    const over = Math.max(spend[i] - eff, 0);
+    const daysLeft = weeks.slice(i + 1).reduce((s, x) => s + x.days.length, 0);
+    if (over > 0 && daysLeft > 0) {
+      for (let j = i + 1; j < N; j++) reduction[j] += over * (weeks[j].days.length / daysLeft);
+    }
+  });
+  return budgets;
+}
+
+// The month's headline figure — the magnitude, the word that gives it its sense, and its colour,
+// returned together so the three can never disagree. "-£70.00 left" was true but read awkwardly;
+// "£70.00 over" says the same thing in the way you'd say it out loud, and WeekPanel's budget bar
+// already words an overspend exactly this way.
+// The value is rounded to pence BEFORE the word and the colour are picked: a rounding crumb of
+// -0.004 formats as "£0.00", and £0.00 has to read "left", never "over" in red.
+function remainingDisplay(remaining, monthlyBudget) {
+  const pence = Math.round(remaining * 100);
+  const over = pence < 0;
+  return {
+    over,
+    figure: fmtAbs(pence / 100),
+    label: over ? "over" : "left",
+    color: over ? "#ef4444" : remaining < monthlyBudget * 0.15 ? "#f97316" : "#22c55e",
+  };
+}
+
+// The period's money figures, from effectiveData alone so they reflect whichever period is being
+// viewed. Pure and at module scope deliberately: this is the arithmetic behind the header and both
+// per-day cards, and it needs to be reachable from the tests rather than trapped in the component.
+// `remaining` and `dailyFromMonth` are NOT clamped — once you're over budget they go negative, and
+// they have to stay negative all the way to the screen. A daysLeftInMonth of 0 (a past period, which
+// has no "days left") yields 0 rather than dividing by it.
+function computeBudgetSummary(effectiveData, weeksInPeriod, daysLeftInMonth) {
+  const personalEntries = effectiveData.entries.filter(e => e.type === "personal");
+  const businessEntries = effectiveData.entries.filter(e => e.type === "business");
+  const totalPinned = effectiveData.pins.filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
+  const totalEntries = personalEntries.reduce((s, e) => s + e.amount, 0);
+  const totalSpent = totalPinned + totalEntries;
+  const totalCredits = (effectiveData.credits || []).reduce((s, c) => s + c.amount, 0);
+  const remaining = effectiveData.monthlyBudget - totalSpent + totalCredits;
+  const spendableWeekly = effectiveData.weeklyBudget - (weeksInPeriod > 0 ? totalPinned / weeksInPeriod : 0);
+  const dailyFromMonth = daysLeftInMonth > 0 ? remaining / daysLeftInMonth : 0;
+  return { personalEntries, businessEntries, totalPinned, totalEntries, totalSpent, totalCredits,
+           remaining, spendableWeekly, dailyFromMonth };
+}
+
 function App() {
   const [state, dispatch] = useReducer(reducer, null, () => normalizeState(load() || defaultState()));
 
@@ -963,47 +1044,20 @@ function App() {
     setActiveWeek(idx);
   }, [state.payMonth, state.payYear, viewingPastIndex]);
 
-  // Weekly budget rebalancing. weeklyBudget is a per-7-day RATE (monthlyBudget / (periodDays/7)),
-  // so each week's base budget is that rate scaled by the week's own day count — the payday week
-  // and the final stub week are partial, and pro-rating this way makes the per-week budgets sum to
-  // the monthly budget instead of over-allocating the short weeks. A week's overspend — measured
-  // against its own (already-reduced) budget — is then spread across the DAYS of every week that
-  // comes after it, so every later week keeps the same reduced daily allowance (a short week gives
-  // up proportionally less than a full one) and going over isn't a cliff on the next week alone.
-  // This cascades: a later week's overspend spreads across the days still after it. The final week
-  // has nowhere left to spread to, so an overspend there just shows as "over" (the period's last
-  // absorber). Lapsed earlier weeks are never touched. Underspend does not roll forward (month-level
-  // "remaining" and the per-day-of-month figure already reflect it).
-  function getRebalancedBudgets(weeks, entries, weeklyBudget, credits) {
-    const N = weeks.length;
-    const dailyRate = weeklyBudget / 7;
-    const spend = weeks.map(w => {
-      const gross = entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s,e)=>s+e.amount,0);
-      const wCredits = (credits || []).filter(c => c.weekIndex === w.index).reduce((s,c)=>s+c.amount,0);
-      return gross - wCredits;
-    });
-    const reduction = new Array(N).fill(0); // budget cut carried into each week from earlier overspends
-    const budgets = {};
-    weeks.forEach((w, i) => {
-      const eff = Math.max(dailyRate * w.days.length - reduction[i], 0);
-      budgets[w.index] = eff;
-      const over = Math.max(spend[i] - eff, 0);
-      const daysLeft = weeks.slice(i + 1).reduce((s, x) => s + x.days.length, 0);
-      if (over > 0 && daysLeft > 0) {
-        for (let j = i + 1; j < N; j++) reduction[j] += over * (weeks[j].days.length / daysLeft);
-      }
-    });
-    return budgets;
-  }
+  // Daily budgets — only meaningful for the live period; a past period has no "days left".
+  // currentWeekObj is explicitly null while viewing the past so every figure below that
+  // depends on it (already all guarded by `currentWeekObj ? ... : ...`) automatically and
+  // correctly goes inert, rather than comparing today's real date against an archived
+  // period's date range (which would rarely match and would be meaningless if it did).
+  const todayDate = (() => { const d = londonNow(); d.setHours(0,0,0,0); return d; })();
+  const normDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+  const currentWeekObj = viewingPast ? null : (weeks.find(w => todayDate >= normDay(w.start) && todayDate <= normDay(w.end)) || weeks[0]);
+  const daysLeftInWeek = currentWeekObj ? currentWeekObj.days.filter(d => normDay(d) >= todayDate).length : 1;
+  const daysLeftInMonth = viewingPast ? 0 : (() => { let c=new Date(todayDate), count=0; while(normDay(c)<=normDay(periodEnd)){count++;c=addDays(c,1);} return Math.max(count,1); })();
 
   // Derived figures — all from effectiveData, so these reflect whichever period is being viewed
-  const personalEntries = effectiveData.entries.filter(e => e.type === "personal");
-  const businessEntries = effectiveData.entries.filter(e => e.type === "business");
-  const totalPinned = effectiveData.pins.filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
-  const totalEntries = personalEntries.reduce((s, e) => s + e.amount, 0);
-  const totalSpent = totalPinned + totalEntries;
-  const totalCredits = (effectiveData.credits || []).reduce((s, c) => s + c.amount, 0);
-  const remaining = effectiveData.monthlyBudget - totalSpent + totalCredits;
+  const { personalEntries, businessEntries, totalPinned, totalEntries, totalSpent, totalCredits,
+          remaining, spendableWeekly, dailyFromMonth } = computeBudgetSummary(effectiveData, weeksInPeriod, daysLeftInMonth);
 
   const byMethod = (entries, pins) => {
     const res = {};
@@ -1015,26 +1069,18 @@ function App() {
   };
   const methodTotals = byMethod(personalEntries, effectiveData.pins.filter(p => p.type !== "business" && p.type !== "excluded"));
 
-  const rebalancedBudgets = getRebalancedBudgets(weeks, effectiveData.entries, effectiveData.weeklyBudget, effectiveData.credits);
+  const rebalancedBudgets = getRebalancedBudgets(weeks, effectiveData.entries, spendableWeekly, effectiveData.credits);
 
-  // Daily budgets — only meaningful for the live period; a past period has no "days left".
-  // currentWeekObj is explicitly null while viewing the past so every figure below that
-  // depends on it (already all guarded by `currentWeekObj ? ... : ...`) automatically and
-  // correctly goes inert, rather than comparing today's real date against an archived
-  // period's date range (which would rarely match and would be meaningless if it did).
-  const todayDate = (() => { const d = londonNow(); d.setHours(0,0,0,0); return d; })();
-  const normDay = (d) => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
-  const currentWeekObj = viewingPast ? null : (weeks.find(w => todayDate >= normDay(w.start) && todayDate <= normDay(w.end)) || weeks[0]);
-  const daysLeftInWeek = currentWeekObj ? currentWeekObj.days.filter(d => normDay(d) >= todayDate).length : 1;
-  const daysLeftInMonth = viewingPast ? 0 : (() => { let c=new Date(todayDate), count=0; while(normDay(c)<=normDay(periodEnd)){count++;c=addDays(c,1);} return Math.max(count,1); })();
-  const currentWeekBudget = currentWeekObj ? (rebalancedBudgets[currentWeekObj.index] ?? effectiveData.weeklyBudget) : effectiveData.weeklyBudget;
+  const currentWeekBudget = currentWeekObj ? (rebalancedBudgets[currentWeekObj.index] ?? spendableWeekly) : spendableWeekly;
   const currentWeekSpent = currentWeekObj ? effectiveData.entries.filter(e=>e.weekIndex===currentWeekObj.index&&e.type==="personal").reduce((s,e)=>s+e.amount,0) : 0;
   const currentWeekCredits = currentWeekObj ? (effectiveData.credits || []).filter(c=>c.weekIndex===currentWeekObj.index).reduce((s,c)=>s+c.amount,0) : 0;
-  const weekRemaining = Math.max(currentWeekBudget - currentWeekSpent + currentWeekCredits, 0);
+  // Deliberately unclamped, to match the month figure: once you're over, both per-day cards go
+  // negative together. Flooring one at zero while the other ran negative made the pair disagree
+  // exactly when the overspend mattered most.
+  const weekRemaining = currentWeekBudget - currentWeekSpent + currentWeekCredits;
   const dailyFromWeek = daysLeftInWeek > 0 ? weekRemaining / daysLeftInWeek : 0;
-  const dailyFromMonth = daysLeftInMonth > 0 ? remaining / daysLeftInMonth : 0;
 
-  const remainColor = remaining < 0 ? "#ef4444" : remaining < effectiveData.monthlyBudget * 0.15 ? "#f97316" : "#22c55e";
+  const remainDisplay = remainingDisplay(remaining, effectiveData.monthlyBudget);
 
   // Index of the archive currently being viewed (last entry in history is the most recent past period)
   const mostRecentArchiveIndex = (state.monthHistory && state.monthHistory.length > 0) ? state.monthHistory.length - 1 : null;
@@ -1136,8 +1182,8 @@ function App() {
         </div>
         <div style={{ display:"flex", alignItems:"flex-start", gap:8 }}>
           <div style={S.headerRight}>
-            <div style={{ ...S.remaining, color: remainColor }}>{fmt(remaining)}</div>
-            <div style={S.remainLabel}>left</div>
+            <div style={{ ...S.remaining, color: remainDisplay.color }}>{remainDisplay.figure}</div>
+            <div style={S.remainLabel}>{remainDisplay.label}</div>
           </div>
           <button style={S.headerGearBtn} aria-label="Settings" onClick={() => { setTab("settings"); setHelpNonce(0); }}>⚙</button>
         </div>
@@ -1223,7 +1269,7 @@ function App() {
           )}
 
           {weeks.filter(w => w.index === activeWeek).map(week => (
-            <WeekPanel key={week.index} week={week} weeks={weeks} entries={effectiveData.entries.filter(e => e.weekIndex === week.index)} credits={(effectiveData.credits || []).filter(c => c.weekIndex === week.index)} weeklyBudget={rebalancedBudgets[week.index] ?? effectiveData.weeklyBudget} isLastWeek={week.index === weeks.length} categories={state.categories} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onAddEntry={() => setShowEntryFor(week.index)} onDelEntry={delEntry} onDelCredit={delCredit} onEditEntry={openEditEntry} onEditCredit={openEditCredit} onUpdEntry={updEntry} onUpdCredit={updCredit} onCapture={setLastDeleted} lastDeleted={lastDeleted} onUndo={undoLastDeleted} onSkipPin={viewingPast ? null : skipPinOccurrence} onMovePin={viewingPast ? null : movePinOccurrence} onReorderPin={viewingPast ? null : reorderPinOccurrence} />
+            <WeekPanel key={week.index} week={week} weeks={weeks} entries={effectiveData.entries.filter(e => e.weekIndex === week.index)} credits={(effectiveData.credits || []).filter(c => c.weekIndex === week.index)} weeklyBudget={rebalancedBudgets[week.index] ?? spendableWeekly} isLastWeek={week.index === weeks.length} categories={state.categories} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onAddEntry={() => setShowEntryFor(week.index)} onDelEntry={delEntry} onDelCredit={delCredit} onEditEntry={openEditEntry} onEditCredit={openEditCredit} onUpdEntry={updEntry} onUpdCredit={updCredit} onCapture={setLastDeleted} lastDeleted={lastDeleted} onUndo={undoLastDeleted} onSkipPin={viewingPast ? null : skipPinOccurrence} onMovePin={viewingPast ? null : movePinOccurrence} onReorderPin={viewingPast ? null : reorderPinOccurrence} />
           ))}
         </div>
       )}
@@ -1271,12 +1317,12 @@ function App() {
           .map(m => { const saved = monthSaved(m); return { label: m.monthLabel, saved, budget: m.monthlyBudget, spent: m.monthlyBudget - saved }; })
           .reverse(); // most recent completed month first
         const totalSaved = rows.reduce((s,r)=>s+r.saved, 0);
-        const signed = (n) => (n < 0 ? "-" : "+") + fmt(n);
+        const signed = (n) => (n < 0 ? "" : "+") + fmt(n);
         return (
         <div style={{ padding:"12px 16px" }}>
           <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"20px", marginBottom:12 }}>
             <div style={{ fontSize:11, color:"var(--text-secondary)", marginBottom:4, textTransform:"uppercase" }}>Total saved</div>
-            <div style={{ fontSize:36, fontWeight:800, color: totalSaved >= 0 ? "#22c55e" : "#f87171", marginBottom:8 }}>{totalSaved < 0 ? "-" : ""}{fmt(totalSaved)}</div>
+            <div style={{ fontSize:36, fontWeight:800, color: totalSaved >= 0 ? "#22c55e" : "#f87171", marginBottom:8 }}>{fmt(totalSaved)}</div>
             <div style={{ fontSize:12, color:"var(--text-secondary)", lineHeight:1.5 }}>Leftover budget carried over from completed months. {state.monthLabel}'s leftover is added to this once the month ends.</div>
           </div>
 
@@ -1751,9 +1797,10 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
 
   // A day's spend: personal only, matching the gross figure the week header shows (work is
   // reimbursed, the "not yours" half of a split isn't yours, and credits are money in). Deliberately
-  // NOT netted against credits — fmt() prints absolute values, so a day whose credits outweighed its
-  // spend would render its negative total as a positive one. Days with no personal spend total zero
-  // and the heading simply omits the figure rather than showing £0.00 against a lone credit row.
+  // NOT netted against credits — a day heading is a "what went out today" figure, and a refund
+  // landing on the same day shouldn't quietly cancel the spend it sits beside; the credit rows are
+  // listed under the heading anyway. Days with no personal spend total zero and the heading simply
+  // omits the figure rather than showing £0.00 against a lone credit row.
   function dayTotal(list, day) {
     return list.filter(u => (u.day || null) === (day || null)).reduce((s, u) => {
       if (u.kind === "credit") return s;
@@ -2935,6 +2982,8 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
   const [showAllSpends, setShowAllSpends] = useState(false); // full "Largest spends" ranking open?
   const [waterfallDetail, setWaterfallDetail] = useState(null); // "business" | "split" | "credits" | null — drill-down from the Gross vs net card
 
+  const heroRemaining = remainingDisplay(remaining, state.monthlyBudget);
+
   // Gross (as charged) per card = everything that hit each card — all entries + all pins.
   // This matches the card's own statement (Amex app etc.), since work and full split amounts
   // are charged in full and reimbursed separately. Credits are income, not card charges, and
@@ -3087,7 +3136,10 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
       {/* Hero: remaining */}
       <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"18px", marginBottom:12 }}>
         <div style={{ fontSize:11, color:"var(--text-secondary)", marginBottom:6, textTransform:"uppercase" }}>Month overview</div>
-        <div style={{ fontSize:32, fontWeight:800, color: remaining<0?"#ef4444":remaining<state.monthlyBudget*0.15?"#f97316":"#22c55e", marginBottom:12 }}>{fmt(remaining)}</div>
+        {/* The word matters as much as the figure here: without it the hero would lean entirely on
+            a minus sign and its colour to say which side of the budget you're on. */}
+        <div style={{ fontSize:32, fontWeight:800, color: heroRemaining.color, lineHeight:1 }}>{heroRemaining.figure}</div>
+        <div style={{ fontSize:11, color:"var(--text-secondary)", textTransform:"uppercase", marginTop:4, marginBottom:12 }}>{heroRemaining.label}</div>
         <div style={{ fontSize:12, color:"var(--text-body)" }}>{fmt(totalSpent)} spent of {fmt(state.monthlyBudget)}</div>
       </div>
 
@@ -3582,7 +3634,10 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
     const mn = (id) => METHOD_NAME[id] || id; // resolve a stored method id to its display name
     const lines = [];
     lines.push(`SpendTracker — ${state.monthLabel}`);
-    lines.push(`${fmt(totalSpent)} spent · ${fmt(remaining)} left of ${fmt(state.monthlyBudget)}`);
+    // "£70.00 over of £100.00" doesn't parse, so the budget moves next to what was spent and the
+    // headline figure trails with its own word: "... · £70.00 over" / "... · £50.00 left".
+    const rd = remainingDisplay(remaining, state.monthlyBudget);
+    lines.push(`${fmt(totalSpent)} spent of ${fmt(state.monthlyBudget)} · ${rd.figure} ${rd.label}`);
     if (totalCredits > 0) lines.push(`Credits: +${fmt(totalCredits)}`);
     lines.push("");
 
@@ -4081,7 +4136,7 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
                   {map.descCol == null ? "—" : String(r[map.descCol] || "").trim()}
                 </span>
                 <span style={{ color: amt > 0 ? "var(--text-heading)" : "#22c55e", fontWeight:600, flexShrink:0 }}>
-                  {amt > 0 ? "−" : "+"}{fmt(amt)}
+                  {amt > 0 ? "−" : "+"}{fmtAbs(amt)}
                 </span>
               </div>
             );
@@ -4316,7 +4371,7 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
                     </div>
                   </div>
                   <div style={{ fontSize:14, fontWeight:700, flexShrink:0, color: c.direction === "credit" ? acc("#22c55e") : "var(--text-heading)" }}>
-                    {c.direction === "credit" ? "+" : ""}{fmt(c.amount)}
+                    {c.direction === "credit" ? "+" : ""}{fmtAbs(c.amount)}
                   </div>
                 </div>
               );

@@ -12,12 +12,13 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 const EXPORTS = [
-  "genId", "fmt", "pad2", "dayKey", "dayKeyToDate", "dayKeyLabel", "addDays",
+  "genId", "fmt", "fmtAbs", "pad2", "dayKey", "dayKeyToDate", "dayKeyLabel", "addDays",
   "lastWorkingDay", "paydayFor", "periodLabelFor", "periodBounds", "buildWeeks",
   "weekIndexForDay", "todayWeekIndex", "groupByWeek", "effOrder",
   "isScheduledPin", "occKeyOf", "makePinEntry", "expandScheduledPins",
   "defaultState", "normalizeState", "reducer", "rawReducer",
   "reconcilePeriods", "reconcileCandidates", "statementFor", "statementLabel",
+  "getRebalancedBudgets", "computeBudgetSummary", "remainingDisplay",
   "DEFAULT_METHODS", "DEFAULT_CATEGORIES",
 ];
 
