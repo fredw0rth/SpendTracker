@@ -171,11 +171,12 @@ function load() { return (window.SpendVault && window.SpendVault.getState) ? win
 function save(s) { if (window.SpendVault && window.SpendVault.save)
     window.SpendVault.save(s); }
 // Money. fmt is sign-correct: a negative renders with a leading minus, because a figure that can
-// go negative (what's left of the budget, the per-day allowance once you're over) has to read as
-// negative — printing its magnitude made overspending look like the budget growing.
-// fmtAbs is the magnitude, for the few places that pick their own sign glyph from the direction of
-// the row and would otherwise double up. Testing n < 0 rather than formatting n keeps fmt(-0)
-// rendering as "£0.00".
+// go negative (the per-day allowance once you're over, a month's leftover on the Savings ledger)
+// has to read as negative — printing its magnitude made overspending look like the budget growing.
+// Testing n < 0 rather than formatting n keeps fmt(-0) rendering as "£0.00".
+// fmtAbs is the magnitude, for the places that carry the sense in their own words or glyph instead:
+// the reconcile rows, which pick +/− from the direction of the row, and the headline "left"/"over"
+// figure, which says it in a word — see remainingDisplay.
 const fmtAbs = (n) => "£" + Number(Math.abs(n)).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmt = (n) => (n < 0 ? "-" : "") + fmtAbs(n);
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -919,6 +920,22 @@ function getRebalancedBudgets(weeks, entries, weeklyBudget, credits) {
     });
     return budgets;
 }
+// The month's headline figure — the magnitude, the word that gives it its sense, and its colour,
+// returned together so the three can never disagree. "-£70.00 left" was true but read awkwardly;
+// "£70.00 over" says the same thing in the way you'd say it out loud, and WeekPanel's budget bar
+// already words an overspend exactly this way.
+// The value is rounded to pence BEFORE the word and the colour are picked: a rounding crumb of
+// -0.004 formats as "£0.00", and £0.00 has to read "left", never "over" in red.
+function remainingDisplay(remaining, monthlyBudget) {
+    const pence = Math.round(remaining * 100);
+    const over = pence < 0;
+    return {
+        over,
+        figure: fmtAbs(pence / 100),
+        label: over ? "over" : "left",
+        color: over ? "#ef4444" : remaining < monthlyBudget * 0.15 ? "#f97316" : "#22c55e",
+    };
+}
 // The period's money figures, from effectiveData alone so they reflect whichever period is being
 // viewed. Pure and at module scope deliberately: this is the arithmetic behind the header and both
 // per-day cards, and it needs to be reachable from the tests rather than trapped in the component.
@@ -1098,7 +1115,7 @@ function App() {
     // exactly when the overspend mattered most.
     const weekRemaining = currentWeekBudget - currentWeekSpent + currentWeekCredits;
     const dailyFromWeek = daysLeftInWeek > 0 ? weekRemaining / daysLeftInWeek : 0;
-    const remainColor = remaining < 0 ? "#ef4444" : remaining < effectiveData.monthlyBudget * 0.15 ? "#f97316" : "#22c55e";
+    const remainDisplay = remainingDisplay(remaining, effectiveData.monthlyBudget);
     // Index of the archive currently being viewed (last entry in history is the most recent past period)
     const mostRecentArchiveIndex = (state.monthHistory && state.monthHistory.length > 0) ? state.monthHistory.length - 1 : null;
     // Mutation routers: while viewing a past period, edits write back into that archive slot
@@ -1221,8 +1238,8 @@ function App() {
                     viewingPast ? " · past period" : "")),
             React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 8 } },
                 React.createElement("div", { style: S.headerRight },
-                    React.createElement("div", { style: { ...S.remaining, color: remainColor } }, fmt(remaining)),
-                    React.createElement("div", { style: S.remainLabel }, "left")),
+                    React.createElement("div", { style: { ...S.remaining, color: remainDisplay.color } }, remainDisplay.figure),
+                    React.createElement("div", { style: S.remainLabel }, remainDisplay.label)),
                 React.createElement("button", { style: S.headerGearBtn, "aria-label": "Settings", onClick: () => { setTab("settings"); setHelpNonce(0); } }, "\u2699"))),
         React.createElement("button", { style: S.helpFab, "aria-label": "Help", onClick: () => { setTab("settings"); setHelpNonce(n => n + 1); } }, "?"),
         viewingPast && (React.createElement("div", { style: S.pastBanner },
@@ -2700,6 +2717,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     const [labelDetail, setLabelDetail] = useState(null); // the label group being drilled into, or null
     const [showAllSpends, setShowAllSpends] = useState(false); // full "Largest spends" ranking open?
     const [waterfallDetail, setWaterfallDetail] = useState(null); // "business" | "split" | "credits" | null — drill-down from the Gross vs net card
+    const heroRemaining = remainingDisplay(remaining, state.monthlyBudget);
     // Gross (as charged) per card = everything that hit each card — all entries + all pins.
     // This matches the card's own statement (Amex app etc.), since work and full split amounts
     // are charged in full and reimbursed separately. Credits are income, not card charges, and
@@ -2838,7 +2856,8 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         }))),
         React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "18px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6, textTransform: "uppercase" } }, "Month overview"),
-            React.createElement("div", { style: { fontSize: 32, fontWeight: 800, color: remaining < 0 ? "#ef4444" : remaining < state.monthlyBudget * 0.15 ? "#f97316" : "#22c55e", marginBottom: 12 } }, fmt(remaining)),
+            React.createElement("div", { style: { fontSize: 32, fontWeight: 800, color: heroRemaining.color, lineHeight: 1 } }, heroRemaining.figure),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", textTransform: "uppercase", marginTop: 4, marginBottom: 12 } }, heroRemaining.label),
             React.createElement("div", { style: { fontSize: 12, color: "var(--text-body)" } },
                 fmt(totalSpent),
                 " spent of ",
@@ -3193,7 +3212,10 @@ function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, t
         const mn = (id) => METHOD_NAME[id] || id; // resolve a stored method id to its display name
         const lines = [];
         lines.push(`SpendTracker — ${state.monthLabel}`);
-        lines.push(`${fmt(totalSpent)} spent · ${fmt(remaining)} left of ${fmt(state.monthlyBudget)}`);
+        // "£70.00 over of £100.00" doesn't parse, so the budget moves next to what was spent and the
+        // headline figure trails with its own word: "... · £70.00 over" / "... · £50.00 left".
+        const rd = remainingDisplay(remaining, state.monthlyBudget);
+        lines.push(`${fmt(totalSpent)} spent of ${fmt(state.monthlyBudget)} · ${rd.figure} ${rd.label}`);
         if (totalCredits > 0)
             lines.push(`Credits: +${fmt(totalCredits)}`);
         lines.push("");

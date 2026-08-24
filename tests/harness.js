@@ -18,7 +18,7 @@ const EXPORTS = [
   "isScheduledPin", "occKeyOf", "makePinEntry", "expandScheduledPins",
   "defaultState", "normalizeState", "reducer", "rawReducer",
   "reconcilePeriods", "reconcileCandidates", "statementFor", "statementLabel",
-  "getRebalancedBudgets", "computeBudgetSummary",
+  "getRebalancedBudgets", "computeBudgetSummary", "remainingDisplay",
   "DEFAULT_METHODS", "DEFAULT_CATEGORIES",
 ];
 

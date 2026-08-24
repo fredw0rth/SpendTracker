@@ -165,3 +165,78 @@ test("a week's budget never goes negative, however large the earlier overspend",
     WEEKS, [entry({ amount: 100000, weekIndex: 1 })], 700, []);
   WEEKS.forEach(w => assert.ok(budgets[w.index] >= 0, `week ${w.index} floored at 0`));
 });
+
+// ─── The headline "left"/"over" figure ────────────────────────────────────────
+// The header and the Summary hero used to render "-£70.00" above the fixed word "left".
+// remainingDisplay swaps the word instead of the sign, and hands back the figure, the word
+// and the colour together so they cannot drift apart.
+
+const RED = "#ef4444", AMBER = "#f97316", GREEN = "#22c55e";
+
+test("under budget reads as money left; over budget reads as money over", () => {
+  const under = A.remainingDisplay(30, 100);
+  assert.deepEqual({ figure: under.figure, label: under.label }, { figure: "£30.00", label: "left" });
+
+  const over = A.remainingDisplay(-70, 100);
+  assert.deepEqual({ figure: over.figure, label: over.label }, { figure: "£70.00", label: "over" });
+});
+
+test("the headline figure never carries a minus, whatever the input", () => {
+  for (const n of [-0.006, -1, -70, -1234.56, -1e6, 0, 0.5, 70, 1234.56]) {
+    assert.ok(!A.remainingDisplay(n, 100).figure.includes("-"),
+      `remainingDisplay(${n}) produced a signed figure: ${A.remainingDisplay(n, 100).figure}`);
+  }
+});
+
+test("the word and the colour always agree — 'over' if and only if red", () => {
+  for (const n of [-1000, -70, -0.006, 0, 0.5, 15, 70, 1000]) {
+    const d = A.remainingDisplay(n, 100);
+    assert.equal(d.label === "over", d.color === RED, `disagreement at ${n}: ${d.label}/${d.color}`);
+    assert.equal(d.over, d.label === "over", `over flag out of step at ${n}`);
+  }
+});
+
+test("a fraction of a penny under zero reads '£0.00 left', not '£0.00 over' in red", () => {
+  // Rounding to pence BEFORE choosing the word is what prevents the contradiction.
+  const crumb = A.remainingDisplay(-0.004, 100);
+  assert.equal(crumb.figure, "£0.00");
+  assert.equal(crumb.label, "left");
+  assert.notEqual(crumb.color, RED);
+
+  // A penny over really is over.
+  const penny = A.remainingDisplay(-0.006, 100);
+  assert.equal(penny.figure, "£0.01");
+  assert.equal(penny.label, "over");
+  assert.equal(penny.color, RED);
+});
+
+test("negative zero reads as left, matching fmt(-0)", () => {
+  assert.equal(A.remainingDisplay(-0, 100).label, "left");
+  assert.equal(A.fmt(-0), "£0.00");
+});
+
+test("exactly nothing left is still 'left', and sits in the warning band", () => {
+  const d = A.remainingDisplay(0, 100);
+  assert.deepEqual({ figure: d.figure, label: d.label, color: d.color },
+    { figure: "£0.00", label: "left", color: AMBER });
+});
+
+test("the amber warning band starts at 15% of the monthly budget", () => {
+  assert.equal(A.remainingDisplay(15.01, 100).color, GREEN, "just above the band");
+  assert.equal(A.remainingDisplay(14.99, 100).color, AMBER, "just inside it");
+});
+
+test("the thousands separator survives the magnitude", () => {
+  assert.equal(A.remainingDisplay(-1234.56, 5000).figure, "£1,234.56");
+  assert.equal(A.remainingDisplay(1234.56, 5000).figure, "£1,234.56");
+});
+
+test("the per-day rate keeps its minus — only the headline figure swaps the word", () => {
+  // Deliberately two conventions: a stock figure says "over" in words, a rate stays signed,
+  // because "£10.00" on a per-day card is exactly the misreading this whole fix removed.
+  const s = A.computeBudgetSummary(
+    data({ entries: [entry({ amount: 1070 })] }), WEEKS_IN_PERIOD, 7);
+  assert.equal(A.fmt(s.dailyFromMonth), "-£10.00", "per-day stays signed");
+  assert.equal(A.remainingDisplay(s.remaining, 1000).figure, "£70.00", "headline drops the sign");
+  assert.equal(A.remainingDisplay(s.remaining, 1000).label, "over", "...and says it in a word");
+});
