@@ -112,10 +112,35 @@ test("pin ops ignore a pin id that isn't there", () => {
 });
 
 test("overrides survive a rollover into the archive snapshot", () => {
-  const s = { ...st(), pins: [monthlyPin({ amounts: { k: 950 }, recons: { k: "abc" } })] };
+  // A real occurrence key from inside the period, not a placeholder: a rollover only archives a
+  // period something was actually recorded against, and an override is matched by its date.
+  const k = occurrences(monthlyPin())[0].occKey;
+  const s = { ...st(), pins: [monthlyPin({ amounts: { [k]: 950 }, recons: { [k]: "abc" } })] };
   const rolled = A.reducer(s, { type: "MONTH_ROLLOVER", newYear: 2026, newMonth: 8, newLabel: "Sep 2026" });
-  assert.deepEqual(rolled.monthHistory[0].pins[0].amounts, { k: 950 });
-  assert.deepEqual(rolled.pins[0].amounts, { k: 950 }, "pins are recurring, so they carry forward too");
+  assert.deepEqual(rolled.monthHistory[0].pins[0].amounts, { [k]: 950 });
+  assert.deepEqual(rolled.monthHistory[0].pins[0].recons, { [k]: "abc" });
+  assert.deepEqual(rolled.pins[0].amounts, { [k]: 950 }, "pins are recurring, so they carry forward too");
+});
+
+test("a period whose only record is a pin override is still archived", () => {
+  // "Rent was £950 that month" is hand-entered fact. Nothing else logged that period must not be
+  // enough to throw it away.
+  const k = occurrences(monthlyPin())[0].occKey;
+  for (const override of [{ amounts: { [k]: 950 } }, { skips: [k] }, { recons: { [k]: "abc" } },
+                          { moves: { [k]: 2 } }, { orders: { [k]: 5 } }]) {
+    const s = { ...st(), entries: [], credits: [], pins: [monthlyPin(override)] };
+    const rolled = A.reducer(s, { type: "MONTH_ROLLOVER", newYear: 2026, newMonth: 8, newLabel: "Sep 2026" });
+    assert.equal(rolled.monthHistory.length, 1,
+      "a period carrying " + Object.keys(override)[0] + " should be archived");
+  }
+});
+
+test("an override dated OUTSIDE the period does not make it worth archiving", () => {
+  // The override maps ride forward on the pin forever, so a stale key from an earlier period
+  // must not keep every later empty period alive — that would restore the eviction bug.
+  const s = { ...st(), entries: [], credits: [], pins: [monthlyPin({ amounts: { "2019-0-1": 950 } })] };
+  const rolled = A.reducer(s, { type: "MONTH_ROLLOVER", newYear: 2026, newMonth: 8, newLabel: "Sep 2026" });
+  assert.equal(rolled.monthHistory.length, 0);
 });
 
 test("a pin fix can be applied to an archived period", () => {

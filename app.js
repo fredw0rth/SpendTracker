@@ -737,6 +737,43 @@ function applyReconPinOp(list, op) {
         return p;
     });
 }
+// Did anything actually get recorded against this period? Decides whether a rollover archives it
+// (see MONTH_ROLLOVER) — a period nobody touched is dropped rather than stored, so that returning
+// after a long absence cannot bury real history under a run of empty months.
+//
+// Entries and credits are the obvious signal: they exist only because someone logged them.
+//
+// Pin overrides are the subtle one. A per-occurrence amount, skip, move, reorder or reconciliation
+// stamp is just as much hand-entered fact as an entry — "rent was £950 that month" is exactly the
+// kind of thing you would be furious to lose — so a period carrying one is worth keeping even with
+// nothing else in it. They have to be matched BY DATE, though, not by mere presence: the override
+// maps live on the pin, and pins ride forward through every rollover, so asking "does this pin have
+// overrides at all" would answer yes forever after the first one and archive every empty month
+// again. Only a key naming a day inside THIS period counts.
+//
+// The pin's own standing amount deliberately does not count. It is a setting, not a record: it
+// carries forward untouched, is identical in every untracked period, and its cost stays fully
+// reconstructible from the live pin afterwards.
+function periodHasRecordedActivity(s) {
+    if ((s.entries || []).length > 0)
+        return true;
+    if ((s.credits || []).length > 0)
+        return true;
+    const pins = s.pins || [];
+    if (pins.length === 0)
+        return false;
+    const { start, end } = periodBounds(s.payYear, s.payMonth, s.paydayKind || "last-working", s.paydayDay);
+    const daysInPeriod = new Set();
+    for (let d = new Date(start); d <= end; d = addDays(d, 1))
+        daysInPeriod.add(occKeyOf(d));
+    return pins.some(p => [
+        ...(p.skips || []),
+        ...Object.keys(p.moves || {}),
+        ...Object.keys(p.orders || {}),
+        ...Object.keys(p.amounts || {}),
+        ...Object.keys(p.recons || {}),
+    ].some(k => daysInPeriod.has(k)));
+}
 function rawReducer(s, a) {
     switch (a.type) {
         case "ADD_ENTRY": return { ...s, entries: [a.entry, ...s.entries], lastMethod: (a.entry.type !== "credit" && a.entry.type !== "excluded" && a.entry.method) ? a.entry.method : s.lastMethod };
@@ -764,7 +801,23 @@ function rawReducer(s, a) {
                 paydayKind: s.paydayKind,
                 paydayDay: s.paydayDay,
             };
-            const newHistory = [...(s.monthHistory || []), archive].slice(-12);
+            // A period nobody logged anything in is not archived at all. This matters because the
+            // rollover effect catches up ONE month per dispatch: coming back after a long absence
+            // rolls once per elapsed month, and each of those months would otherwise archive an
+            // empty period. Twelve of them would push every real archive past the .slice(-12) and
+            // silently destroy the history — a 13-month gap was enough to lose everything.
+            //
+            // periodHasRecordedActivity decides what counts as "touched" — see its own note for why a
+            // standing pin does not, but a per-occurrence override on one does. A skipped period is
+            // also correctly absent from the Savings total, which would otherwise credit
+            // `budget − pins` as "saved" for a month nobody tracked.
+            //
+            // Nothing indexes monthHistory by calendar position — the period stepper, owedItems and
+            // the EDIT_PAST_* cases all address it by array index — so a gap in the run of months is
+            // safe. The 12-archive cap still trims genuinely old periods as it always did.
+            const newHistory = periodHasRecordedActivity(s)
+                ? [...(s.monthHistory || []), archive].slice(-12)
+                : (s.monthHistory || []);
             // Spread `s` — do NOT hand-list the fields to carry over. This case previously built a
             // fresh object naming each passthrough, and silently dropped every field added to state
             // afterwards (categories, categoryPrompt, descriptionPrompt, helpHintSeen), which crashed
@@ -1314,12 +1367,12 @@ function App() {
     // apply live regardless of which period is being viewed.
     return (React.createElement("div", { style: S.root },
         React.createElement("div", { style: S.header },
-            React.createElement("div", null,
+            React.createElement("div", { style: S.headerLeft },
                 React.createElement("div", { style: S.appTitle }, "SpendTracker"),
                 React.createElement("div", { style: S.appSub },
                     effectiveData.monthLabel,
                     viewingPast ? " · past period" : "")),
-            React.createElement("div", { style: { display: "flex", alignItems: "flex-start", gap: 8 } },
+            React.createElement("div", { style: S.headerRightGroup },
                 React.createElement("div", { style: S.headerRight },
                     React.createElement("div", { style: { ...S.remaining, color: remainDisplay.color } }, remainDisplay.figure),
                     React.createElement("div", { style: S.remainLabel }, remainDisplay.label)),
@@ -3972,12 +4025,23 @@ function Modal({ children, onClose, title }) {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const S = {
     root: { fontFamily: "'Inter', system-ui, sans-serif", background: "var(--bg)", minHeight: "100vh", color: "var(--text-primary)", maxWidth: 480, margin: "0 auto", paddingBottom: 40 },
-    header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "20px 16px 12px", borderBottom: "1px solid var(--border)" },
-    appTitle: { fontSize: 24, fontWeight: 800, letterSpacing: "-1px", color: "var(--text-heading)" },
-    appSub: { fontSize: 12, color: "var(--text-secondary)", marginTop: 2 },
+    // gap is what guarantees the title and the money figure can never sit flush against each other.
+    // justifyContent alone only spreads SURPLUS space, so as soon as the two sides filled the row
+    // they rendered touching — reading as one word, "SpendTracker£1,174.50".
+    header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "20px 16px 12px", borderBottom: "1px solid var(--border)" },
+    headerLeft: { minWidth: 0 },
+    // The title and month both ellipsis rather than wrap: a second line here would push the tabs
+    // down and reflow the whole page on a long month label.
+    // 22 rather than 24: at 24 the wordmark needs 172px and a 390-wide phone showing a four-figure
+    // amount only has 157 to give it, so the everyday header sat permanently ellipsised. Two points
+    // smaller is imperceptible next to the figure and buys back the whole common case; genuinely
+    // tight combinations (a narrow phone AND a five-figure amount) still truncate, by design.
+    appTitle: { fontSize: 22, fontWeight: 800, letterSpacing: "-1px", color: "var(--text-heading)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    appSub: { fontSize: 12, color: "var(--text-secondary)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+    headerRightGroup: { display: "flex", alignItems: "flex-start", gap: 8, flexShrink: 0 },
     headerRight: { textAlign: "right" },
     headerGearBtn: { background: "var(--surface)", border: "1px solid var(--border-strong)", color: "var(--text-secondary)", borderRadius: 8, width: 32, height: 32, fontSize: 16, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, padding: 0 },
-    remaining: { fontSize: 28, fontWeight: 800, letterSpacing: "-1px", lineHeight: 1 },
+    remaining: { fontSize: 28, fontWeight: 800, letterSpacing: "-1px", lineHeight: 1, whiteSpace: "nowrap" },
     remainLabel: { fontSize: 10, color: "var(--text-secondary)", textTransform: "uppercase" },
     pastBanner: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "var(--surface-2)", borderBottom: "1px solid #f59e0b", padding: "8px 16px", fontSize: 11, color: "var(--text-body)" },
     pastBannerBtn: { background: "#f59e0b", border: "none", borderRadius: 6, color: "var(--on-accent)", padding: "4px 10px", fontSize: 11, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" },
