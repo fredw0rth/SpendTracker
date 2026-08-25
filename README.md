@@ -60,7 +60,7 @@ of it is downloaded by your phone.
 
 The tests cover the statement reconciliation (reading the CSV, matching rows against what you've
 logged) and the parts of the app it touches — pay periods, week allocation, the reducer, and
-pinned costs. They load the **compiled** `app.js`, deliberately: if `app.jsx` is edited without
+pinned costs — plus the export/import round trip (`tests/export.test.js`). They load the **compiled** `app.js`, deliberately: if `app.jsx` is edited without
 regenerating `app.js`, the tests notice rather than the change silently doing nothing on your phone.
 
 ## How future updates actually work
@@ -130,9 +130,10 @@ Three things to genuinely understand:
 3. **What this protects and what it doesn't.** If Safari's storage were copied off
    the phone, or the phone is shared/unlocked around others, your numbers are
    ciphertext behind a lock screen. It does *not* protect a session you've already
-   unlocked and left open — so there's a 🔒 button (bottom-right) to re-lock
-   instantly, and the app **auto-locks itself** after about 2 minutes in the
-   background (tune `AUTO_LOCK_MS` in `crypto.js`).
+   unlocked and left open — for that, the app **auto-locks itself** after about 2
+   minutes in the background (tune `AUTO_LOCK_MS` in `crypto.js`). There is no
+   manual "lock now" control in the UI; `SpendVault.requestLock()` exists in
+   `crypto.js` and nothing currently calls it.
 
 The monthly and weekly budgets are **linked** — set either one (in first-run setup
 or later in Settings) and the other is worked out from the number of weeks in your
@@ -165,6 +166,29 @@ yourself:
   ("Been here before? Import a previous account") or in **Settings → Import account**.
   Importing **replaces** whatever's on that device with the backup, then you unlock it
   with that account's passphrase. Export the current one first if you might want it back.
+
+There's a second route that carries the same data without the encryption, for when the
+receiving device already has its own passphrase set up: the **data file** from
+Summary → **↗ Export** → *Data file*, imported at **Settings → Import data**. It swaps
+the data only, so the device keeps its own passphrase, recovery code and Face ID.
+Being unencrypted, it's readable by anyone who opens it — the encrypted account backup
+is the one to store or send.
+
+## Getting your numbers back out
+
+Summary → **↗ Export** offers three formats off one sheet, all built by pure functions in
+`app.jsx` (`buildReportText`, `buildLedgerCSV`, `buildDataExport`) so `tests/export.test.js`
+can check them without a browser:
+
+| Format | What it is |
+|---|---|
+| **Report** (`.txt`) | The period written out for a human — every spend grouped by day with its category, card and split/work marking, the gross-vs-net waterfall, totals by category and card, largest spends, what you're owed, and savings to date. |
+| **Spreadsheet** (`.csv`) | One row per money movement across *every* period, 26 columns wide. Scheduled pins appear as the occurrences they became; both halves of a split carry the full amount the card was charged. Opens in Excel or Numbers. A view of the data, not the import format. |
+| **Data file** (`.json`) | The whole account, losslessly — entries with their `splitGroupId`/`category`/`settledOn`, pins with their schedules and per-occurrence overrides, every archived period with its own budget and payday snapshot, plus categories, cards and settings. `parseDataExport` reads it back and **Settings → Import data** installs it. |
+
+Saved bank statements are deliberately left out of the data file: they're a bulky,
+re-uploadable, device-local cache, so `REPLACE_STATE` keeps whatever the receiving device
+already has rather than wiping it.
 
 ## Checking your logging against a real statement
 
