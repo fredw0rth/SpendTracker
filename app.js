@@ -895,23 +895,39 @@ function rawReducer(s, a) {
             return { ...s, entries, credits, pins, monthHistory: historyTouched ? nextHistory : history };
         }
         case "RESET": return { ...defaultState(), ...a.keep };
+        // Wholesale replacement from an imported data export (see parseDataExport). Spreading
+        // defaultState() first guarantees every key exists even for a hand-edited file, and `reducer`
+        // normalises the result on the way out, so anything still missing is backfilled there.
+        // `statements` are deliberately absent from the export — they're a bulky, re-uploadable,
+        // device-local cache — so this device keeps its own rather than losing them to the import.
+        case "REPLACE_STATE": return { ...defaultState(), ...a.state, statements: s.statements || [] };
         default: return s;
     }
 }
 // ─── Help content: plain-English explainers, shown in the Settings "How it works" card ──
+// Ordered the way you meet the app: how the money is worked out, how you log it, how you review
+// it, then what happens to your data. Keep this honest — it is the only documentation inside the
+// app, and a topic describing a control that doesn't exist is worse than no topic at all.
 const HELP_TOPICS = [
     ["The pay period", "SpendTracker follows your pay cycle, not the calendar month. A period runs from your last payday up to the day before your next one, and switches over automatically the moment payday arrives. Set your payday rule in Settings — last working day, last Friday, last calendar day, or a fixed date. The month label at the top names the period you're currently spending in."],
-    ["Weekly budgets & rollover", "Your monthly budget is split into weekly allowances. If you go over in a week, the difference is shared evenly across the weeks you have left, so a single big week doesn't all land on the next one. Overspend in the final week has nowhere left to spread, so it just shows as over."],
+    ["Weekly budgets & rollover", "Your monthly budget is split into weekly allowances. If you go over in a week, the difference is spread across the days of every week you have left, so a single big week doesn't all land on the next one and a short week gives up proportionally less than a full one. Overspend in the final week has nowhere left to spread, so it just shows as over. Fixed costs come off the weekly rate first, which is what keeps the weeks adding up to the same pot your remaining figure is measured against."],
     ["The “per day” figures", "On the current week you'll see two per-day numbers: how much you can spend each remaining day to stay inside this week, and the same across the rest of the whole period. They turn red as they get tight."],
-    ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. Tap any logged item to edit it."],
-    ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't."],
-    ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Monthly or Weekly frequency and it's dropped straight into the right week of the log, counting against that week. Mark one Work or “Split” to keep it out of your personal total."],
-    ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Ticking only records that it happened \u2014 your remaining figure will not move, because the money never came off it. For the same reason, do NOT also log a credit: that would hand you back budget you never spent. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
-    ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover."],
-    ["Summary & export", "The Summary tab breaks the period down: spend vs budget, personal vs reimbursable work spend, a per-card breakdown you can tap into, your biggest spends, and where spending came from. You can export it all as text."],
-    ["Going back to a past period", "In Settings, “Go back to…” lets you revisit a finished period. Its figures reflect that period's own budget, and any edits you make there apply only to it — your current period is left untouched."],
-    ["Your data & security", "Everything is encrypted on your device with your passphrase and never leaves your phone. Your recovery code is the only way back in if you forget the passphrase, so keep it somewhere safe. Face ID unlocks where supported, the app auto-locks after a couple of minutes in the background, and Lock now (at the bottom of Settings) locks it instantly."],
-    ["Moving to another device", "Each browser keeps its own separate data. Use Export account (below) to get an encrypted backup, then import it in another browser or on a new phone to carry everything across."],
+    ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. You can log to any day of the period, not just today — the day picker sits above the keypad, and ‹ › step between weeks. Add a description if you want one, and you'll be asked for a category after saving. Tap any logged item to edit it. The ＋ button at the bottom-left logs to today from any tab."],
+    ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't. Both halves stay linked, so tapping either opens the whole split in one editor, and reconciliation treats it as the single card transaction it really was."],
+    ["Spending categories", "Categories say what a spend was for — Groceries, Transport, and so on. Pick one when you log, or from the prompt straight after saving. Only personal spending carries a category, since that's what's being budgeted. In Edit mode on the week log you can categorise a run of spends at once. The Summary tab totals your spending by category, and you can tap into any of them. Make your own in Settings → Customisation: name, colour and icon, up to 24, drag to reorder."],
+    ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Daily, Weekly or Monthly frequency and it's dropped straight into the right day of the log, counting against that week; leave it as One-off and it's a flat cost for the whole period instead. Any single occurrence can be skipped, moved to another week, reordered, or given a different amount without disturbing the others — useful when one month's bill comes in higher. Mark a pin Work or Split to keep it out of your personal total."],
+    ["Editing and tidying a week", "Tap Edit on a week to select several items at once and delete them, move them to another week, or give them all a category. Outside Edit mode you can drag an item to reorder it, and dragging it across a day heading files it under that day. The card chips at the top filter the week down to one card. Deleted something by mistake? Undo appears straight after, and it puts back both halves of a split or a skipped pinned cost."],
+    ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. For the same reason, do NOT also log a credit: that would hand you back budget you never spent. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
+    ["Gross vs net", "Gross is what actually hit your cards — it's the figure your bank statement shows, because work expenses and the full amount of a split are charged in full and paid back separately. Net is the part that was genuinely yours, and that's what your budget measures. Work plus the not-yours half of splits makes up the reimbursable difference between them. Credits sit below that sum rather than inside it: money coming in isn't spending undone. The Summary tab shows all of it, and each line opens the transactions behind it."],
+    ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover, worked out against that period's own budget rather than today's."],
+    ["The Summary tab", "The period at a glance: what's left, gross vs net, a per-card breakdown that matches each card's own statement, spending by category, a week-by-week breakdown you can tap to jump to, your largest spends (individually or added up by name), and how much of your spending came from pinned costs rather than logged ones. Almost everything on it opens the transactions behind it."],
+    ["Checking against your statement", "The Summary tab has a ⇄ Reconcile button. Export the CSV from your bank or card provider, upload it there, and SpendTracker cross-references it with everything you've logged — across the current period and finished ones, since a card statement rarely lines up with a payday. It separates what's on the statement but never logged, amounts that don't match, things you logged that aren't on the statement, and everything that lines up. Matching goes on date and amount, not on the name, because your note to yourself (“Lunch”) never matches what your bank writes. Card payments, transfers and salary are recognised and skipped. Nothing is changed until you save it, the file never leaves your phone, and each card's statement is remembered so you don't re-upload it."],
+    ["Going back to a past period", "The ◀ ▶ arrows beside the month name on the Week tab step back through finished periods, and Settings has a “Go back to…” button for the most recent one. Their figures reflect that period's own budget and payday rule, and any edits you make there apply only to it — your current period is left untouched."],
+    ["Exporting your data", "Summary → ↗ Export gives you three things. The Report is the period written out in full — every spend by day, the gross/net split, categories, cards and what you're owed. The Spreadsheet is every transaction across every period as one row each, for Excel or Numbers. The Data file is your whole account, and it's the one that imports back into SpendTracker (Settings → Import data) to rebuild everything: periods, pinned costs, categories, cards, budgets and settings. The data file is not encrypted, so anyone who opens it can read it — for a copy that's safe to store or send, use Export account instead."],
+    ["Making it yours", "Settings → Customisation is where the app bends to you. Payment types are yours to name and colour — cards, cash, whatever you actually use, up to 12. Categories work the same way, with an icon each. And there's a light theme as well as the dark one. Anything currently in use is protected from deletion, so you can't strand a logged spend."],
+    ["Your data & security", "Everything is encrypted on your device with your passphrase and never leaves your phone. Your recovery code is the only way back in if you forget the passphrase, so keep it somewhere safe. Face ID unlocks where supported, and the app locks itself again after a couple of minutes in the background."],
+    ["Moving to another device", "Each browser keeps its own separate data — Safari, Chrome and the home-screen app each start fresh. There are two ways across. Export account gives you an encrypted backup: import it elsewhere and that device becomes the same account, unlocked with the same passphrase. The data file from Summary → Export carries the same information unencrypted, and Settings → Import data puts it into a device that already has its own passphrase set up. Either way, importing replaces what's on the receiving device."],
+    ["Offline & updates", "Add SpendTracker to your home screen and it behaves like any other app, including with no signal — it keeps its own copy of itself to open from. Updates arrive on their own next time you open it with a connection. The build number at the very bottom of Settings tells you which version this device is actually running, which is the way to tell a stale copy from a current one."],
 ];
 // Collapsible "How it works" card: an outer expand reveals a single-open topic accordion.
 // `focus` flips true from the new-user hint's "Show me" → open the card + first topic and scroll to it.
@@ -973,6 +989,27 @@ function getRebalancedBudgets(weeks, entries, weeklyBudget, credits) {
         }
     });
     return budgets;
+}
+// ─── Savings: what one completed period had left over ─────────────────────────
+// A period's leftover, computed exactly like the header's "remaining": its own monthlyBudget −
+// personal spend (entries + pins) + credits. Scheduled pins are counted as their per-occurrence
+// week entries (so a weekly pin counts once per week), matching how the live period and the week
+// log count them, and the bounds use the payday rule the period was archived under rather than
+// today's setting. Archives are never run through normalizeState — an older or imported one may
+// omit a collection entirely — so all three are guarded.
+//
+// Top-level rather than inside the Savings tab because the export reports the same figure, and
+// two copies of this arithmetic would drift.
+function periodLeftover(m) {
+    const { start, end } = periodBounds(m.payYear, m.payMonth, m.paydayKind || "last-working", m.paydayDay);
+    const mWeeks = buildWeeks(start, end);
+    const mEntries = m.entries || [];
+    const mPins = m.pins || [];
+    const pinEntries = expandScheduledPins(mPins, mWeeks);
+    const spentEntries = [...mEntries, ...pinEntries].filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0);
+    const spentPins = mPins.filter(p => !isScheduledPin(p) && p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
+    const credits = (m.credits || []).reduce((s, c) => s + c.amount, 0);
+    return m.monthlyBudget - (spentEntries + spentPins) + credits;
 }
 // ─── Money owed back ──────────────────────────────────────────────────────────
 // Two kinds of spend leave your card without ever reducing your budget: the "not yours" half of a
@@ -1066,6 +1103,73 @@ function computeBudgetSummary(effectiveData, weeksInPeriod, daysLeftInMonth) {
     return { personalEntries, businessEntries, totalPinned, totalEntries, totalSpent, totalCredits,
         remaining, spendableWeekly, dailyFromMonth };
 }
+// The period's gross/net waterfall and its per-category split. Expects `data` with scheduled pins
+// ALREADY expanded into entries (App's effectiveData), so a scheduled cost is counted once, as the
+// entry it became. Lifted out of SummaryView so the Summary tab and the export build these figures
+// from one place — a second copy would drift the moment either changed — and so the invariants
+// below are reachable from the tests.
+//
+// The invariants, which nothing may add a term to:
+//   Business + Split = Reimbursable, and Gross − Reimbursable = Net.
+// Credits are money IN, not spending undone: they belong below the waterfall's total, not inside
+// it. Putting a "+ credits" row above the Net rule makes the card read "170 − 0 + 40 = 170".
+//
+// methods/categories are the account-level lists; an archived period doesn't carry its own, so
+// they're passed in (falling back to the module-level views for live-period callers).
+function computeSummaryTotals(data, methods, categories) {
+    const ms = (methods && methods.length) ? methods : METHODS;
+    const cs = (categories && categories.length) ? categories : CATEGORIES;
+    const catById = Object.fromEntries(cs.map(c => [c.id, c]));
+    const entries = data.entries || [];
+    const pins = data.pins || [];
+    // Gross (as charged) per card = everything that hit each card — all entries + all pins. This
+    // matches the card's own statement (Amex app etc.), since work and full split amounts are
+    // charged in full and reimbursed separately. Credits live in their own array, so they're
+    // naturally excluded.
+    const grossByMethod = {};
+    ms.forEach(m => {
+        grossByMethod[m.id] = entries.filter(e => e.method === m.id).reduce((s, e) => s + e.amount, 0)
+            + pins.filter(p => p.method === m.id).reduce((s, p) => s + (p.amount || 0), 0);
+    });
+    const grossSpend = ms.reduce((s, m) => s + grossByMethod[m.id], 0);
+    // Net per card — the personal share of each card's charges, i.e. what actually came off the
+    // budget. Same basis as the Summary's methodTotals; built here so the export doesn't need a
+    // third copy of it.
+    const netByMethod = {};
+    ms.forEach(m => {
+        netByMethod[m.id] = entries.filter(e => e.method === m.id && e.type === "personal").reduce((s, e) => s + e.amount, 0)
+            + pins.filter(p => p.method === m.id && p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
+    });
+    const businessTotal = entries.filter(e => e.type === "business").reduce((s, e) => s + e.amount, 0)
+        + pins.filter(p => p.type === "business").reduce((s, p) => s + (p.amount || 0), 0);
+    // Net is personal spend; reimbursable is DEFINED as the remainder, which is what makes
+    // grossSpend - reimbursableTotal === netTotal hold exactly rather than approximately.
+    const netTotal = entries.filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0)
+        + pins.filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
+    const reimbursableTotal = grossSpend - netTotal; // business + split (entries + pins)
+    const splitTotal = reimbursableTotal - businessTotal; // excluded entries + any "split" pins
+    // Net personal spend per category (entries + pins, mirroring grossByMethod's inclusion of pins).
+    // Only personal items ever carry a category. A dangling id (category deleted after logging —
+    // possible via pins, whose references don't lock a category in Settings) folds into
+    // Uncategorised, matching how CATEGORY_BY_ID misses render everywhere else.
+    const byCategory = {};
+    let uncategorisedTotal = 0;
+    const addCat = (id, amt) => {
+        if (id && catById[id])
+            byCategory[id] = (byCategory[id] || 0) + amt;
+        else
+            uncategorisedTotal += amt;
+    };
+    entries.filter(e => e.type === "personal").forEach(e => addCat(e.category, e.amount));
+    pins.filter(p => p.type !== "business" && p.type !== "excluded").forEach(p => addCat(p.category, p.amount || 0));
+    const categoryRows = [
+        ...cs.map(c => ({ cat: c, total: byCategory[c.id] || 0 })),
+        { cat: null, total: uncategorisedTotal }, // null = Uncategorised
+    ].filter(r => r.total > 0).sort((a, b) => b.total - a.total);
+    const totalCredits = (data.credits || []).reduce((s, c) => s + c.amount, 0);
+    return { grossByMethod, netByMethod, grossSpend, businessTotal, reimbursableTotal, splitTotal, netTotal,
+        byCategory, uncategorisedTotal, categoryRows, totalCredits };
+}
 function App() {
     var _a;
     const [state, dispatch] = useReducer(reducer, null, () => normalizeState(load() || defaultState()));
@@ -1090,6 +1194,7 @@ function App() {
     const [showExport, setShowExport] = useState(false);
     const [showBackup, setShowBackup] = useState(false); // export-account modal
     const [showImportAcct, setShowImportAcct] = useState(false); // import-account modal
+    const [showImportData, setShowImportData] = useState(false); // import-data modal (the readable export, not the vault)
     // "Last backed up" readout for Settings — refreshed when the export modal closes, since
     // crypto.js has already written LAST_BACKUP_KEY by then (it happens as part of the export).
     const [lastBackup, setLastBackup] = useState(() => { try {
@@ -1209,7 +1314,7 @@ function App() {
         c = addDays(c, 1);
     } return Math.max(count, 1); })();
     // Derived figures — all from effectiveData, so these reflect whichever period is being viewed
-    const { personalEntries, businessEntries, totalPinned, totalEntries, totalSpent, totalCredits, remaining, spendableWeekly, dailyFromMonth } = computeBudgetSummary(effectiveData, weeksInPeriod, daysLeftInMonth);
+    const { personalEntries, totalPinned, totalEntries, totalSpent, totalCredits, remaining, spendableWeekly, dailyFromMonth } = computeBudgetSummary(effectiveData, weeksInPeriod, daysLeftInMonth);
     const byMethod = (entries, pins) => {
         const res = {};
         METHODS.forEach(m => {
@@ -1257,6 +1362,19 @@ function App() {
     function settleOwedUpTo(cutoff) {
         owedRows.filter(r => !r.settled && r.entry.day && r.entry.day <= cutoff)
             .forEach(r => setOwedSettled(r, true));
+    }
+    // Install a parsed data export over this device's data (see ImportDataModal). Deliberately NOT
+    // a page reload the way importing an *account* is: that swaps the vault record on disk, whereas
+    // this is an ordinary dispatch, and the save effect below re-encrypts it like any other change.
+    // Reloading would race that queued write. Resetting the view state instead is enough — every
+    // derived figure rebuilds from the new state on the next render — and it also gets us off a past
+    // period, which the imported account may well not have.
+    function importData(data) {
+        dispatch({ type: "REPLACE_STATE", state: data });
+        setViewingPastIndex(null);
+        setActiveWeek(1);
+        setTab("week");
+        setShowImportData(false);
     }
     function addEntry(entry) {
         if (reconTarget !== undefined)
@@ -1508,24 +1626,8 @@ function App() {
             // until it rolls over, which is why a brand-new user sees £0 all through their
             // first month. A month's leftover is computed exactly like the header's
             // "remaining": its own monthlyBudget − personal spend (entries + pins) + credits.
-            const monthSaved = (m) => {
-                // Scheduled pins are counted as their per-occurrence week entries (so a weekly pin
-                // counts once per week), matching how the live period and week log count them.
-                // Bounds use the payday rule the month was archived under, not today's setting.
-                const { start, end } = periodBounds(m.payYear, m.payMonth, m.paydayKind || "last-working", m.paydayDay);
-                const mWeeks = buildWeeks(start, end);
-                // Archives are never run through normalizeState, so guard their collections the same
-                // way `credits` already is below — an older or imported archive may omit them entirely.
-                const mEntries = m.entries || [];
-                const mPins = m.pins || [];
-                const pinEntries = expandScheduledPins(mPins, mWeeks);
-                const spentEntries = [...mEntries, ...pinEntries].filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0);
-                const spentPins = mPins.filter(p => !isScheduledPin(p) && p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
-                const credits = (m.credits || []).reduce((s, c) => s + c.amount, 0);
-                return m.monthlyBudget - (spentEntries + spentPins) + credits;
-            };
             const rows = (state.monthHistory || [])
-                .map(m => { const saved = monthSaved(m); return { label: m.monthLabel, saved, budget: m.monthlyBudget, spent: m.monthlyBudget - saved }; })
+                .map(m => { const saved = periodLeftover(m); return { label: m.monthLabel, saved, budget: m.monthlyBudget, spent: m.monthlyBudget - saved }; })
                 .reverse(); // most recent completed month first
             const totalSaved = rows.reduce((s, r) => s + r.saved, 0);
             const signed = (n) => (n < 0 ? "" : "+") + fmt(n);
@@ -1562,7 +1664,7 @@ function App() {
                                 fmt(r.budget))),
                         React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#22c55e" : "#f87171" } }, signed(r.saved))))))));
         })(),
-        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, businessEntries: businessEntries, onExport: () => setShowExport(true), onReconcile: (methodId) => { setReconcileWith(methodId || null); setShowReconcile(true); }, statements: state.statements || [], onEditEntry: openEditEntry, onEditCredit: openEditCredit, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
+        tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, onExport: () => setShowExport(true), onReconcile: (methodId) => { setReconcileWith(methodId || null); setShowReconcile(true); }, statements: state.statements || [], onEditEntry: openEditEntry, onEditCredit: openEditCredit, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
         tab === "settings" && (React.createElement("div", { style: { padding: "12px 16px" } },
             React.createElement(HelpCard, { focus: helpNonce }),
             React.createElement("div", { style: S.settingsCard },
@@ -1614,6 +1716,14 @@ function App() {
                     React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1 }, onClick: () => setShowBackup(true) }, "Export account"),
                     React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setShowImportAcct(true) }, "Import account")),
                 React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 8 } }, lastBackup ? `Last backed up: ${relativeTime(lastBackup)}` : "Never backed up")),
+            React.createElement("div", { style: S.settingsCard },
+                React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Import a data file"),
+                React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } },
+                    "Takes the ",
+                    React.createElement("strong", null, "data file"),
+                    " from Summary \u2192 Export and puts it back \u2014 every period, pinned cost, category, card and setting. Unlike Import account above, this swaps the data only: this device keeps its own passphrase, recovery code and Face ID."),
+                React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%" }, onClick: () => setShowImportData(true) }, "Import data"),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 8 } }, "Replaces everything logged here. You'll see what's in the file before anything is written.")),
             React.createElement("div", { style: S.settingsCard },
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "#f87171", marginBottom: 10, textTransform: "uppercase" } }, "Reset"),
                 React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", marginBottom: 10, lineHeight: 1.5 } }, "Erase everything on this device \u2014 budget, transactions, history and your passphrase \u2014 and start over from setup. This can't be undone."),
@@ -1678,12 +1788,13 @@ function App() {
                 dispatch({ type: "UPD_PIN", pin });
             else
                 dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }, onClose: () => { setShowAddPin(false); setEditPin(null); } }),
-        showExport && React.createElement(ExportModal, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, remaining: remaining, totalCredits: totalCredits, methodTotals: methodTotals, onClose: () => setShowExport(false) }),
+        showExport && React.createElement(ExportModal, { data: effectiveData, account: state, weeks: weeks, rebalancedBudgets: rebalancedBudgets, onClose: () => setShowExport(false) }),
         showBackup && React.createElement(BackupModal, { onClose: () => { setShowBackup(false); try {
                 setLastBackup(localStorage.getItem(LAST_BACKUP_KEY));
             }
             catch (e) { /* ignore */ } } }),
         showImportAcct && React.createElement(ImportBackupModal, { onClose: () => setShowImportAcct(false) }),
+        showImportData && React.createElement(ImportDataModal, { onImport: importData, onClose: () => setShowImportData(false) }),
         showCustomise && React.createElement(CustomiseModal, { state: state, dispatch: dispatch, onClose: () => setShowCustomise(false) })));
 }
 // ─── Week Panel ───────────────────────────────────────────────────────────────
@@ -2917,7 +3028,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
             } }, "Save")));
 }
 // ─── Summary View ─────────────────────────────────────────────────────────────
-function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, businessEntries, onExport, onReconcile, statements, onEditEntry, onEditCredit, onGoToWeek }) {
+function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, onExport, onReconcile, statements, onEditEntry, onEditCredit, onGoToWeek }) {
     const [methodDetail, setMethodDetail] = useState(null); // method name or null
     const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
     const [spendView, setSpendView] = useState("txn"); // "txn" = largest individual, "label" = grouped by name
@@ -2925,46 +3036,9 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     const [showAllSpends, setShowAllSpends] = useState(false); // full "Largest spends" ranking open?
     const [waterfallDetail, setWaterfallDetail] = useState(null); // "business" | "split" | "credits" | null — drill-down from the Gross vs net card
     const heroRemaining = remainingDisplay(remaining, state.monthlyBudget);
-    // Gross (as charged) per card = everything that hit each card — all entries + all pins.
-    // This matches the card's own statement (Amex app etc.), since work and full split amounts
-    // are charged in full and reimbursed separately. Credits are income, not card charges, and
-    // live in a separate array, so they're naturally excluded.
-    const grossByMethod = {};
-    METHODS.forEach(m => {
-        grossByMethod[m.id] = state.entries.filter(e => e.method === m.id).reduce((s, e) => s + e.amount, 0)
-            + state.pins.filter(p => p.method === m.id).reduce((s, p) => s + (p.amount || 0), 0);
-    });
-    const grossSpend = METHODS.reduce((s, m) => s + grossByMethod[m.id], 0);
-    // Waterfall totals, all derived so they reconcile exactly (incl. pins):
-    //   Business + Split = Reimbursable, and Gross − Reimbursable = Net.
-    const businessTotal = businessEntries.reduce((s, e) => s + e.amount, 0)
-        + state.pins.filter(p => p.type === "business").reduce((s, p) => s + (p.amount || 0), 0);
-    // netTotal is personal spend and reimbursableTotal is defined as the remainder, so
-    // grossSpend - reimbursableTotal === netTotal EXACTLY. Nothing else can be a term in that
-    // waterfall: credits are money in, not spending undone, and they belong below its total rather
-    // than inside it — put a "+ credits" row above the Net spend rule and the card reads
-    // "170 - 0 + 40 = 170".
-    const netTotal = totalSpent; // personal (entries + personal pins)
-    const reimbursableTotal = grossSpend - netTotal; // business + split (entries + pins)
-    const splitTotal = reimbursableTotal - businessTotal; // excluded entries + any "split" pins
-    // Net personal spend per category (entries + pins, mirroring grossByMethod's inclusion of pins).
-    // Only personal items ever carry a category. A dangling id (category deleted after logging —
-    // possible via pins, whose references don't lock a category in Settings) folds into
-    // Uncategorised, matching how CATEGORY_BY_ID misses render everywhere else.
-    const byCategory = {};
-    let uncategorisedTotal = 0;
-    const addCat = (id, amt) => {
-        if (id && CATEGORY_BY_ID[id])
-            byCategory[id] = (byCategory[id] || 0) + amt;
-        else
-            uncategorisedTotal += amt;
-    };
-    state.entries.filter(e => e.type === "personal").forEach(e => addCat(e.category, e.amount));
-    state.pins.filter(p => p.type !== "business" && p.type !== "excluded").forEach(p => addCat(p.category, p.amount || 0));
-    const categoryRows = [
-        ...CATEGORIES.map(c => ({ cat: c, total: byCategory[c.id] || 0 })),
-        { cat: null, total: uncategorisedTotal }, // null = Uncategorised
-    ].filter(r => r.total > 0).sort((a, b) => b.total - a.total);
+    // The gross/net waterfall and the per-category split — see computeSummaryTotals for the
+    // invariants they hold to. Shared with the export so the two can't disagree.
+    const { grossByMethod, grossSpend, businessTotal, reimbursableTotal, splitTotal, netTotal, byCategory, uncategorisedTotal, categoryRows } = computeSummaryTotals(state, METHODS, CATEGORIES);
     // Per-week, per-method breakdown
     const weekRows = weeks.map(w => {
         var _a;
@@ -3419,65 +3493,456 @@ function CreditsDetailModal({ total, groups, onEditCredit, onClose }) {
                     fmt(c.amount)),
                 onEditCredit && React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 15, marginLeft: 2 } }, "\u203A"))) })));
 }
-// ─── Export Modal ─────────────────────────────────────────────────────────────
-function ExportModal({ state, weeks, rebalancedBudgets, totalSpent, remaining, totalCredits, methodTotals, onClose }) {
-    const [copied, setCopied] = useState(false);
-    function buildText() {
-        const mn = (id) => METHOD_NAME[id] || id; // resolve a stored method id to its display name
-        const lines = [];
-        lines.push(`SpendTracker — ${state.monthLabel}`);
-        // "£70.00 over of £100.00" doesn't parse, so the budget moves next to what was spent and the
-        // headline figure trails with its own word: "... · £70.00 over" / "... · £50.00 left".
-        const rd = remainingDisplay(remaining, state.monthlyBudget);
-        lines.push(`${fmt(totalSpent)} spent of ${fmt(state.monthlyBudget)} · ${rd.figure} ${rd.label}`);
-        if (totalCredits > 0)
-            lines.push(`Credits: +${fmt(totalCredits)}`);
-        lines.push("");
-        weeks.forEach(w => {
-            var _a;
-            const wEntries = state.entries.filter(e => e.weekIndex === w.index);
-            const wPersonal = wEntries.filter(e => e.type === "personal");
-            const wBusiness = wEntries.filter(e => e.type === "business");
-            const wExcluded = wEntries.filter(e => e.type === "excluded");
-            const wCredits = (state.credits || []).filter(c => c.weekIndex === w.index);
-            const wSpend = wPersonal.reduce((s, e) => s + e.amount, 0);
-            const wBudget = (_a = rebalancedBudgets[w.index]) !== null && _a !== void 0 ? _a : state.weeklyBudget;
-            lines.push(`Week ${w.index} (${dateStr(w.start)} – ${dateStr(w.end)}) — ${fmt(wSpend)} of ${fmt(wBudget)}`);
-            if (wEntries.length === 0 && wCredits.length === 0) {
-                lines.push(`  (nothing logged)`);
-            }
-            else {
-                wPersonal.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || mn(e.method)}  [${mn(e.method)}]${e.splitGroupId ? " (split)" : ""}`));
-                wBusiness.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || mn(e.method)}  [${mn(e.method)}, work]`));
-                wExcluded.forEach(e => lines.push(`  £${e.amount.toFixed(2)}  ${e.label || mn(e.method)}  [${mn(e.method)}, reimbursable]`));
-                wCredits.forEach(c => lines.push(`  +£${c.amount.toFixed(2)}  ${c.label || "Credit"}${c.from ? " from " + c.from : ""}`));
-            }
-            lines.push("");
+// ─── Export: report, ledger, data file ────────────────────────────────────────
+// Three views of the same account, built by pure top-level functions so the tests can reach them:
+//
+//   • buildReportText  — the readable period report. What the Export sheet always produced, but
+//     now covering categories, the gross/net waterfall, split/reimbursable detail and Owed.
+//   • buildLedgerCSV   — one row per money movement across every period, for a spreadsheet.
+//   • buildDataExport  — the lossless, re-importable account (parseDataExport reads it back).
+//
+// Only the data file round-trips. The report and the CSV are lossy by design — they resolve ids to
+// display names and flatten scheduled pins into the occurrences they became — so parseDataExport
+// deliberately refuses them rather than importing a half-account that looks complete.
+const EXPORT_VERSION = 1;
+const EXPORT_TYPE_LABEL = { personal: "Personal", business: "Work", excluded: "Split (not yours)", credit: "Credit" };
+const PAYDAY_LABEL = { "last-working": "last working day", "last-friday": "last Friday", "last-calendar": "last calendar day", "fixed": "fixed date" };
+// One CSV field. Quote-wrapped only when it has to be, with any embedded quote doubled — the same
+// rules reconcile.js's parseCSV reads back, so a description containing a comma, a quote or a
+// newline survives the round trip through a spreadsheet.
+function csvEscape(v) {
+    const s = v == null ? "" : String(v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+// Pence-exact money for a machine-readable field: no thousands separators and no currency symbol,
+// which is what makes the column add up in a spreadsheet. fmt() is for the human-facing report.
+const csvMoney = (n) => (Math.round((n || 0) * 100) / 100).toFixed(2);
+// Every period, oldest first. reconcilePeriods puts the LIVE period first so it wins any statement
+// overlap; a ledger reads chronologically instead, so the order is rebuilt here rather than
+// changing a function the matcher depends on.
+function exportPeriods(state) {
+    const ps = reconcilePeriods(state);
+    return [
+        ...ps.filter(p => p.archiveIndex !== null).sort((a, b) => a.archiveIndex - b.archiveIndex),
+        ...ps.filter(p => p.archiveIndex === null),
+    ];
+}
+// How the payday rule reads in a report header: "last working day", or "fixed date (25th)".
+function paydayRuleLabel(d) {
+    const kind = d.paydayKind || "last-working";
+    const base = PAYDAY_LABEL[kind] || kind;
+    return kind === "fixed" ? `${base} (${d.paydayDay || 25})` : base;
+}
+// ─── Ledger (CSV) ─────────────────────────────────────────────────────────────
+// One row per money movement, across the live period and every archive. Scheduled pins are emitted
+// as the occurrences they become — matching every figure in the app — while a flat pin, which has
+// no week of its own, is emitted once for the whole period with an empty week.
+function buildLedgerCSV(state) {
+    const methods = (state.methods && state.methods.length) ? state.methods : DEFAULT_METHODS;
+    const categories = (state.categories && state.categories.length) ? state.categories : DEFAULT_CATEGORIES;
+    const methodName = Object.fromEntries(methods.map(m => [m.id, m.name]));
+    const catName = Object.fromEntries(categories.map(c => [c.id, c.name]));
+    const cols = ["period", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
+        "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
+        "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
+        "reimbursable", "settled", "settledOn", "id"];
+    const rows = [cols.join(",")];
+    const iso = (d) => (d ? dayKey(d) : "");
+    const owedType = (t) => t === "business" || t === "excluded";
+    exportPeriods(state).forEach(p => {
+        const d = p.data;
+        const push = (r) => rows.push(cols.map(c => csvEscape(r[c])).join(","));
+        const base = {
+            period: d.monthLabel || "",
+            periodStart: iso(p.weeks.length ? p.weeks[0].start : null),
+            periodEnd: iso(p.weeks.length ? p.weeks[p.weeks.length - 1].end : null),
+        };
+        const weekById = {};
+        p.weeks.forEach(w => { weekById[w.index] = w; });
+        const weekCols = (idx) => {
+            const w = weekById[idx];
+            return w ? { week: w.index, weekStart: iso(w.start), weekEnd: iso(w.end) }
+                : { week: "", weekStart: "", weekEnd: "" };
+        };
+        const entries = d.entries || [];
+        const pins = d.pins || [];
+        // Both halves of a split sum to what the card was actually charged, which is the figure a
+        // statement shows and the one neither half carries on its own.
+        const splitTotals = {};
+        entries.forEach(e => {
+            if (e.splitGroupId)
+                splitTotals[e.splitGroupId] = (splitTotals[e.splitGroupId] || 0) + (e.amount || 0);
         });
-        const personalPins = state.pins.filter(p => p.type !== "business" && p.type !== "excluded");
-        const businessPins = state.pins.filter(p => p.type === "business");
-        const excludedPins = state.pins.filter(p => p.type === "excluded");
-        if (state.pins.length > 0) {
-            lines.push("Pinned costs:");
-            personalPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}]`));
-            businessPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}, work]`));
-            excludedPins.forEach(p => lines.push(`  £${(p.amount || 0).toFixed(2)}  ${p.label}  [${mn(p.method)}, split]`));
-            lines.push("");
+        const spendRow = (e, source, pinFreq) => ({
+            ...base, ...weekCols(e.weekIndex),
+            date: e.day || "",
+            description: e.label || methodName[e.method] || e.method || "",
+            // `note` duplicates `label` for most entries (the editor writes both) — only carry it when
+            // it actually says something the description doesn't.
+            note: e.note && e.note !== e.label ? e.note : "",
+            amount: csvMoney(e.amount),
+            direction: "out",
+            type: e.type || "personal",
+            typeLabel: EXPORT_TYPE_LABEL[e.type] || EXPORT_TYPE_LABEL.personal,
+            category: e.category ? (catName[e.category] || "") : "",
+            categoryId: e.category || "",
+            card: methodName[e.method] || e.method || "",
+            cardId: e.method || "",
+            source, pinFrequency: pinFreq || "",
+            splitGroupId: e.splitGroupId || "",
+            splitRole: e.splitGroupId ? (e.type === "personal" ? "yours" : "theirs") : "",
+            splitTotal: e.splitGroupId && splitTotals[e.splitGroupId] != null ? csvMoney(splitTotals[e.splitGroupId]) : "",
+            reimbursable: owedType(e.type) ? "yes" : "no",
+            settled: owedType(e.type) ? (e.settledOn ? "yes" : "no") : "",
+            settledOn: e.settledOn || "",
+            id: e.id || "",
+        });
+        entries.forEach(e => push(spendRow(e, "logged", "")));
+        expandScheduledPins(pins, p.weeks).forEach(occ => {
+            const pin = pins.find(x => x.id === occ.pinId);
+            push(spendRow(occ, "pinned", pin ? pin.freq : ""));
+        });
+        pins.filter(x => !isScheduledPin(x)).forEach(pin => push({
+            ...base, week: "", weekStart: "", weekEnd: "",
+            date: "", description: pin.label || "", note: pin.note || "",
+            amount: csvMoney(pin.amount), direction: "out",
+            type: pin.type || "personal",
+            typeLabel: EXPORT_TYPE_LABEL[pin.type] || EXPORT_TYPE_LABEL.personal,
+            category: pin.category ? (catName[pin.category] || "") : "",
+            categoryId: pin.category || "",
+            card: methodName[pin.method] || pin.method || "",
+            cardId: pin.method || "",
+            source: "pinned", pinFrequency: pin.freq || "none",
+            splitGroupId: "", splitRole: "", splitTotal: "",
+            reimbursable: owedType(pin.type) ? "yes" : "no",
+            settled: "", settledOn: "", id: pin.id || "",
+        }));
+        (d.credits || []).forEach(c => push({
+            ...base, ...weekCols(c.weekIndex),
+            date: c.day || "", description: c.label || "Credit", note: c.from || "",
+            amount: csvMoney(c.amount), direction: "in",
+            type: "credit", typeLabel: EXPORT_TYPE_LABEL.credit,
+            category: "", categoryId: "",
+            card: methodName[c.method] || c.method || "", cardId: c.method || "",
+            source: "logged", pinFrequency: "",
+            splitGroupId: "", splitRole: "", splitTotal: "",
+            reimbursable: "no", settled: "", settledOn: "", id: c.id || "",
+        }));
+    });
+    return rows.join("\n");
+}
+// ─── Report (text) ────────────────────────────────────────────────────────────
+// The readable one. `data` is the period being viewed with scheduled pins ALREADY expanded into
+// entries (App's effectiveData), so a scheduled cost is described once, on the day it lands.
+// `account` is live state, for the account-level lists and the whole-account sections (Owed,
+// Savings) — when a past period is on screen those still describe the whole account, which is the
+// only thing they can meaningfully mean.
+function buildReportText(data, weeks, rebalancedBudgets, account) {
+    const acct = account || data;
+    const methods = (acct.methods && acct.methods.length) ? acct.methods : DEFAULT_METHODS;
+    const categories = (acct.categories && acct.categories.length) ? acct.categories : DEFAULT_CATEGORIES;
+    const mn = (id) => (methods.find(m => m.id === id) || {}).name || id || "—";
+    const cn = (id) => { const c = categories.find(x => x.id === id); return c ? c.name : null; };
+    const t = computeSummaryTotals(data, methods, categories);
+    const L = [];
+    const pad = (label, value) => `  ${label}${" ".repeat(Math.max(1, 26 - label.length))}${value}`;
+    // Header
+    L.push(`SpendTracker — ${data.monthLabel}`);
+    if (weeks.length)
+        L.push(`${dateStr(weeks[0].start)} – ${dateStr(weeks[weeks.length - 1].end)} · payday: ${paydayRuleLabel(data)}`);
+    L.push(`Budget ${fmt(data.monthlyBudget)} monthly · ${fmt(data.weeklyBudget)} weekly`);
+    L.push("");
+    // Gross vs net. Same waterfall as the Summary tab, and it has to reconcile the same way:
+    // Work + Split = reimbursable, gross − reimbursable = net, credits below the rule, not in it.
+    L.push("GROSS VS NET");
+    L.push(pad("Gross (as charged)", fmt(t.grossSpend)));
+    L.push(pad("− Work", fmt(t.businessTotal)));
+    L.push(pad("− Split (not yours)", fmt(t.splitTotal)));
+    L.push(pad("= Net personal spend", fmt(t.netTotal)));
+    if (t.totalCredits > 0)
+        L.push(pad("Credits (money in)", "+" + fmt(t.totalCredits)));
+    const remaining = data.monthlyBudget - t.netTotal + t.totalCredits;
+    const rd = remainingDisplay(remaining, data.monthlyBudget);
+    L.push(pad(`Of ${fmt(data.monthlyBudget)}`, `${rd.figure} ${rd.label}`));
+    L.push("");
+    // Weeks, grouped by day. Undated rows (logged before day-specific logging, or moved between
+    // weeks, which clears `day`) collect under their own heading rather than being dropped.
+    const describe = (e) => {
+        const bits = [];
+        const cat = e.type === "personal" ? cn(e.category) : null;
+        if (cat)
+            bits.push(cat);
+        bits.push(mn(e.method));
+        if (e.type === "business")
+            bits.push("work");
+        if (e.type === "excluded")
+            bits.push("split — not yours");
+        if (e.splitGroupId && e.type === "personal")
+            bits.push("split — your share");
+        if (e.pinned)
+            bits.push("pinned");
+        if (e.settledOn)
+            bits.push(`paid back ${dayKeyLabel(e.settledOn)}`);
+        const name = e.label || mn(e.method);
+        return `  ${fmt(e.amount).padStart(10)}  ${name}${bits.length ? "  ·  " + bits.join(" · ") : ""}`;
+    };
+    weeks.forEach(w => {
+        const wEntries = (data.entries || []).filter(e => e.weekIndex === w.index);
+        const wCredits = (data.credits || []).filter(c => c.weekIndex === w.index);
+        const wSpend = wEntries.filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0);
+        const wBudget = rebalancedBudgets[w.index] != null ? rebalancedBudgets[w.index] : data.weeklyBudget;
+        L.push(`WEEK ${w.index} (${dateStr(w.start)} – ${dateStr(w.end)}) — ${fmt(wSpend)} of ${fmt(wBudget)}`);
+        if (wEntries.length === 0 && wCredits.length === 0) {
+            L.push("  (nothing logged)");
         }
-        const methodLines = METHODS.filter(m => methodTotals[m.id] > 0);
-        if (methodLines.length > 0) {
-            lines.push("By payment method:");
-            methodLines.forEach(m => lines.push(`  ${m.name}: ${fmt(methodTotals[m.id])}`));
+        else {
+            const days = {};
+            const undated = [];
+            wEntries.forEach(e => { if (e.day)
+                (days[e.day] = days[e.day] || []).push(e);
+            else
+                undated.push(e); });
+            wCredits.forEach(c => { if (c.day)
+                (days[c.day] = days[c.day] || []).push({ ...c, type: "credit" });
+            else
+                undated.push({ ...c, type: "credit" }); });
+            Object.keys(days).sort().forEach(k => {
+                L.push(`  ${dayKeyLabel(k)}`);
+                days[k].sort((a, b) => effOrder(a) - effOrder(b)).forEach(e => {
+                    L.push(e.type === "credit" ? `  ${("+" + fmt(e.amount)).padStart(10)}  ${e.label || "Credit"}  ·  ${mn(e.method)}${e.from ? " · from " + e.from : ""}` : describe(e));
+                });
+            });
+            if (undated.length) {
+                L.push("  Undated");
+                undated.forEach(e => L.push(e.type === "credit" ? `  ${("+" + fmt(e.amount)).padStart(10)}  ${e.label || "Credit"}` : describe(e)));
+            }
         }
-        return lines.join("\n");
+        L.push("");
+    });
+    // Flat pins — whole-period fixed costs with no week of their own. Scheduled ones already
+    // appeared above, on the day each occurrence landed.
+    const flatPins = data.pins || [];
+    if (flatPins.length) {
+        L.push("FIXED COSTS (whole period)");
+        flatPins.forEach(p => {
+            const bits = [mn(p.method)];
+            const cat = p.type !== "business" && p.type !== "excluded" ? cn(p.category) : null;
+            if (cat)
+                bits.unshift(cat);
+            if (p.type === "business")
+                bits.push("work");
+            if (p.type === "excluded")
+                bits.push("split — not yours");
+            L.push(`  ${fmt(p.amount || 0).padStart(10)}  ${p.label}  ·  ${bits.join(" · ")}`);
+        });
+        L.push("");
     }
-    const text = buildText();
+    if (t.categoryRows.length) {
+        L.push("BY CATEGORY (net personal spend)");
+        t.categoryRows.forEach(r => L.push(pad(r.cat ? r.cat.name : "Uncategorised", fmt(r.total))));
+        L.push("");
+    }
+    const usedCards = methods.filter(m => t.grossByMethod[m.id] > 0);
+    if (usedCards.length) {
+        L.push("BY CARD");
+        L.push(pad("", "gross · net"));
+        usedCards.forEach(m => L.push(pad(m.name, `${fmt(t.grossByMethod[m.id])} · ${fmt(t.netByMethod[m.id] || 0)}`)));
+        L.push("");
+    }
+    // Largest spends — personal and work, excluding credits and the half of a split that was never
+    // yours, matching the Summary tab's own ranking.
+    const ranked = [
+        ...(data.entries || []).filter(e => e.type !== "credit" && e.type !== "excluded")
+            .map(e => ({ desc: e.label || mn(e.method), amount: e.amount })),
+        ...flatPins.filter(p => p.type !== "excluded").map(p => ({ desc: p.label, amount: p.amount || 0 })),
+    ].sort((a, b) => b.amount - a.amount).slice(0, 10);
+    if (ranked.length) {
+        L.push("LARGEST SPENDS");
+        ranked.forEach(r => L.push(pad(r.desc, fmt(r.amount))));
+        L.push("");
+    }
+    // Owed and Savings describe the whole account, not the period on screen.
+    const owedRows = owedItems(acct);
+    const owed = owedTotals(owedRows);
+    if (owedRows.length) {
+        L.push("OWED BACK TO YOU (whole account)");
+        L.push(pad("Outstanding", `${fmt(owed.total)} across ${owed.outstanding} item${owed.outstanding === 1 ? "" : "s"}`));
+        L.push(pad("  of which work", fmt(owed.work)));
+        L.push(pad("  of which splits", fmt(owed.split)));
+        owedRows.filter(r => !r.settled).forEach(r => {
+            L.push(`  ${fmt(r.entry.amount).padStart(10)}  ${r.entry.label || mn(r.entry.method)}  ·  ${r.kind} · ${r.periodLabel}${r.entry.day ? " · " + dayKeyLabel(r.entry.day) : ""}`);
+        });
+        const settledCount = owedRows.filter(r => r.settled).length;
+        if (settledCount)
+            L.push(pad("Already paid back", `${settledCount} item${settledCount === 1 ? "" : "s"}`));
+        L.push("");
+    }
+    const history = acct.monthHistory || [];
+    if (history.length) {
+        L.push("SAVINGS (completed periods)");
+        history.slice().reverse().forEach(m => L.push(pad(m.monthLabel, fmt(periodLeftover(m)))));
+        L.push(pad("Total", fmt(history.reduce((s, m) => s + periodLeftover(m), 0))));
+        L.push("");
+    }
+    return L.join("\n").replace(/\n+$/, "\n");
+}
+// ─── Data file (JSON) ─────────────────────────────────────────────────────────
+// The lossless one: everything the app needs to come back up fully working. Envelope mirrors
+// crypto.js's exportVaultJSON so the two files are recognisably siblings.
+//
+// `statements` is deliberately left out — a saved bank statement is a bulky, re-uploadable,
+// device-local cache, not account data, and REPLACE_STATE keeps whatever the importing device has.
+// Everything else survives: entries keep splitGroupId/category/settledOn/recon, pins keep their
+// schedule and their per-occurrence skip/move/reorder/amount overrides, and each archived period
+// keeps its own budget and payday snapshot so its figures still recompute correctly.
+function buildDataExport(state, build) {
+    const src = state || {};
+    const data = {};
+    Object.keys(src).forEach(k => { if (k !== "statements")
+        data[k] = src[k]; });
+    return JSON.stringify({
+        app: "SpendTracker",
+        kind: "data-export",
+        version: EXPORT_VERSION,
+        exportedAt: new Date().toISOString(),
+        build: build || null,
+        data,
+    }, null, 2);
+}
+// Validate an imported data export and hand back the state inside it. Throws with plain English —
+// this is the only feedback anyone gets when a file won't go in, so each failure says what the
+// file actually is rather than how it failed to parse.
+function parseDataExport(text) {
+    let obj;
+    try {
+        obj = JSON.parse(text);
+    }
+    catch (e) {
+        throw new Error("That doesn't look like an export — the text isn't valid.");
+    }
+    if (!obj || typeof obj !== "object" || Array.isArray(obj))
+        throw new Error("That isn't a SpendTracker export.");
+    // The encrypted account backup is a different file that imports somewhere else. Say so, rather
+    // than failing with a shape error nobody can act on.
+    if (obj.kind === "vault-backup" || (obj.vault && obj.vault.wraps) || (obj.wraps && obj.state)) {
+        throw new Error("That's an encrypted account backup, not a data export — use Import account for it.");
+    }
+    if (obj.version && Number(obj.version) > EXPORT_VERSION) {
+        throw new Error("That export came from a newer version of SpendTracker. Update this device first, then import it.");
+    }
+    // A bare state object is accepted too, so a file someone has unwrapped by hand still imports.
+    const data = obj.kind === "data-export" ? obj.data : obj;
+    if (!data || typeof data !== "object" || Array.isArray(data))
+        throw new Error("That isn't a SpendTracker export.");
+    ["entries", "pins", "credits", "monthHistory", "methods", "categories"].forEach(k => {
+        if (data[k] !== undefined && !Array.isArray(data[k]))
+            throw new Error(`That export is damaged — "${k}" isn't a list.`);
+    });
+    if (data.monthlyBudget !== undefined && typeof data.monthlyBudget !== "number") {
+        throw new Error("That export is damaged — the monthly budget isn't a number.");
+    }
+    if (!Array.isArray(data.entries) && !Array.isArray(data.pins) && !Array.isArray(data.monthHistory)) {
+        throw new Error("That isn't a SpendTracker export — there's nothing in it to import.");
+    }
+    return { data, exportedAt: obj.exportedAt || null, version: Number(obj.version) || 1 };
+}
+// What's actually in a parsed export, for the line shown above the import's confirm step. Counting
+// the archives too is the point: "1,204 transactions" is what makes replacing the device's data a
+// decision rather than a leap.
+function dataExportSummary(data) {
+    const archives = data.monthHistory || [];
+    const count = (k) => (data[k] || []).length + archives.reduce((s, m) => s + ((m[k] || []).length), 0);
+    return {
+        transactions: count("entries"),
+        credits: count("credits"),
+        pins: (data.pins || []).length,
+        periods: archives.length,
+        monthlyBudget: typeof data.monthlyBudget === "number" ? data.monthlyBudget : null,
+        monthLabel: data.monthLabel || "",
+    };
+}
+// Hand the browser a generated file. Shared by every export format and by the encrypted account
+// backup, which is where this started life.
+function downloadFile(name, mime, text) {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+// "July 2026" -> "july-2026", for a filename that sorts and doesn't need quoting.
+const exportSlug = (s) => String(s || "export").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+// ─── Export Modal ─────────────────────────────────────────────────────────────
+// Three formats off one sheet (see the builders above). The scope difference matters and is stated
+// in the sheet: Report and Ledger describe the period on screen — which is an ARCHIVE when a past
+// period is being viewed, since `data` is App's effectiveData — while the Data file is always the
+// whole live account, because a partial account is no use to import.
+function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
+    const [format, setFormat] = useState("report");
+    const [copied, setCopied] = useState(false);
+    const build = (window.SpendVault && window.SpendVault.build) || null;
+    const periodSlug = exportSlug(data.monthLabel);
+    const FORMATS = {
+        report: {
+            label: "Report",
+            blurb: "The period in full — every spend by day, the gross/net split, categories, cards, what you're owed.",
+            make: () => buildReportText(data, weeks, rebalancedBudgets, account),
+            name: `spendtracker-report-${periodSlug}.txt`,
+            mime: "text/plain",
+        },
+        ledger: {
+            label: "Spreadsheet",
+            blurb: "Every transaction across every period, one row each, with all its detail in columns. Opens in Excel or Numbers. This is a view of your data, not the file to import.",
+            make: () => buildLedgerCSV(account),
+            name: `spendtracker-ledger-${exportSlug(new Date().toISOString().slice(0, 10))}.csv`,
+            mime: "text/csv",
+        },
+        data: {
+            label: "Data file",
+            blurb: "Your whole account — every period, pinned cost, category, card and setting. This is the one that imports back into SpendTracker.",
+            make: () => buildDataExport(account, build),
+            name: `spendtracker-data-${exportSlug(new Date().toISOString().slice(0, 10))}.json`,
+            mime: "application/json",
+        },
+    };
+    const active = FORMATS[format];
+    // Rebuilt on every render, which is cheap next to the encrypt-on-every-change the app already
+    // does, and keeps the preview honest if anything changes underneath.
+    let text = "";
+    let err = "";
+    try {
+        text = active.make();
+    }
+    catch (e) {
+        err = "Couldn't build that export: " + (e.message || "unknown error");
+    }
     function copy() {
-        navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+        navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => { });
     }
+    const chip = (on) => ({
+        flex: 1, background: on ? "var(--surface-2)" : "var(--surface)",
+        border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8,
+        color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "8px 4px",
+        fontSize: 12, fontWeight: 600, cursor: "pointer",
+    });
     return (React.createElement(Modal, { onClose: onClose, title: "Export" },
-        React.createElement("div", { style: { background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "12px", fontFamily: "monospace", fontSize: 11, color: "var(--text-tertiary)", whiteSpace: "pre-wrap", maxHeight: 360, overflowY: "auto", marginBottom: 12, lineHeight: 1.6 } }, text),
-        React.createElement("button", { style: { ...S.btn, background: copied ? "#16a34a" : "#0369a1", width: "100%" }, onClick: copy }, copied ? "✓ Copied" : "Copy to clipboard")));
+        React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, Object.keys(FORMATS).map(k => (React.createElement("button", { key: k, style: chip(format === k), onClick: () => { setFormat(k); setCopied(false); } }, FORMATS[k].label)))),
+        React.createElement("div", { style: { fontSize: 12, color: "var(--text-tertiary)", lineHeight: 1.5, marginBottom: 10 } }, active.blurb),
+        format === "data" && (React.createElement("div", { style: { background: chipColors("#f59e0b").bg, border: "1px solid #f59e0b", borderRadius: 10, padding: "10px 12px", fontSize: 11, color: "#f59e0b", lineHeight: 1.6, marginBottom: 10 } },
+            React.createElement("strong", null, "This file is not encrypted."),
+            " Anyone who opens it can read everything you've logged. For a copy that's safe to store or send to yourself, use ",
+            React.createElement("strong", null, "Export account"),
+            " in Settings instead \u2014 that one stays locked behind your passphrase.")),
+        err
+            ? React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 12 } }, err)
+            : React.createElement("div", { style: { background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "12px", fontFamily: "monospace", fontSize: 11, color: "var(--text-tertiary)", whiteSpace: "pre", overflow: "auto", maxHeight: 300, marginBottom: 12, lineHeight: 1.6 } }, text.length > 4000 ? text.slice(0, 4000) + "\n…\n(the full export is copied and downloaded in one piece)" : text),
+        React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("button", { style: { ...S.btn, background: copied ? "#16a34a" : "#0369a1", flex: 1, ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: copy }, copied ? "✓ Copied" : "Copy"),
+            React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1, ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: () => downloadFile(active.name, active.mime, text) }, "Download"))));
 }
 // ─── Account backup: export (encrypted, portable) ─────────────────────────────
 // The backup is the encrypted vault from crypto.js — ciphertext only, safe to copy or
@@ -3502,17 +3967,7 @@ function BackupModal({ onClose }) {
     function copy() {
         navigator.clipboard.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }).catch(() => { });
     }
-    function download() {
-        const blob = new Blob([text], { type: "application/json" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "spendtracker-backup.json";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }
+    function download() { downloadFile("spendtracker-backup.json", "application/json", text); }
     return (React.createElement(Modal, { onClose: onClose, title: "Export account" },
         React.createElement("div", { style: { fontSize: 13, color: "var(--text-body)", lineHeight: 1.5, marginBottom: 12 } },
             "This is your ",
@@ -3529,6 +3984,10 @@ function ImportBackupModal({ onClose }) {
     const [text, setText] = useState("");
     const [err, setErr] = useState("");
     const [busy, setBusy] = useState(false);
+    // Two-step guard on a destructive action. Named `confirming`, not `confirm`: a bare `confirm`
+    // resolves to window.confirm — always truthy — which silently skipped this step entirely and
+    // put "Wipe & import" straight in front of anyone who opened the sheet.
+    const [confirming, setConfirming] = useState(false);
     function onFile(e) {
         const f = e.target.files && e.target.files[0];
         if (!f)
@@ -3554,9 +4013,78 @@ function ImportBackupModal({ onClose }) {
         React.createElement("textarea", { style: { ...S.input, height: 90, resize: "none", fontFamily: "monospace", fontSize: 11 }, placeholder: "Paste a backup here\u2026", value: text, onChange: e => setText(e.target.value) }),
         React.createElement("input", { type: "file", accept: ".json,application/json", onChange: onFile, style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 12, width: "100%" } }),
         err && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10 } }, err),
-        !confirm ? (React.createElement("button", { style: { ...S.btn, background: text ? "#f59e0b" : "var(--surface-2)", color: text ? "var(--on-accent)" : "var(--text-heading)", width: "100%", ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: () => setConfirm(true) }, "Continue\u2026")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
-            React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirm(false) }, "Cancel"),
+        !confirming ? (React.createElement("button", { style: { ...S.btn, background: text ? "#f59e0b" : "var(--surface-2)", color: text ? "var(--on-accent)" : "var(--text-heading)", width: "100%", ...(text ? {} : { opacity: 0.5 }) }, disabled: !text, onClick: () => setConfirming(true) }, "Continue\u2026")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirming(false) }, "Cancel"),
             React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, disabled: busy, onClick: doImport }, busy ? "Importing…" : "Wipe & import")))));
+}
+// ─── Data import (replaces what's logged, leaves the lock alone) ──────────────
+// The counterpart to the Export sheet's Data file. Distinct from ImportBackupModal above in the
+// one way that matters to anyone using it: this swaps the DATA and nothing else, so the device
+// keeps its own passphrase, recovery code and Face ID. Importing an account instead replaces the
+// whole encrypted vault, and you then unlock with that account's passphrase.
+function ImportDataModal({ onImport, onClose }) {
+    const [text, setText] = useState("");
+    const [err, setErr] = useState("");
+    const [confirming, setConfirming] = useState(false);
+    function onFile(e) {
+        const f = e.target.files && e.target.files[0];
+        if (!f)
+            return;
+        f.text().then(t => { setText(t); setErr(""); setConfirming(false); }).catch(() => setErr("Couldn't read that file."));
+    }
+    // Parsed on every render so the preview and the error track what's in the box as it's pasted.
+    let parsed = null;
+    let parseErr = "";
+    if (text.trim()) {
+        try {
+            parsed = parseDataExport(text);
+        }
+        catch (e) {
+            parseErr = e.message;
+        }
+    }
+    const info = parsed ? dataExportSummary(parsed.data) : null;
+    const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+    function doImport() {
+        try {
+            onImport(parsed.data);
+        }
+        catch (e) {
+            setErr(e.message || "That import didn't work.");
+        }
+    }
+    return (React.createElement(Modal, { onClose: onClose, title: "Import data" },
+        React.createElement("div", { style: { background: chipColors("#f59e0b").bg, border: "1px solid #f59e0b", borderRadius: 10, padding: "12px 14px", fontSize: 12, color: "#f59e0b", lineHeight: 1.6, marginBottom: 12 } },
+            "This ",
+            React.createElement("strong", null, "replaces everything logged on this device"),
+            " \u2014 spends, pinned costs, past periods, categories, cards and budget \u2014 with what's in the file. Export first if you might want any of it back."),
+        React.createElement("div", { style: { fontSize: 12, color: "var(--text-tertiary)", lineHeight: 1.5, marginBottom: 10 } },
+            "This takes the ",
+            React.createElement("strong", null, "data file"),
+            " from Summary \u2192 Export. Your passphrase, recovery code and Face ID on this device are untouched \u2014 you'll still unlock with the same ones. Saved bank statements stay as they are too."),
+        React.createElement("textarea", { style: { ...S.input, height: 90, resize: "none", fontFamily: "monospace", fontSize: 11 }, placeholder: "Paste a data export here\u2026", value: text, onChange: e => { setText(e.target.value); setErr(""); setConfirming(false); } }),
+        React.createElement("input", { type: "file", accept: ".json,application/json", onChange: onFile, style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 12, width: "100%" } }),
+        parseErr && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10, lineHeight: 1.5 } }, parseErr),
+        err && React.createElement("div", { style: { color: "#f87171", fontSize: 13, marginBottom: 10 } }, err),
+        info && (React.createElement("div", { style: { background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "var(--text-body)", lineHeight: 1.7, marginBottom: 12 } },
+            React.createElement("div", { style: { color: "var(--text-secondary)", fontSize: 11, textTransform: "uppercase", fontWeight: 600, marginBottom: 4 } }, "What's in this file"),
+            plural(info.transactions, "transaction"),
+            " \u00B7 ",
+            plural(info.credits, "credit"),
+            " \u00B7 ",
+            plural(info.pins, "pinned cost"),
+            React.createElement("br", null),
+            plural(info.periods, "past period"),
+            info.monthLabel ? ` · currently tracking ${info.monthLabel}` : "",
+            React.createElement("br", null),
+            info.monthlyBudget != null ? `Monthly budget ${fmt(info.monthlyBudget)}` : "No budget recorded",
+            parsed.exportedAt ? React.createElement(React.Fragment, null,
+                React.createElement("br", null),
+                "Exported ",
+                relativeTime(parsed.exportedAt)) : null)),
+        !confirming ? (React.createElement("button", { style: { ...S.btn, background: info ? "#f59e0b" : "var(--surface-2)", color: info ? "var(--on-accent)" : "var(--text-heading)", width: "100%", ...(info ? {} : { opacity: 0.5 }) }, disabled: !info, onClick: () => setConfirming(true) }, "Continue\u2026")) : (React.createElement("div", { style: { display: "flex", gap: 8 } },
+            React.createElement("button", { style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", flex: 1 }, onClick: () => setConfirming(false) }, "Cancel"),
+            React.createElement("button", { style: { ...S.btn, background: "#dc2626", flex: 1 }, onClick: doImport }, "Replace & import")))));
 }
 // ─── Reconcile with a bank statement ──────────────────────────────────────────
 // Three steps in one sheet: upload the CSV, confirm which column is which, then work through

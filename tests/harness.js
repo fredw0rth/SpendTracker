@@ -21,6 +21,10 @@ const EXPORTS = [
   "getRebalancedBudgets", "computeBudgetSummary", "remainingDisplay",
   "owedItems", "owedTotals", "OWED_STALE_PERIODS",
   "DEFAULT_METHODS", "DEFAULT_CATEGORIES",
+  "computeSummaryTotals", "periodLeftover",
+  "csvEscape", "csvMoney", "exportPeriods", "paydayRuleLabel",
+  "buildReportText", "buildLedgerCSV", "buildDataExport", "parseDataExport", "dataExportSummary",
+  "EXPORT_VERSION",
 ];
 
 function loadApp() {
