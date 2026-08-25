@@ -3177,6 +3177,11 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
   //   Business + Split = Reimbursable, and Gross − Reimbursable = Net.
   const businessTotal = businessEntries.reduce((s, e) => s + e.amount, 0)
     + state.pins.filter(p => p.type === "business").reduce((s, p) => s + (p.amount || 0), 0);
+  // netTotal is personal spend and reimbursableTotal is defined as the remainder, so
+  // grossSpend - reimbursableTotal === netTotal EXACTLY. Nothing else can be a term in that
+  // waterfall: credits are money in, not spending undone, and they belong below its total rather
+  // than inside it — put a "+ credits" row above the Net spend rule and the card reads
+  // "170 - 0 + 40 = 170".
   const netTotal = totalSpent;                          // personal (entries + personal pins)
   const reimbursableTotal = grossSpend - netTotal;      // business + split (entries + pins)
   const splitTotal = reimbursableTotal - businessTotal; // excluded entries + any "split" pins
@@ -3353,19 +3358,25 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
             <span style={{ color:"var(--text-tertiary)" }}>Reimbursable spend</span>
             <span style={{ color:"var(--text-tertiary)", fontWeight:600 }}>− {fmt(reimbursableTotal)}</span>
           </div>
-          {totalCredits > 0 && (
-            <button onClick={() => setWaterfallDetail("credits")} style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"5px 0", fontSize:13, background:"none", border:"none", cursor:"pointer", textAlign:"left" }}>
-              <span style={{ color:"#22c55e" }}>Credits</span>
-              <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}>
-                <span style={{ color:"#22c55e", fontWeight:600 }}>+ {fmt(totalCredits)}</span>
-                <span style={{ color:"var(--text-tertiary)", fontSize:18, fontWeight:700, lineHeight:1 }}>›</span>
-              </span>
-            </button>
-          )}
           <div style={{ borderTop:"1px solid var(--border)", marginTop:6, paddingTop:8, display:"flex", justifyContent:"space-between", alignItems:"baseline" }}>
             <span style={{ color:"var(--text-heading)", fontSize:13, fontWeight:700 }}>Net spend</span>
             <span style={{ color:"var(--text-heading)", fontWeight:800, fontSize:15 }}>{fmt(netTotal)}</span>
           </div>
+          {totalCredits > 0 && (
+            <>
+              <button onClick={() => setWaterfallDetail("credits")} style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"5px 0", marginTop:8, borderTop:"1px solid var(--border)", paddingTop:8, fontSize:13, background:"none", border:"none", cursor:"pointer", textAlign:"left" }}>
+                <span style={{ color:"#22c55e" }}>Credits</span>
+                <span style={{ display:"inline-flex", alignItems:"center", gap:4 }}>
+                  <span style={{ color:"#22c55e", fontWeight:600 }}>+ {fmt(totalCredits)}</span>
+                  <span style={{ color:"var(--text-tertiary)", fontSize:18, fontWeight:700, lineHeight:1 }}>›</span>
+                </span>
+              </button>
+              <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.45 }}>
+                Money in, not spending undone — this adds to what's left in your budget rather than
+                reducing net spend.
+              </div>
+            </>
+          )}
         </div>
       )}
 
