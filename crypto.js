@@ -75,7 +75,7 @@
   // version am I actually running?" is answerable without a crash — the deployed copy of a PWA can
   // lag the repository, and there was previously no way to tell from inside the app.
   // Bump in lockstep with CACHE_NAME in sw.js. (It had drifted 17 releases behind before this.)
-  const BUILD = "v68";
+  const BUILD = "v69";
 
   const enc = new TextEncoder();
   const dec = new TextDecoder();
