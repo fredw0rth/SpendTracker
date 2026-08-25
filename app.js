@@ -853,6 +853,7 @@ const HELP_TOPICS = [
     ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. Tap any logged item to edit it."],
     ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't."],
     ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Monthly or Weekly frequency and it's dropped straight into the right week of the log, counting against that week. Mark one Work or “Split” to keep it out of your personal total."],
+    ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Ticking only records that it happened \u2014 your remaining figure will not move, because the money never came off it. For the same reason, do NOT also log a credit: that would hand you back budget you never spent. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
     ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover."],
     ["Summary & export", "The Summary tab breaks the period down: spend vs budget, personal vs reimbursable work spend, a per-card breakdown you can tap into, your biggest spends, and where spending came from. You can export it all as text."],
     ["Going back to a past period", "In Settings, “Go back to…” lets you revisit a finished period. Its figures reflect that period's own budget, and any edits you make there apply only to it — your current period is left untouched."],
@@ -920,6 +921,63 @@ function getRebalancedBudgets(weeks, entries, weeklyBudget, credits) {
     });
     return budgets;
 }
+// ─── Money owed back ──────────────────────────────────────────────────────────
+// Two kinds of spend leave your card without ever reducing your budget: the "not yours" half of a
+// split (`excluded`) and a work expense (`business`). That exclusion is correct — the money was
+// never yours to spend — but it also meant the app forgot the debt existed. owedItems is the
+// record: everything still owed to you, and everything already paid back.
+//
+// `settledOn` is a dayKey written on the entry when you tick it off, absent while outstanding. It
+// is deliberately INERT: nothing in computeBudgetSummary, the rebalancer or the Savings tab reads
+// it, so ticking an item off records a fact and moves no money. If it ever starts feeding a total,
+// the split's own half would be double-counted and a work expense would invent budget from nothing.
+//
+// A claim outlives the period it was logged in, so this walks the live period AND every archive via
+// reconcilePeriods. Scheduled pins are excluded by construction: reconcilePeriods reads raw
+// `entries`, and pins live in their own collection until expandScheduledPins runs downstream.
+function owedItems(state) {
+    const periods = reconcilePeriods(state);
+    // monthHistory runs oldest→newest and reconcilePeriods puts the live period first, so an
+    // archive's own index already orders the past; the live period sorts after all of them.
+    const archiveCount = (state.monthHistory || []).length;
+    const rows = [];
+    periods.forEach(p => {
+        const live = p.archiveIndex === null;
+        (p.data.entries || []).forEach(e => {
+            if (e.type !== "business" && e.type !== "excluded")
+                return;
+            rows.push({
+                entry: e,
+                archiveIndex: p.archiveIndex,
+                periodLabel: p.label,
+                kind: e.type === "business" ? "work" : "split",
+                settled: !!e.settledOn,
+                // How many periods back this was logged, for surfacing a claim going stale. Archives are
+                // capped at 12 (see MONTH_ROLLOVER), so anything approaching that is close to being
+                // trimmed away along with its period.
+                periodsAgo: live ? 0 : archiveCount - p.archiveIndex,
+                seq: live ? Number.MAX_SAFE_INTEGER : p.archiveIndex,
+            });
+        });
+    });
+    // Oldest first: the longest-outstanding item is the one most likely to have been forgotten.
+    // Undated entries (logged before day-specific logging, or moved between weeks, which clears
+    // `day`) sort to the end of their own period rather than being dropped.
+    rows.sort((a, b) => a.seq - b.seq ||
+        (a.entry.day || "9999-99-99").localeCompare(b.entry.day || "9999-99-99") ||
+        (a.entry.order || 0) - (b.entry.order || 0));
+    return rows;
+}
+// How stale an outstanding item is allowed to get before it is called out. Archives are trimmed at
+// 12 periods, so flagging at 6 leaves half a year of warning before anything could be lost.
+const OWED_STALE_PERIODS = 6;
+function owedTotals(rows) {
+    const out = rows.filter(r => !r.settled);
+    const sum = (k) => out.filter(r => r.kind === k).reduce((s, r) => s + (r.entry.amount || 0), 0);
+    return { outstanding: out.length, split: sum("split"), work: sum("work"),
+        total: out.reduce((s, r) => s + (r.entry.amount || 0), 0),
+        stale: out.filter(r => r.periodsAgo >= OWED_STALE_PERIODS).length };
+}
 // The month's headline figure — the magnitude, the word that gives it its sense, and its colour,
 // returned together so the three can never disagree. "-£70.00 left" was true but read awkwardly;
 // "£70.00 over" says the same thing in the way you'd say it out loud, and WeekPanel's budget bar
@@ -969,6 +1027,8 @@ function App() {
     METHOD_NAME = Object.fromEntries(METHODS.map(m => [m.id, m.name]));
     CATEGORY_BY_ID = Object.fromEntries(CATEGORIES.map(c => [c.id, c]));
     const [tab, setTab] = useState("week");
+    const [owedCutoff, setOwedCutoff] = useState(null); // dayKey while the "mark paid up to" picker is open
+    const [showSettledOwed, setShowSettledOwed] = useState(false);
     const [activeWeek, setActiveWeek] = useState(1);
     const [showEntryFor, setShowEntryFor] = useState(null);
     const [editTarget, setEditTarget] = useState(null); // { kind:"entry"|"credit", data, weekIndex } being edited, or null
@@ -1122,6 +1182,29 @@ function App() {
     // rather than live state. Everything else in the app calls these instead of dispatch directly,
     // so WeekPanel, PinCard, etc. don't need to know which mode they're in.
     const reconOp = (kind, op, payload) => dispatch({ type: "RECONCILE_APPLY", ops: [{ archiveIndex: reconTarget, kind, op, ...payload }] });
+    // Money owed back. Deliberately NOT routed through addEntry/delEntry below: those decide where
+    // to write from `viewingPast`, i.e. the period currently on screen, whereas the Owed tab lists
+    // every period at once while viewingPast is false. Routing a settlement through them would write
+    // it into the live period no matter which period the item actually belongs to.
+    const owedRows = owedItems(state);
+    const owed = owedTotals(owedRows);
+    function setOwedSettled(row, on) {
+        const next = { ...row.entry };
+        if (on)
+            next.settledOn = dayKey(londonNow());
+        else
+            delete next.settledOn;
+        if (row.archiveIndex === null)
+            dispatch({ type: "UPD_ENTRY", entry: next });
+        else
+            dispatch({ type: "EDIT_PAST_ENTRY", op: "upd", archiveIndex: row.archiveIndex, entry: next });
+    }
+    // Claims are repaid in batches — a friend clearing a run of dinners, a work claim paid in one
+    // go — so settling one row at a time is the tedious path, not the main one.
+    function settleOwedUpTo(cutoff) {
+        owedRows.filter(r => !r.settled && r.entry.day && r.entry.day <= cutoff)
+            .forEach(r => setOwedSettled(r, true));
+    }
     function addEntry(entry) {
         if (reconTarget !== undefined)
             return reconOp("entry", "add", { entry });
@@ -1253,7 +1336,9 @@ function App() {
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6, flexShrink: 0 } },
                 React.createElement("button", { style: S.hintBtn, onClick: () => { dispatch({ type: "SETTINGS", patch: { helpHintSeen: true } }); setTab("settings"); setHelpNonce(n => n + 1); } }, "Show me"),
                 React.createElement("button", { style: S.hintDismiss, "aria-label": "Dismiss", onClick: () => dispatch({ type: "SETTINGS", patch: { helpHintSeen: true } }) }, "\u2715")))),
-        React.createElement("div", { style: S.tabs }, [["week", "Week"], ["pins", "Pinned"], ["savings", "Savings"], ["summary", "Summary"]].map(([k, l]) => (React.createElement("button", { key: k, style: { ...S.tab, ...(tab === k ? S.tabActive : {}) }, onClick: () => setTab(k) }, l)))),
+        React.createElement("div", { style: S.tabs }, [["week", "Week"], ["pins", "Pinned"], ["owed", "Owed"], ["savings", "Savings"], ["summary", "Summary"]].map(([k, l]) => (React.createElement("button", { key: k, style: { ...S.tab, ...(tab === k ? S.tabActive : {}) }, onClick: () => setTab(k) },
+            l,
+            k === "owed" && owed.outstanding > 0 && React.createElement("span", { style: S.tabCount }, owed.outstanding))))),
         tab === "week" && (React.createElement("div", { style: { padding: "12px 16px 80px" } },
             (state.monthHistory || []).length > 0 && (() => {
                 const n = state.monthHistory.length;
@@ -1295,6 +1380,75 @@ function App() {
                     lastDeleted && lastDeleted.kind === "pin" && React.createElement("button", { style: S.editToggle, onClick: undoLastDeleted }, "Undo"),
                     React.createElement("button", { style: S.addBtn, onClick: () => setShowAddPin(true) }, "+ Pin"))),
             React.createElement("div", { style: S.pinGrid }, state.pins.length === 0 ? React.createElement("div", { style: S.empty }, "No pinned costs") : state.pins.map(p => React.createElement(PinCard, { key: p.id, pin: p, onEdit: () => setEditPin(p), onDelete: () => { setLastDeleted({ kind: "pin", pin: p }); dispatch({ type: "DEL_PIN", id: p.id }); } }))))),
+        tab === "owed" && (() => {
+            const outstanding = owedRows.filter(r => !r.settled);
+            const settled = owedRows.filter(r => r.settled).reverse(); // most recently logged first
+            const label = (r) => r.entry.label || (r.kind === "work" ? "Work expense" : "Split");
+            const tint = (r) => r.kind === "work" ? "#f59e0b" : "#a855f7";
+            const Row = ({ r, onTap }) => (React.createElement("button", { onClick: onTap, style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", background: "none", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer", textAlign: "left" } },
+                React.createElement("span", { style: { minWidth: 0 } },
+                    React.createElement("span", { style: { display: "block", fontSize: 14, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                        label(r),
+                        React.createElement("span", { style: { ...S.badge, background: chipColors(tint(r)).bg, color: tint(r) } }, r.kind === "work" ? "work" : "split")),
+                    React.createElement("span", { style: { display: "block", fontSize: 11, color: "var(--text-secondary)", marginTop: 2 } },
+                        r.entry.day ? dayKeyLabel(r.entry.day) : "Undated",
+                        " \u00B7 ",
+                        r.periodLabel,
+                        r.settled && r.entry.settledOn ? ` · paid ${dayKeyLabel(r.entry.settledOn)}` : "",
+                        !r.settled && r.periodsAgo >= OWED_STALE_PERIODS
+                            ? React.createElement("span", { style: { color: "#f97316" } },
+                                " \u00B7 ",
+                                r.periodsAgo,
+                                " periods ago") : null)),
+                React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 } },
+                    React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: r.settled ? "var(--text-muted)" : tint(r), textDecoration: r.settled ? "line-through" : "none" } }, fmt(r.entry.amount)),
+                    React.createElement("span", { style: { fontSize: 15, color: r.settled ? "#22c55e" : "var(--text-tertiary)" } }, r.settled ? "✓" : "○"))));
+            return (React.createElement("div", { style: { padding: "12px 16px" } },
+                React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "18px", marginBottom: 12 } },
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6, textTransform: "uppercase" } }, "Owed back to you"),
+                    React.createElement("div", { style: { fontSize: 32, fontWeight: 800, color: owed.total > 0 ? "#a855f7" : "var(--text-muted)", lineHeight: 1 } }, fmt(owed.total)),
+                    React.createElement("div", { style: { fontSize: 12, color: "var(--text-body)", marginTop: 10 } },
+                        owed.split > 0 && React.createElement("span", null,
+                            fmt(owed.split),
+                            " from splits"),
+                        owed.split > 0 && owed.work > 0 && React.createElement("span", { style: { color: "var(--text-muted)" } }, " \u00B7 "),
+                        owed.work > 0 && React.createElement("span", null,
+                            fmt(owed.work),
+                            " from work"),
+                        owed.total === 0 && React.createElement("span", { style: { color: "var(--text-muted)" } }, "Nothing outstanding.")),
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 10, lineHeight: 1.45 } }, "None of this was ever taken off your budget, so ticking an item off just records that you were paid back \u2014 your remaining figure will not move. Do not log a credit as well.")),
+                owed.stale > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid #f97316", borderRadius: 10, padding: "11px 13px", marginBottom: 12, fontSize: 12, color: "var(--text-body)", lineHeight: 1.45 } },
+                    React.createElement("strong", { style: { color: "#f97316" } },
+                        owed.stale,
+                        " still outstanding after ",
+                        OWED_STALE_PERIODS,
+                        "+ periods."),
+                    " ",
+                    "Only the last 12 periods are kept, so chase these up or tick them off before they age out with their period.")),
+                React.createElement("div", { style: S.settingsCard },
+                    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
+                        React.createElement("div", { style: S.sectionTitle }, "Outstanding"),
+                        outstanding.length > 1 && (React.createElement("button", { style: { ...S.editToggle, padding: "5px 10px", fontSize: 12 }, onClick: () => setOwedCutoff(dayKey(londonNow())) }, "Mark paid\u2026"))),
+                    owedCutoff !== null && (React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px", marginBottom: 10 } },
+                        React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 } }, "Tick off everything spent on or before:"),
+                        React.createElement("input", { style: { ...S.input, marginBottom: 8 }, type: "date", value: owedCutoff, onChange: e => setOwedCutoff(e.target.value) }),
+                        React.createElement("div", { style: { display: "flex", gap: 8 } },
+                            React.createElement("button", { style: { ...S.editToggle, flex: 1 }, onClick: () => setOwedCutoff(null) }, "Cancel"),
+                            React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1 }, onClick: () => { settleOwedUpTo(owedCutoff); setOwedCutoff(null); } }, "Mark paid")))),
+                    outstanding.length === 0
+                        ? React.createElement("div", { style: S.empty }, "Nothing outstanding. Splits and work expenses appear here until you tick them off.")
+                        : outstanding.map(r => React.createElement(Row, { key: r.entry.id, r: r, onTap: () => setOwedSettled(r, true) }))),
+                settled.length > 0 && (React.createElement("div", { style: S.settingsCard },
+                    React.createElement("button", { onClick: () => setShowSettledOwed(v => !v), style: { width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", background: "none", border: "none", padding: 0, cursor: "pointer" } },
+                        React.createElement("span", { style: S.sectionTitle },
+                            "Paid back (",
+                            settled.length,
+                            ")"),
+                        React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 16, fontWeight: 700 } }, showSettledOwed ? "▾" : "▸")),
+                    showSettledOwed && (React.createElement("div", { style: { marginTop: 6 } },
+                        React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 } }, "Tap to put one back on the outstanding list."),
+                        settled.map(r => React.createElement(Row, { key: r.entry.id, r: r, onTap: () => setOwedSettled(r, false) }))))))));
+        })(),
         tab === "savings" && (() => {
             // Savings = accumulated leftover budget from COMPLETED months only (i.e. the
             // months archived into monthHistory). The current live month is not counted
@@ -3823,6 +3977,7 @@ const S = {
     tabs: { display: "flex", borderBottom: "1px solid var(--border)", padding: "0 16px" },
     tab: { flex: 1, background: "none", border: "none", borderBottom: "2px solid transparent", color: "var(--text-secondary)", padding: "10px 4px", fontSize: 13, fontWeight: 500, cursor: "pointer" },
     tabActive: { color: "var(--text-heading)", borderBottom: "2px solid #0369a1" },
+    tabCount: { marginLeft: 4, fontSize: 10, fontWeight: 700, background: "var(--surface-2)", color: "var(--text-tertiary)", borderRadius: 8, padding: "1px 5px", verticalAlign: "1px" },
     weekNav: { display: "flex", gap: 6, marginBottom: 12, overflowX: "auto" },
     // The swipeable pair of pages inside the reconciliation sheet. A fixed height (rather than
     // letting the row grow to its tallest page) keeps the tabs and the apply bar in place, and

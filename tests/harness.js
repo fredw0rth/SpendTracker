@@ -19,6 +19,7 @@ const EXPORTS = [
   "defaultState", "normalizeState", "reducer", "rawReducer",
   "reconcilePeriods", "reconcileCandidates", "statementFor", "statementLabel",
   "getRebalancedBudgets", "computeBudgetSummary", "remainingDisplay",
+  "owedItems", "owedTotals", "OWED_STALE_PERIODS",
   "DEFAULT_METHODS", "DEFAULT_CATEGORIES",
 ];
 
