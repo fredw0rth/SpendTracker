@@ -2732,6 +2732,11 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     //   Business + Split = Reimbursable, and Gross − Reimbursable = Net.
     const businessTotal = businessEntries.reduce((s, e) => s + e.amount, 0)
         + state.pins.filter(p => p.type === "business").reduce((s, p) => s + (p.amount || 0), 0);
+    // netTotal is personal spend and reimbursableTotal is defined as the remainder, so
+    // grossSpend - reimbursableTotal === netTotal EXACTLY. Nothing else can be a term in that
+    // waterfall: credits are money in, not spending undone, and they belong below its total rather
+    // than inside it — put a "+ credits" row above the Net spend rule and the card reads
+    // "170 - 0 + 40 = 170".
     const netTotal = totalSpent; // personal (entries + personal pins)
     const reimbursableTotal = grossSpend - netTotal; // business + split (entries + pins)
     const splitTotal = reimbursableTotal - businessTotal; // excluded entries + any "split" pins
@@ -2882,16 +2887,18 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                 React.createElement("span", { style: { color: "var(--text-tertiary)", fontWeight: 600 } },
                     "\u2212 ",
                     fmt(reimbursableTotal))),
-            totalCredits > 0 && (React.createElement("button", { onClick: () => setWaterfallDetail("credits"), style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", fontSize: 13, background: "none", border: "none", cursor: "pointer", textAlign: "left" } },
-                React.createElement("span", { style: { color: "#22c55e" } }, "Credits"),
-                React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
-                    React.createElement("span", { style: { color: "#22c55e", fontWeight: 600 } },
-                        "+ ",
-                        fmt(totalCredits)),
-                    React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 18, fontWeight: 700, lineHeight: 1 } }, "\u203A")))),
             React.createElement("div", { style: { borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "baseline" } },
                 React.createElement("span", { style: { color: "var(--text-heading)", fontSize: 13, fontWeight: 700 } }, "Net spend"),
-                React.createElement("span", { style: { color: "var(--text-heading)", fontWeight: 800, fontSize: 15 } }, fmt(netTotal))))),
+                React.createElement("span", { style: { color: "var(--text-heading)", fontWeight: 800, fontSize: 15 } }, fmt(netTotal))),
+            totalCredits > 0 && (React.createElement(React.Fragment, null,
+                React.createElement("button", { onClick: () => setWaterfallDetail("credits"), style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 8, fontSize: 13, background: "none", border: "none", cursor: "pointer", textAlign: "left" } },
+                    React.createElement("span", { style: { color: "#22c55e" } }, "Credits"),
+                    React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
+                        React.createElement("span", { style: { color: "#22c55e", fontWeight: 600 } },
+                            "+ ",
+                            fmt(totalCredits)),
+                        React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 18, fontWeight: 700, lineHeight: 1 } }, "\u203A"))),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.45 } }, "Money in, not spending undone \u2014 this adds to what's left in your budget rather than reducing net spend."))))),
         React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 2, textTransform: "uppercase" } }, "By card \u00B7 as charged"),
             React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginBottom: 10 } }, "Matches your card statement"),
