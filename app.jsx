@@ -4009,10 +4009,18 @@ function paydayRuleLabel(d) {
 // window. A row is kept when the span it covers overlaps the window: its own date if it has one,
 // otherwise its week (undated entries), otherwise its whole period (flat pins). Falling back to the
 // wider span means an undated row near the edge is included rather than silently lost.
+//
+// Columns added after the original 26 are APPENDED, never inserted, so a spreadsheet that refers to
+// an existing column by position keeps working:
+//   • status — how far to trust the amount. "logged" / "reconciled" for what you entered (the latter
+//     once a statement has matched it); for a pinned cost, "confirmed" when that occurrence's amount
+//     was set by hand or matched to a statement, "unconfirmed" when it is still just the pin's
+//     standing amount, and "upcoming" when its date hasn't arrived yet.
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
   "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
   "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
-  "reimbursable", "settled", "settledOn", "id"];
+  "reimbursable", "settled", "settledOn", "id",
+  "status"];
 
 function ledgerRowInRange(r, range) {
   if (!range || (!range.from && !range.to)) return true;
@@ -4023,7 +4031,15 @@ function ledgerRowInRange(r, range) {
   return (!range.from || hi >= range.from) && (!range.to || lo <= range.to);
 }
 
-function buildLedgerRows(state, range) {
+// `opts.today` (a day key, defaulting to today in London) is what "upcoming" is measured against;
+// `opts.includeUpcoming` keeps scheduled pin occurrences that haven't happened yet. They are left
+// out by default because they are a forecast at the pin's set amount, not a record — exported
+// alongside real spending they made a review count money that hadn't left, at a price that might
+// not be the one actually charged.
+function buildLedgerRows(state, range, opts) {
+  const o = opts || {};
+  const today = o.today || dayKey(londonNow());
+  const includeUpcoming = !!o.includeUpcoming;
   const methods = (state.methods && state.methods.length) ? state.methods : DEFAULT_METHODS;
   const categories = (state.categories && state.categories.length) ? state.categories : DEFAULT_CATEGORIES;
   const methodName = Object.fromEntries(methods.map(m => [m.id, m.name]));
@@ -4035,7 +4051,10 @@ function buildLedgerRows(state, range) {
 
   exportPeriods(state).forEach(p => {
     const d = p.data;
-    const push = (r) => { if (ledgerRowInRange(r, range)) rows.push(r); };
+    const push = (r) => {
+      if (!includeUpcoming && r.status === "upcoming") return;
+      if (ledgerRowInRange(r, range)) rows.push(r);
+    };
     const base = {
       loggingPeriod: d.monthLabel || "",
       periodStart: iso(p.weeks.length ? p.weeks[0].start : null),
@@ -4081,12 +4100,17 @@ function buildLedgerRows(state, range) {
       settled: owedType(e.type) ? (e.settledOn ? "yes" : "no") : "",
       settledOn: e.settledOn || "",
       id: e.id || "",
+      status: e.recon ? "reconciled" : "logged",
     });
 
     entries.forEach(e => push(spendRow(e, "logged", "")));
     expandScheduledPins(pins, p.weeks).forEach(occ => {
       const pin = pins.find(x => x.id === occ.pinId);
-      push(spendRow(occ, "pinned", pin ? pin.freq : ""));
+      // A moved occurrence has no `day` (see expandScheduledPins) but keeps its real date in `date`.
+      const occDay = occ.day || dayKey(new Date(occ.date));
+      const confirmed = !!pin && ((pin.amounts && pin.amounts[occ.occKey] != null) || !!(pin.recons && pin.recons[occ.occKey]));
+      const status = occDay > today ? "upcoming" : confirmed ? "confirmed" : "unconfirmed";
+      push({ ...spendRow(occ, "pinned", pin ? pin.freq : ""), status });
     });
     pins.filter(x => !isScheduledPin(x)).forEach(pin => push({
       ...base, week: "", weekStart: "", weekEnd: "",
@@ -4102,6 +4126,9 @@ function buildLedgerRows(state, range) {
       splitGroupId: "", splitRole: "", splitTotal: "",
       reimbursable: owedType(pin.type) ? "yes" : "no",
       settled: "", settledOn: "", id: pin.id || "",
+      // A flat pin is a whole-period cost with no date of its own, so it is only "upcoming" when
+      // the whole period is still in the future.
+      status: base.periodStart && base.periodStart > today ? "upcoming" : "unconfirmed",
     }));
     (d.credits || []).forEach(c => push({
       ...base, ...weekCols(c.weekIndex),
@@ -4113,15 +4140,16 @@ function buildLedgerRows(state, range) {
       source: "logged", pinFrequency: "",
       splitGroupId: "", splitRole: "", splitTotal: "",
       reimbursable: "no", settled: "", settledOn: "", id: c.id || "",
+      status: c.recon ? "reconciled" : "logged",
     }));
   });
 
   return rows;
 }
 
-function buildLedgerCSV(state, range) {
+function buildLedgerCSV(state, range, opts) {
   const lines = [LEDGER_COLS.join(",")];
-  buildLedgerRows(state, range).forEach(r => lines.push(LEDGER_COLS.map(c => csvEscape(r[c])).join(",")));
+  buildLedgerRows(state, range, opts).forEach(r => lines.push(LEDGER_COLS.map(c => csvEscape(r[c])).join(",")));
   return lines.join("\n");
 }
 
@@ -4379,6 +4407,8 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
   // exported before the range existed.
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
+  // Off by default: a scheduled payment that hasn't happened yet is a forecast, not a transaction.
+  const [includeUpcoming, setIncludeUpcoming] = useState(false);
 
   const build = (window.SpendVault && window.SpendVault.build) || null;
   const periodSlug = exportSlug(data.monthLabel);
@@ -4395,7 +4425,8 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
   ];
   const rangeBackwards = from && to && from > to;
   const range = { from, to };
-  const ledgerCount = format === "ledger" && !rangeBackwards ? buildLedgerRows(account, range).length : 0;
+  const ledgerOpts = { includeUpcoming };
+  const ledgerCount = format === "ledger" && !rangeBackwards ? buildLedgerRows(account, range, ledgerOpts).length : 0;
   const rangeSlug = from || to ? `${from || "start"}-to-${to || dayKey(today)}` : exportSlug(dayKey(today));
   const FORMATS = {
     report: {
@@ -4410,7 +4441,7 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
       blurb: "Every transaction in the dates you choose, one row each, with all its detail in columns — including the pay period it was logged in. Opens in Excel or Numbers. This is a view of your data, not the file to import.",
       make: () => {
         if (rangeBackwards) throw new Error("the start date is after the end date");
-        return buildLedgerCSV(account, range);
+        return buildLedgerCSV(account, range, ledgerOpts);
       },
       name: `spendtracker-ledger-${rangeSlug}.csv`,
       mime: "text/csv",
@@ -4477,6 +4508,10 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
             {!from && !to ? " · leave both blank for everything" : ""}
             {" "}· undated items are included when their week falls in the range.
           </div>
+          <label style={{ display:"flex", alignItems:"center", gap:8, marginTop:8, fontSize:12, color:"var(--text-body)", cursor:"pointer" }}>
+            <input type="checkbox" checked={includeUpcoming} onChange={e => { setIncludeUpcoming(e.target.checked); setCopied(false); }} />
+            Include scheduled payments that haven't happened yet
+          </label>
         </div>
       )}
 
