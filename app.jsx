@@ -45,17 +45,24 @@ const DEFAULT_CATEGORIES = [
 const DEFAULT_CATEGORY_ICON = Object.fromEntries(DEFAULT_CATEGORIES.map(c => [c.id, c.icon]));
 const MAX_CATEGORIES = 24;
 // What a credit actually was. Asked only when logging a credit (rare next to spending), as one row
-// of chips pre-set to whichever kind was used last (`state.lastCreditKind`), so a run of refunds
-// costs no extra taps. Stored as `credit.kind`; credits logged before this have none and export as
-// "unspecified" rather than being guessed at.
+// of chips that always starts on Refund / paid back — the common case, so it costs no extra taps.
+// Stored as `credit.kind`; credits logged before this have none and export as "unspecified"
+// rather than being guessed at.
 const CREDIT_KINDS = [
-  { id: "refund",   label: "Refund" },
+  { id: "refund",   label: "Refund / paid back" },
   { id: "income",   label: "Income" },
   { id: "transfer", label: "Transfer in" },
   { id: "interest", label: "Interest/cashback" },
   { id: "gift",     label: "Gift" },
   { id: "other",    label: "Other" },
 ];
+// Whether a credit adds to the period's budget. Income and transfers in are recorded (for the
+// review and the export) but are not spending money handed back, so they don't. Everything else —
+// and every credit logged before kinds existed — counts exactly as it always did, so no existing
+// period's figures move. EVERY budget calculation must sum credits through budgetCreditTotal.
+const NON_BUDGET_CREDIT_KINDS = ["income", "transfer"];
+const creditCountsToBudget = (c) => !!c && !NON_BUDGET_CREDIT_KINDS.includes(c.kind);
+const budgetCreditTotal = (credits) => (credits || []).filter(creditCountsToBudget).reduce((s, c) => s + (c.amount || 0), 0);
 // Which bucket of a monthly review a category's spending belongs to. Set once per category in
 // Customisation (`category.group`), never per spend, so logging is no slower. A category that has
 // never been given one falls back to these defaults for the built-in ids; "" stored explicitly
@@ -775,7 +782,7 @@ function rawReducer(s, a) {
     case "ADD_PIN": return { ...s, pins: [...s.pins, a.pin] };
     case "DEL_PIN": return { ...s, pins: s.pins.filter(p => p.id !== a.id) };
     case "UPD_PIN": return { ...s, pins: s.pins.map(p => p.id === a.pin.id ? a.pin : p) };
-    case "ADD_CREDIT": return { ...s, credits: [a.credit, ...(s.credits||[])], lastCreditKind: a.credit.kind || s.lastCreditKind };
+    case "ADD_CREDIT": return { ...s, credits: [a.credit, ...(s.credits||[])] };
     case "DEL_CREDIT": return { ...s, credits: (s.credits||[]).filter(c => c.id !== a.id) };
     case "UPD_CREDIT": return { ...s, credits: (s.credits||[]).map(c => c.id === a.credit.id ? a.credit : c) };
     case "SETTINGS": return { ...s, ...a.patch };
@@ -842,9 +849,7 @@ function rawReducer(s, a) {
         if (a.op === "upd") return { ...arc, credits: (arc.credits||[]).map(c => c.id === a.credit.id ? a.credit : c) };
         return arc;
       });
-      // A credit added to a past period is still the kind you last picked.
-      const lastCreditKind = a.op === "add" && a.credit && a.credit.kind ? a.credit.kind : s.lastCreditKind;
-      return { ...s, monthHistory: newHistory, lastCreditKind };
+      return { ...s, monthHistory: newHistory };
     }
     case "RECONCILE_APPLY": {
       // ops: [{ archiveIndex: null|number, kind: "entry"|"credit"|"pin", op, ...payload }]
@@ -892,7 +897,7 @@ const HELP_TOPICS = [
   ["The pay period", "SpendTracker follows your pay cycle, not the calendar month. A period runs from your last payday up to the day before your next one, and switches over automatically the moment payday arrives. Set your payday rule in Settings — last working day, last Friday, last calendar day, or a fixed date. The month label at the top names the period you're currently spending in."],
   ["Weekly budgets & rollover", "Your monthly budget is split into weekly allowances. If you go over in a week, the difference is spread across the days of every week you have left, so a single big week doesn't all land on the next one and a short week gives up proportionally less than a full one. Overspend in the final week has nowhere left to spread, so it just shows as over. Fixed costs come off the weekly rate first, which is what keeps the weeks adding up to the same pot your remaining figure is measured against."],
   ["The “per day” figures", "On the current week you'll see two per-day numbers: how much you can spend each remaining day to stay inside this week, and the same across the rest of the whole period. They turn red as they get tight."],
-  ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. A credit also asks what it was — refund, income, transfer in and so on — already set to whatever you picked last time. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. You can log to any day of the period, not just today — the day picker sits above the keypad, and ‹ › step between weeks. Add a description if you want one, and you'll be asked for a category after saving. Tap any logged item to edit it. The ＋ button at the bottom-left logs to today from any tab."],
+  ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. A credit also asks what it was, starting on Refund / paid back. Refunds, gifts and interest add to your budget as before; income and transfers in are recorded for your review but don't. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. You can log to any day of the period, not just today — the day picker sits above the keypad, and ‹ › step between weeks. Add a description if you want one, and you'll be asked for a category after saving. Tap any logged item to edit it. The ＋ button at the bottom-left logs to today from any tab."],
   ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't. Both halves stay linked, so tapping either opens the whole split in one editor, and reconciliation treats it as the single card transaction it really was."],
   ["Spending categories", "Categories say what a spend was for — Groceries, Transport, and so on. Pick one when you log, or from the prompt straight after saving. Only personal spending carries a category, since that's what's being budgeted. In Edit mode on the week log you can categorise a run of spends at once. The Summary tab totals your spending by category, and you can tap into any of them. Make your own in Settings → Customisation: name, colour and icon, up to 24, drag to reorder. Each category also says whether it counts as Housing, Essentials or Discretionary — set once there, never asked when logging — and the spreadsheet export carries that on every row."],
   ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Daily, Weekly or Monthly frequency and it's dropped straight into the right day of the log, counting against that week; leave it as One-off and it's a flat cost for the whole period instead. Any single occurrence can be skipped, moved to another week, reordered, or given a different amount without disturbing the others — useful when one month's bill comes in higher. Mark a pin Work or Split to keep it out of your personal total."],
@@ -967,7 +972,7 @@ function getRebalancedBudgets(weeks, entries, weeklyBudget, credits) {
   const dailyRate = weeklyBudget / 7;
   const spend = weeks.map(w => {
     const gross = entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s,e)=>s+e.amount,0);
-    const wCredits = (credits || []).filter(c => c.weekIndex === w.index).reduce((s,c)=>s+c.amount,0);
+    const wCredits = budgetCreditTotal((credits || []).filter(c => c.weekIndex === w.index));
     return gross - wCredits;
   });
   const reduction = new Array(N).fill(0); // budget cut carried into each week from earlier overspends
@@ -1002,7 +1007,7 @@ function periodLeftover(m) {
   const pinEntries = expandScheduledPins(mPins, mWeeks);
   const spentEntries = [...mEntries, ...pinEntries].filter(e => e.type === "personal").reduce((s,e)=>s+e.amount,0);
   const spentPins = mPins.filter(p => !isScheduledPin(p) && p.type !== "business" && p.type !== "excluded").reduce((s,p)=>s+(p.amount||0),0);
-  const credits = (m.credits||[]).reduce((s,c)=>s+c.amount,0);
+  const credits = budgetCreditTotal(m.credits);
   return m.monthlyBudget - (spentEntries + spentPins) + credits;
 }
 
@@ -1099,7 +1104,7 @@ function computeBudgetSummary(effectiveData, weeksInPeriod, daysLeftInMonth) {
   const totalPinned = effectiveData.pins.filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
   const totalEntries = personalEntries.reduce((s, e) => s + e.amount, 0);
   const totalSpent = totalPinned + totalEntries;
-  const totalCredits = (effectiveData.credits || []).reduce((s, c) => s + c.amount, 0);
+  const totalCredits = budgetCreditTotal(effectiveData.credits);
   const remaining = effectiveData.monthlyBudget - totalSpent + totalCredits;
   const spendableWeekly = effectiveData.weeklyBudget - (weeksInPeriod > 0 ? totalPinned / weeksInPeriod : 0);
   const dailyFromMonth = daysLeftInMonth > 0 ? remaining / daysLeftInMonth : 0;
@@ -1172,10 +1177,12 @@ function computeSummaryTotals(data, methods, categories) {
     { cat: null, total: uncategorisedTotal }, // null = Uncategorised
   ].filter(r => r.total > 0).sort((a, b) => b.total - a.total);
 
-  const totalCredits = (data.credits || []).reduce((s, c) => s + c.amount, 0);
+  // totalCredits is what adds to the budget; otherMoneyIn is income/transfers, shown but not counted.
+  const totalCredits = budgetCreditTotal(data.credits);
+  const otherMoneyIn = (data.credits || []).filter(c => !creditCountsToBudget(c)).reduce((s, c) => s + (c.amount || 0), 0);
 
   return { grossByMethod, netByMethod, grossSpend, businessTotal, reimbursableTotal, splitTotal, netTotal,
-           byCategory, uncategorisedTotal, categoryRows, totalCredits };
+           byCategory, uncategorisedTotal, categoryRows, totalCredits, otherMoneyIn };
 }
 
 function App() {
@@ -1342,7 +1349,7 @@ function App() {
 
   const currentWeekBudget = currentWeekObj ? (rebalancedBudgets[currentWeekObj.index] ?? spendableWeekly) : spendableWeekly;
   const currentWeekSpent = currentWeekObj ? effectiveData.entries.filter(e=>e.weekIndex===currentWeekObj.index&&e.type==="personal").reduce((s,e)=>s+e.amount,0) : 0;
-  const currentWeekCredits = currentWeekObj ? (effectiveData.credits || []).filter(c=>c.weekIndex===currentWeekObj.index).reduce((s,c)=>s+c.amount,0) : 0;
+  const currentWeekCredits = currentWeekObj ? budgetCreditTotal((effectiveData.credits || []).filter(c=>c.weekIndex===currentWeekObj.index)) : 0;
   // Deliberately unclamped, to match the month figure: once you're over, both per-day cards go
   // negative together. Flooring one at zero while the other ran negative made the pair disagree
   // exactly when the overspend mattered most.
@@ -1957,7 +1964,7 @@ function App() {
         onForgetStatement={methodId => dispatch({ type:"SETTINGS", patch:{ statements: (state.statements || []).filter(x => x.method !== methodId) } })}
         onClose={() => { setShowReconcile(false); setReconcileWith(null); setReconTarget(undefined); }} />}
 
-      {(showEntryFor !== null || editTarget) && <EntryModal weekIndex={editTarget ? editTarget.weekIndex : showEntryFor} weeks={weeks} edit={editTarget} defaultMethod={state.lastMethod || state.methods[0].id} defaultCreditKind={state.lastCreditKind} categories={state.categories} categoryPrompt={state.categoryPrompt} descriptionPrompt={state.descriptionPrompt} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} prefill={entryPrefill} onSave={addEntry} onSaveCredit={addCredit} onUpdate={updEntry} onUpdateCredit={updCredit} onDeleteEntry={delEntry} onClose={() => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); }} />}
+      {(showEntryFor !== null || editTarget) && <EntryModal weekIndex={editTarget ? editTarget.weekIndex : showEntryFor} weeks={weeks} edit={editTarget} defaultMethod={state.lastMethod || state.methods[0].id} categories={state.categories} categoryPrompt={state.categoryPrompt} descriptionPrompt={state.descriptionPrompt} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} prefill={entryPrefill} onSave={addEntry} onSaveCredit={addCredit} onUpdate={updEntry} onUpdateCredit={updCredit} onDeleteEntry={delEntry} onClose={() => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); }} />}
       {(showAddPin || editPin) && <PinModal pin={editPin} categories={state.categories} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onSave={pin => { if (editPin) dispatch({ type: "UPD_PIN", pin }); else dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }} onClose={() => { setShowAddPin(false); setEditPin(null); }} />}
       {showExport && <ExportModal data={effectiveData} account={state} weeks={weeks} rebalancedBudgets={rebalancedBudgets} onClose={() => setShowExport(false)} />}
       {showBackup && <BackupModal onClose={() => { setShowBackup(false); try { setLastBackup(localStorage.getItem(LAST_BACKUP_KEY)); } catch (e) { /* ignore */ } }} />}
@@ -1975,7 +1982,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
   const pinEditable = !!onSkipPin;
   const personal = entries.filter(e => e.type === "personal");
   const spent = personal.reduce((s, e) => s + e.amount, 0);
-  const creditsTotal = credits.reduce((s, c) => s + c.amount, 0);
+  const creditsTotal = budgetCreditTotal(credits);
   const netSpent = spent - creditsTotal;
   const over = netSpent - weeklyBudget;
   const pct = weeklyBudget > 0 ? Math.min((netSpent / weeklyBudget) * 100, 100) : 0;
@@ -2481,7 +2488,7 @@ function CreditLine({ credit, onDel, onEdit, hideDelete }) {
       {/* The card dot, as on every other row — a credit lands on a card like anything else.
           Credits logged before they carried one fall back to the old plain green. */}
       <span style={{ ...S.dot, background: METHOD_COLOR[credit.method] || "#22c55e" }} />
-      <span style={{ flex:1, color:"#22c55e", fontSize:13 }}>{credit.label || "Credit"}{credit.from && <span style={{ color:"var(--text-secondary)" }}> from {credit.from}</span>}</span>
+      <span style={{ flex:1, color:"#22c55e", fontSize:13 }}>{credit.label || "Credit"}{credit.from && <span style={{ color:"var(--text-secondary)" }}> from {credit.from}</span>}{!creditCountsToBudget(credit) && <span style={{ ...S.badge, background:"var(--surface-2)", color:"var(--text-tertiary)" }}>not in budget</span>}</span>
       <span style={{ color:"#22c55e", fontWeight:600, fontSize:13 }}>+{fmt(credit.amount)}</span>
       {!hideDelete && <ConfirmDeleteButton onConfirm={onDel} style={S.delBtn} />}
     </div>
@@ -2877,7 +2884,7 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
 }
 
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, defaultCreditKind, categories, categoryPrompt, descriptionPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories, categoryPrompt, descriptionPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
   const editEntry = edit && edit.kind === "entry" ? edit.data : null;
   const editCredit = edit && edit.kind === "credit" ? edit.data : null;
   // A split (both halves) edited as one unit — its own self-contained editor further down.
@@ -2928,7 +2935,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, defaultCre
   });
   // Editing an older credit with no kind leaves it unpicked: nothing here knows what it was, and
   // saving without choosing must not stamp the default onto it.
-  const [creditKind, setCreditKind] = useState(() => editCredit ? (editCredit.kind || null) : (defaultCreditKind || "refund"));
+  const [creditKind, setCreditKind] = useState(() => editCredit ? (editCredit.kind || null) : "refund");
   const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : ((prefill && prefill.type) || "personal")));
   const [note, setNote] = useState(() => editData ? (editData.label || "") : (splitRef ? (splitRef.label || "") : ((prefill && prefill.label) || "")));
   const [flash, setFlash] = useState(null);
@@ -3038,6 +3045,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, defaultCre
 
   function resetAfterSave() {
     setCents(0);
+    setCreditKind("refund"); // every new credit starts on Refund / paid back, even mid-session
     setNote("");
     setSplitStage(null);
     setSplitTotal(0);
@@ -3311,7 +3319,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, defaultCre
         </div>
         {(creditKind === "income" || creditKind === "transfer") && (
           <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.5, marginBottom:10 }}>
-            Like every credit, this adds to what you can spend this period.
+            Recorded for your review, but it won't add to what you can spend this period.
           </div>
         )}
       </>}
@@ -3458,7 +3466,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
   // The gross/net waterfall and the per-category split — see computeSummaryTotals for the
   // invariants they hold to. Shared with the export so the two can't disagree.
   const { grossByMethod, grossSpend, businessTotal, reimbursableTotal, splitTotal, netTotal,
-          byCategory, uncategorisedTotal, categoryRows } = computeSummaryTotals(state, METHODS, CATEGORIES);
+          byCategory, uncategorisedTotal, categoryRows, otherMoneyIn } = computeSummaryTotals(state, METHODS, CATEGORIES);
 
   // Per-week, per-method breakdown
   const weekRows = weeks.map(w => {
@@ -3586,7 +3594,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
 
       {/* Gross vs net — waterfall from what hit your cards down to what's actually yours. Shown
           when there's reimbursable (business or split) spend, or credits, to make the distinction. */}
-      {(reimbursableTotal > 0 || totalCredits > 0) && (
+      {(reimbursableTotal > 0 || totalCredits > 0 || otherMoneyIn > 0) && (
         <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
           <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Gross vs net</div>
           {businessTotal > 0 && (
@@ -3619,7 +3627,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
             <span style={{ color:"var(--text-heading)", fontSize:13, fontWeight:700 }}>Net spend</span>
             <span style={{ color:"var(--text-heading)", fontWeight:800, fontSize:15 }}>{fmt(netTotal)}</span>
           </div>
-          {totalCredits > 0 && (
+          {(totalCredits > 0 || otherMoneyIn > 0) && (
             <>
               <button onClick={() => setWaterfallDetail("credits")} style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between", padding:"5px 0", marginTop:8, borderTop:"1px solid var(--border)", paddingTop:8, fontSize:13, background:"none", border:"none", cursor:"pointer", textAlign:"left" }}>
                 <span style={{ color:"#22c55e" }}>Credits</span>
@@ -3631,6 +3639,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
               <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.45 }}>
                 Money in, not spending undone — this adds to what's left in your budget rather than
                 reducing net spend.
+                {otherMoneyIn > 0 && <> Income and transfers in ({fmt(otherMoneyIn)}) are listed there but don't add to it.</>}
               </div>
             </>
           )}
@@ -4056,14 +4065,14 @@ function CreditsDetailModal({ total, groups, onEditCredit, onClose }) {
     <Modal onClose={onClose} title="Credits">
       <div style={{ background:"var(--surface-2)", borderRadius:8, padding:"10px 12px", marginBottom:14 }}>
         <div style={{ fontSize:17, fontWeight:800, color:"#22c55e" }}>+{fmt(total)}</div>
-        <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{count} credit{count === 1 ? "" : "s"}</div>
+        <div style={{ fontSize:11, color:"var(--text-secondary)" }}>{count} credit{count === 1 ? "" : "s"} · income and transfers in are listed but don't add to your budget</div>
       </div>
       <WeekGroupedList groups={groups} empty="No credits yet" renderRow={(c, i, sep) => (
         <div key={c.id} onClick={onEditCredit ? () => onEditCredit(c) : undefined}
              style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 0", borderBottom: sep ? "1px solid var(--border)" : "none", cursor: onEditCredit ? "pointer" : "default" }}>
           <span style={{ ...S.dot, background:"#22c55e" }} />
           <div style={{ flex:1 }}>
-            <div style={{ fontSize:13, color:"#22c55e" }}>{c.label || "Credit"}{c.from && <span style={{ color:"var(--text-secondary)" }}> from {c.from}</span>}</div>
+            <div style={{ fontSize:13, color:"#22c55e" }}>{c.label || "Credit"}{c.from && <span style={{ color:"var(--text-secondary)" }}> from {c.from}</span>}{!creditCountsToBudget(c) && <span style={{ ...S.badge, background:"var(--surface-2)", color:"var(--text-tertiary)" }}>not in budget</span>}</div>
           </div>
           <span style={{ fontWeight:600, fontSize:13, color:"#22c55e" }}>+{fmt(c.amount)}</span>
           {onEditCredit && <span style={{ color:"var(--text-tertiary)", fontSize:15, marginLeft:2 }}>›</span>}
@@ -4358,6 +4367,7 @@ function buildReportText(data, weeks, rebalancedBudgets, account) {
   L.push(pad("− Split (not yours)", fmt(t.splitTotal)));
   L.push(pad("= Net personal spend", fmt(t.netTotal)));
   if (t.totalCredits > 0) L.push(pad("Credits (money in)", "+" + fmt(t.totalCredits)));
+  if (t.otherMoneyIn > 0) L.push(pad("Income/transfers (not in budget)", fmt(t.otherMoneyIn)));
   const remaining = data.monthlyBudget - t.netTotal + t.totalCredits;
   const rd = remainingDisplay(remaining, data.monthlyBudget);
   L.push(pad(`Of ${fmt(data.monthlyBudget)}`, `${rd.figure} ${rd.label}`));

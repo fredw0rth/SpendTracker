@@ -205,16 +205,52 @@ test("each credit exports its kind; older ones say 'unspecified' instead of bein
   assert.equal(r.e1.creditKind, "", "spending rows have none");
 });
 
-test("logging a credit remembers its kind for next time, in the live period or a past one", () => {
-  let s = account();
-  s = A.reducer(s, { type: "ADD_CREDIT", credit: { id: "n1", amount: 1, kind: "income", weekIndex: 1 } });
-  assert.equal(s.lastCreditKind, "income");
-  s.monthHistory = [{ monthLabel: "Jul 2026", payYear: 2026, payMonth: 6, entries: [], pins: [], credits: [] }];
-  s = A.reducer(s, { type: "EDIT_PAST_CREDIT", op: "add", archiveIndex: 0, credit: { id: "n2", amount: 1, kind: "gift", weekIndex: 1 } });
-  assert.equal(s.lastCreditKind, "gift");
-  // An edit to an old credit is not a choice about the next one.
-  s = A.reducer(s, { type: "EDIT_PAST_CREDIT", op: "upd", archiveIndex: 0, credit: { id: "n2", amount: 2, kind: "refund", weekIndex: 1 } });
-  assert.equal(s.lastCreditKind, "gift");
+test("the picker's first kind is Refund / paid back", () => {
+  assert.equal(A.CREDIT_KINDS[0].id, "refund");
+  assert.equal(A.CREDIT_KINDS[0].label, "Refund / paid back");
+});
+
+test("logging a credit no longer stores a remembered kind", () => {
+  const s = A.reducer(account(), { type: "ADD_CREDIT", credit: { id: "n1", amount: 1, kind: "income", weekIndex: 1 } });
+  assert.equal(s.lastCreditKind, undefined);
+});
+
+// ─── 5b. Income and transfers in don't add to the budget ─────────────────────
+
+test("only income and transfers in are left out of the budget; older credits still count", () => {
+  for (const k of ["refund", "gift", "interest", "other", undefined]) assert.equal(A.creditCountsToBudget({ amount: 1, kind: k }), true, String(k));
+  for (const k of ["income", "transfer"]) assert.equal(A.creditCountsToBudget({ amount: 1, kind: k }), false, k);
+  assert.equal(A.budgetCreditTotal([{ amount: 10, kind: "refund" }, { amount: 2000, kind: "income" }, { amount: 5 }, { amount: 300, kind: "transfer" }]), 15);
+});
+
+test("an income credit moves none of the budget figures; a refund moves all of them", () => {
+  const base = account();
+  base.pins = [];
+  const { start, end } = A.periodBounds(2026, 7, "last-working");
+  const weeks = A.buildWeeks(start, end);
+  const figures = (credits) => {
+    const s = { ...base, credits };
+    return {
+      remaining: A.computeBudgetSummary(s, weeks.length, 10).remaining,
+      week1: A.getRebalancedBudgets(weeks, s.entries, 250, credits)[1],
+      leftover: A.periodLeftover(s),
+      summary: A.computeSummaryTotals(s, s.methods, s.categories).totalCredits,
+    };
+  };
+  const none = figures([]);
+  const withIncome = figures([{ id: "i", amount: 2000, kind: "income", weekIndex: 1 }, { id: "t", amount: 500, kind: "transfer", weekIndex: 1 }]);
+  assert.deepEqual(withIncome, none);
+  const withRefund = figures([{ id: "r", amount: 20, kind: "refund", weekIndex: 1 }]);
+  assert.equal(withRefund.remaining, none.remaining + 20);
+  assert.equal(withRefund.leftover, none.leftover + 20);
+  assert.equal(withRefund.summary, 20);
+});
+
+test("the Summary totals still report income and transfers, separately", () => {
+  const s = { ...account(), credits: [{ id: "i", amount: 2000, kind: "income", weekIndex: 1 }, { id: "r", amount: 20, kind: "refund", weekIndex: 1 }] };
+  const t = A.computeSummaryTotals(s, s.methods, s.categories);
+  assert.equal(t.totalCredits, 20);
+  assert.equal(t.otherMoneyIn, 2000);
 });
 
 test("the kinds are the six the logging sheet offers", () => {
