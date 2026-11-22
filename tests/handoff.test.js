@@ -126,7 +126,7 @@ test("the export shows how much of a credit was a repayment, and which credit se
   assert.equal(r.dinT.settledBy, "c1");
   assert.equal(r.dinT.settled, "yes");
   const csv = A.buildLedgerCSV(s, null, { today: "2026-08-31" });
-  assert.ok(csv.split("\n")[0].endsWith("postedDate,repaysAmount,repays,settledBy,moveTo,moveToAccountType,movePurpose"), "new columns are appended at the end");
+  assert.ok(csv.split("\n")[0].includes("postedDate,repaysAmount,repays,settledBy,moveTo,moveToAccountType,movePurpose,categoryColour,monthlyBudget,weeklyBudget,weekBudget"), "new columns are appended at the end");
 });
 
 // ─── Report summary for the Finances Tracker ──────────────────────────────────
@@ -221,4 +221,41 @@ test("a period with only a move in it is still kept", () => {
   s.entries = []; s.credits = []; s.pins = [];
   s.moves = [{ id: "m1", amount: 50, from: "Lloyds", to: "Amex", purpose: "cardbill", weekIndex: 1 }];
   assert.equal(A.periodHasRecordedActivity(s), true);
+});
+
+// ─── Budget and colour columns for the dashboard ──────────────────────────────
+
+test("every row carries its category's colour, and its own period's budgets", () => {
+  const s = account();
+  s.monthlyBudget = 2000; s.weeklyBudget = 280;
+  s.monthHistory = [{ ...account(), monthLabel: "Jul 2026", payYear: 2026, payMonth: 6, monthlyBudget: 1800, weeklyBudget: 210,
+    entries: [{ id: "old", amount: 9, label: "Lunch", method: "Amex", type: "personal", category: "eatingout", weekIndex: 1, day: "2026-07-01" }],
+    pins: [], credits: [] }];
+  const r = byId(A.buildLedgerRows(s, null, { today: "2026-08-31" }));
+  const eatingOut = s.categories.find(c => c.id === "eatingout").color;
+  assert.equal(r.coffee.categoryColour, eatingOut);
+  assert.equal(r.taxi.categoryColour, "", "no category, no colour");
+  assert.equal(r.coffee.monthlyBudget, "2000.00");
+  assert.equal(r.coffee.weeklyBudget, "280.00");
+  assert.equal(r.old.monthlyBudget, "1800.00", "an archived period keeps the budget it had");
+  assert.equal(r.old.weeklyBudget, "210.00");
+});
+
+test("weekBudget pro-rates short weeks and matches the Week tab's starting budget", () => {
+  const s = account();
+  s.monthlyBudget = 2000; s.weeklyBudget = 280;
+  // A flat (whole-period) pin comes off the weekly rate, spread across the period's weeks.
+  s.pins = [{ id: "flat", label: "Phone", amount: 50, method: "Amex", type: "personal" }];
+  const p = A.reconcilePeriods(s)[0];
+  const rows = A.buildLedgerRows(s, null, { today: "2026-08-31" });
+  const spendable = 280 - 50 / p.weeks.length;
+  p.weeks.forEach(w => {
+    const row = rows.find(x => x.week === w.index);
+    if (!row) return;
+    assert.equal(row.weekBudget, (spendable / 7 * w.days.length).toFixed(2), `week ${w.index} (${w.days.length} days)`);
+  });
+  const base = A.getRebalancedBudgets(p.weeks, [], spendable, []);
+  const w1 = rows.find(x => x.week === 1);
+  assert.equal(w1.weekBudget, base[1].toFixed(2), "same as the app's own figure before any rebalancing");
+  assert.equal(rows.find(x => x.id === "flat").weekBudget, "", "a whole-period cost has no week");
 });
