@@ -1095,7 +1095,7 @@ const HELP_TOPICS = [
     ["The Summary tab", "The period at a glance: what's left, gross vs net, a per-card breakdown that matches each card's own statement, spending by category, a week-by-week breakdown you can tap to jump to, your largest spends (individually or added up by name), and how much of your spending came from pinned costs rather than logged ones. Almost everything on it opens the transactions behind it."],
     ["Checking against your statement", "The Summary tab has a ⇄ Reconcile button. Export the CSV from your bank or card provider, upload it there, and SpendTracker cross-references it with everything you've logged — across the current period and finished ones, since a card statement rarely lines up with a payday. When a spend matches the statement exactly, the date it reached your card is noted for the export — the day you logged it still decides which week and pay period it counts in. It separates what's on the statement but never logged, amounts that don't match, things you logged that aren't on the statement, and everything that lines up. Matching goes on date and amount, not on the name, because your note to yourself (“Lunch”) never matches what your bank writes. Card payments, transfers and salary are recognised and skipped. Nothing is changed until you save it, the file never leaves your phone, and each card's statement is remembered so you don't re-upload it."],
     ["Going back to a past period", "The ◀ ▶ arrows beside the month name on the Week tab step back through finished periods, and Settings has a “Go back to…” button for the most recent one. Their figures reflect that period's own budget and payday rule, and any edits you make there apply only to it — your current period is left untouched."],
-    ["Exporting your data", "Summary → ↗ Export gives you three things. The Report is the period written out in full — every spend by day, the gross/net split, categories, cards and what you're owed. The Spreadsheet is one row per transaction for Excel or Numbers — everything, or just the dates you choose (there are shortcuts for this period and the tax year) — with a column showing which pay period each one was logged in, and the date it reached your card once a statement has matched it. The Report opens with this period's totals for a monthly review — housing, essentials, discretionary, card spend and money in — ready to copy across. The Data file is your whole account, and it's the one that imports back into SpendTracker (Settings → Import data) to rebuild everything: periods, pinned costs, categories, cards, budgets and settings. The data file is not encrypted, so anyone who opens it can read it — for a copy that's safe to store or send, use Export account instead."],
+    ["Exporting your data", "Summary → ↗ Export gives you three things. The Report is the period written out in full — every spend by day, the gross/net split, categories, cards and what you're owed. The Spreadsheet is one row per transaction for Excel or Numbers — everything, or just the dates you choose (there are shortcuts for this period and the tax year) — with a column showing which pay period each one was logged in, the date it reached your card once a statement has matched it, its category colour, and the budgets of the period and week it belongs to. The Report opens with this period's totals for a monthly review — housing, essentials, discretionary, card spend and money in — ready to copy across. The Data file is your whole account, and it's the one that imports back into SpendTracker (Settings → Import data) to rebuild everything: periods, pinned costs, categories, cards, budgets and settings. The data file is not encrypted, so anyone who opens it can read it — for a copy that's safe to store or send, use Export account instead."],
     ["Making it yours", "Settings → Customisation is where the app bends to you. Payment types are yours to name and colour — cards, cash, whatever you actually use, up to 12. Categories work the same way, with an icon each. And there's a light theme as well as the dark one. Anything currently in use is protected from deletion, so you can't strand a logged spend."],
     ["Your data & security", "Everything is encrypted on your device with your passphrase and never leaves your phone. Your recovery code is the only way back in if you forget the passphrase, so keep it somewhere safe. Face ID unlocks where supported, and the app locks itself again after a couple of minutes in the background."],
     ["Moving to another device", "Each browser keeps its own separate data — Safari, Chrome and the home-screen app each start fresh. There are two ways across. Export account gives you an encrypted backup: import it elsewhere and that device becomes the same account, unlocked with the same passphrase. The data file from Summary → Export carries the same information unencrypted, and Settings → Import data puts it into a device that already has its own passphrase set up. Either way, importing replaces what's on the receiving device."],
@@ -4014,12 +4014,21 @@ function paydayRuleLabel(d) {
 //   • moveTo / moveToAccountType / movePurpose — on a move between your own accounts (direction
 //     "move", type "move"): where the money went, that account's kind, and what it was for. `card`
 //     is where it came from. A move is neither spending nor income, so it sits in neither total.
+//   • categoryColour — the category's colour as set in Customisation (#rrggbb), so a chart can
+//     match the app. Blank when the row has no category.
+//   • monthlyBudget / weeklyBudget — the budgets of the row's OWN period, from its snapshot, not
+//     today's settings. weeklyBudget is the per-7-day setting as entered.
+//   • weekBudget — what the row's week was given before any rebalancing, exactly as the Week tab
+//     starts it: the weekly rate less the period's whole-period fixed costs spread across its
+//     weeks, scaled by the days in that week. The first and last weeks of a period are often short,
+//     so this is what to draw a short week's budget line against. Blank for rows with no week.
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
     "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
     "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
     "reimbursable", "settled", "settledOn", "id",
     "status", "spendGroup", "dateBasis", "cardAccount", "accountType", "creditKind", "claimStatus", "claimedOn",
-    "postedDate", "repaysAmount", "repays", "settledBy", "moveTo", "moveToAccountType", "movePurpose"];
+    "postedDate", "repaysAmount", "repays", "settledBy", "moveTo", "moveToAccountType", "movePurpose",
+    "categoryColour", "monthlyBudget", "weeklyBudget", "weekBudget"];
 function ledgerRowInRange(r, range) {
     if (!range || (!range.from && !range.to))
         return true;
@@ -4102,6 +4111,11 @@ function buildLedgerRows(state, range, opts) {
                 r.moveToAccountType = "";
                 r.movePurpose = "";
             }
+            const cat = catById[r.categoryId];
+            r.categoryColour = (cat && cat.color) || "";
+            r.monthlyBudget = periodBudgets.monthly;
+            r.weeklyBudget = periodBudgets.weekly;
+            r.weekBudget = r.week !== "" && periodBudgets.week[r.week] != null ? periodBudgets.week[r.week] : "";
             rows.push(r);
         };
         const base = {
@@ -4111,6 +4125,17 @@ function buildLedgerRows(state, range, opts) {
         };
         const weekById = {};
         p.weeks.forEach(w => { weekById[w.index] = w; });
+        // The period's own budgets (see the column notes above). The per-week figure mirrors
+        // computeBudgetSummary's spendableWeekly and getRebalancedBudgets' pro-rating.
+        const flatPersonal = flatPinsForWeeks(d.pins || [], p.weeks)
+            .filter(x => x.type !== "business" && x.type !== "excluded").reduce((t, x) => t + (x.amount || 0), 0);
+        const hasNum = (n) => typeof n === "number" && isFinite(n);
+        const spendableWeekly = hasNum(d.weeklyBudget) ? d.weeklyBudget - (p.weeks.length ? flatPersonal / p.weeks.length : 0) : null;
+        const periodBudgets = {
+            monthly: hasNum(d.monthlyBudget) ? csvMoney(d.monthlyBudget) : "",
+            weekly: hasNum(d.weeklyBudget) ? csvMoney(d.weeklyBudget) : "",
+            week: Object.fromEntries(p.weeks.map(w => [w.index, spendableWeekly == null ? "" : csvMoney(Math.max(spendableWeekly / 7 * w.days.length, 0))])),
+        };
         const weekCols = (idx) => {
             const w = weekById[idx];
             return w ? { week: w.index, weekStart: iso(w.start), weekEnd: iso(w.end) }
