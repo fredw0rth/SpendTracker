@@ -23,7 +23,7 @@ const EXPORTS = [
   "DEFAULT_METHODS", "DEFAULT_CATEGORIES",
   "computeSummaryTotals", "periodLeftover",
   "csvEscape", "csvMoney", "exportPeriods", "paydayRuleLabel",
-  "buildReportText", "buildLedgerCSV", "buildDataExport", "parseDataExport", "dataExportSummary",
+  "buildReportText", "buildLedgerCSV", "buildLedgerRows", "ledgerRowInRange", "ukTaxYearRange", "LEDGER_COLS", "buildDataExport", "parseDataExport", "dataExportSummary",
   "EXPORT_VERSION",
 ];
 

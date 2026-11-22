@@ -183,7 +183,7 @@ can check them without a browser:
 | Format | What it is |
 |---|---|
 | **Report** (`.txt`) | The period written out for a human — every spend grouped by day with its category, card and split/work marking, the gross-vs-net waterfall, totals by category and card, largest spends, what you're owed, and savings to date. |
-| **Spreadsheet** (`.csv`) | One row per money movement across *every* period, 26 columns wide. Scheduled pins appear as the occurrences they became; both halves of a split carry the full amount the card was charged. Opens in Excel or Numbers. A view of the data, not the import format. |
+| **Spreadsheet** (`.csv`) | One row per money movement, 26 columns wide, across every period or a date range you pick (presets for this period and this/last UK tax year). The first column, `loggingPeriod`, is the pay period each row was logged in — not always the calendar month of its date, since a period runs payday to payday. Undated rows are kept when their week (or, for a flat pin, their period) overlaps the range. Scheduled pins appear as the occurrences they became; both halves of a split carry the full amount the card was charged. Opens in Excel or Numbers. A view of the data, not the import format. |
 | **Data file** (`.json`) | The whole account, losslessly — entries with their `splitGroupId`/`category`/`settledOn`, pins with their schedules and per-occurrence overrides, every archived period with its own budget and payday snapshot, plus categories, cards and settings. `parseDataExport` reads it back and **Settings → Import data** installs it. |
 
 Saved bank statements are deliberately left out of the data file: they're a bulky,

@@ -174,7 +174,7 @@ test("the ledger covers entries, pin occurrences, flat pins and credits, across 
   assert.ok(pinned.some(r => r[col("description")] === "Rent" && r[col("pinFrequency")] === "none"));
 
   // Both periods are represented, oldest first.
-  const periods = [...new Set(body.map(r => r[col("period")]))];
+  const periods = [...new Set(body.map(r => r[col("loggingPeriod")]))];
   assert.deepEqual(periods.slice(0, 1), ["Jul 2026"]);
   assert.ok(periods.includes("Aug 2026"));
 
@@ -336,4 +336,49 @@ test("periodLeftover matches the header's remaining, on the period's own budget"
   const m = seeded().monthHistory[0];
   // 1000 budget − 55 personal + 0 credits
   assert.equal(A.periodLeftover(m), 945);
+});
+
+// ─── Spreadsheet date range ──────────────────────────────────────────────────
+
+test("the ledger's first column is the pay period each row was logged in", () => {
+  const { rows } = require("../reconcile.js").parseCSV(A.buildLedgerCSV(seeded()));
+  assert.equal(rows[0][0], "loggingPeriod");
+  const col = (n) => rows[0].indexOf(n);
+  assert.equal(rows.slice(1).find(r => r[col("id")] === "a1")[0], "Jul 2026");
+  assert.equal(rows.slice(1).find(r => r[col("id")] === "e3")[0], "Aug 2026");
+});
+
+test("no range, or an empty one, exports everything", () => {
+  const s = seeded();
+  const all = A.buildLedgerRows(s).length;
+  assert.equal(A.buildLedgerRows(s, { from: "", to: "" }).length, all);
+  assert.equal(A.buildLedgerCSV(s, null), A.buildLedgerCSV(s));
+});
+
+test("a date range keeps dated rows inside it, and undated rows whose week or period overlaps", () => {
+  const ids = A.buildLedgerRows(seeded(), { from: "2026-08-04", to: "2026-08-04" }).map(r => r.id);
+  assert.ok(ids.includes("e3") && ids.includes("e4"), "both halves of the split on the day");
+  assert.ok(ids.includes("e5"), "undated entry in the week containing the 4th");
+  assert.ok(ids.includes("p2"), "flat pin covering the whole period");
+  for (const out of ["e1", "e2", "c1", "a1"]) assert.ok(!ids.includes(out), out + " is dated outside the range");
+});
+
+test("an open-ended range works from either side", () => {
+  const s = seeded();
+  const after = A.buildLedgerRows(s, { from: "2026-08-05" }).map(r => r.id);
+  assert.ok(after.includes("c1") && !after.includes("e3") && !after.includes("a1"));
+  const before = A.buildLedgerRows(s, { to: "2026-06-30" }).map(r => r.id);
+  assert.ok(before.includes("a1") && !before.includes("e3"));
+});
+
+test("a range outside the account's history yields just the header", () => {
+  const csv = A.buildLedgerCSV(seeded(), { from: "2020-01-01", to: "2020-12-31" });
+  assert.equal(csv, A.LEDGER_COLS.join(","));
+});
+
+test("the UK tax year runs 6 April to 5 April", () => {
+  assert.deepEqual(A.ukTaxYearRange(new Date(2026, 10, 22), 0), { from: "2026-04-06", to: "2027-04-05" });
+  assert.deepEqual(A.ukTaxYearRange(new Date(2026, 3, 5), 0), { from: "2025-04-06", to: "2026-04-05" });
+  assert.deepEqual(A.ukTaxYearRange(new Date(2026, 3, 6), 0), { from: "2026-04-06", to: "2027-04-05" });
+  assert.deepEqual(A.ukTaxYearRange(new Date(2026, 10, 22), -1), { from: "2025-04-06", to: "2026-04-05" });
 });

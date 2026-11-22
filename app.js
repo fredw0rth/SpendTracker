@@ -923,7 +923,7 @@ const HELP_TOPICS = [
     ["The Summary tab", "The period at a glance: what's left, gross vs net, a per-card breakdown that matches each card's own statement, spending by category, a week-by-week breakdown you can tap to jump to, your largest spends (individually or added up by name), and how much of your spending came from pinned costs rather than logged ones. Almost everything on it opens the transactions behind it."],
     ["Checking against your statement", "The Summary tab has a ⇄ Reconcile button. Export the CSV from your bank or card provider, upload it there, and SpendTracker cross-references it with everything you've logged — across the current period and finished ones, since a card statement rarely lines up with a payday. It separates what's on the statement but never logged, amounts that don't match, things you logged that aren't on the statement, and everything that lines up. Matching goes on date and amount, not on the name, because your note to yourself (“Lunch”) never matches what your bank writes. Card payments, transfers and salary are recognised and skipped. Nothing is changed until you save it, the file never leaves your phone, and each card's statement is remembered so you don't re-upload it."],
     ["Going back to a past period", "The ◀ ▶ arrows beside the month name on the Week tab step back through finished periods, and Settings has a “Go back to…” button for the most recent one. Their figures reflect that period's own budget and payday rule, and any edits you make there apply only to it — your current period is left untouched."],
-    ["Exporting your data", "Summary → ↗ Export gives you three things. The Report is the period written out in full — every spend by day, the gross/net split, categories, cards and what you're owed. The Spreadsheet is every transaction across every period as one row each, for Excel or Numbers. The Data file is your whole account, and it's the one that imports back into SpendTracker (Settings → Import data) to rebuild everything: periods, pinned costs, categories, cards, budgets and settings. The data file is not encrypted, so anyone who opens it can read it — for a copy that's safe to store or send, use Export account instead."],
+    ["Exporting your data", "Summary → ↗ Export gives you three things. The Report is the period written out in full — every spend by day, the gross/net split, categories, cards and what you're owed. The Spreadsheet is one row per transaction for Excel or Numbers — everything, or just the dates you choose (there are shortcuts for this period and the tax year) — with a column showing which pay period each one was logged in. The Data file is your whole account, and it's the one that imports back into SpendTracker (Settings → Import data) to rebuild everything: periods, pinned costs, categories, cards, budgets and settings. The data file is not encrypted, so anyone who opens it can read it — for a copy that's safe to store or send, use Export account instead."],
     ["Making it yours", "Settings → Customisation is where the app bends to you. Payment types are yours to name and colour — cards, cash, whatever you actually use, up to 12. Categories work the same way, with an icon each. And there's a light theme as well as the dark one. Anything currently in use is protected from deletion, so you can't strand a logged spend."],
     ["Your data & security", "Everything is encrypted on your device with your passphrase and never leaves your phone. Your recovery code is the only way back in if you forget the passphrase, so keep it somewhere safe. Face ID unlocks where supported, and the app locks itself again after a couple of minutes in the background."],
     ["Moving to another device", "Each browser keeps its own separate data — Safari, Chrome and the home-screen app each start fresh. There are two ways across. Export account gives you an encrypted backup: import it elsewhere and that device becomes the same account, unlocked with the same passphrase. The data file from Summary → Export carries the same information unencrypted, and Settings → Import data puts it into a device that already has its own passphrase set up. Either way, importing replaces what's on the receiving device."],
@@ -3537,23 +3537,43 @@ function paydayRuleLabel(d) {
 // One row per money movement, across the live period and every archive. Scheduled pins are emitted
 // as the occurrences they become — matching every figure in the app — while a flat pin, which has
 // no week of its own, is emitted once for the whole period with an empty week.
-function buildLedgerCSV(state) {
+//
+// `loggingPeriod` is the pay period the row was logged in ("Sep 2026"). It is NOT always the
+// calendar month of `date`: a period runs payday to payday, so a spend on 29 Aug can belong to
+// "Sep 2026". Keeping both columns is what lets a spreadsheet group either way.
+//
+// `range` ({ from, to } as "YYYY-MM-DD" day keys, either end optional) narrows the rows to a date
+// window. A row is kept when the span it covers overlaps the window: its own date if it has one,
+// otherwise its week (undated entries), otherwise its whole period (flat pins). Falling back to the
+// wider span means an undated row near the edge is included rather than silently lost.
+const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
+    "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
+    "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
+    "reimbursable", "settled", "settledOn", "id"];
+function ledgerRowInRange(r, range) {
+    if (!range || (!range.from && !range.to))
+        return true;
+    const lo = r.date || r.weekStart || r.periodStart;
+    const hi = r.date || r.weekEnd || r.periodEnd;
+    if (!lo || !hi)
+        return true; // nothing to place it by — keep it rather than drop it
+    // Day keys are zero-padded YYYY-MM-DD, so plain string comparison orders them correctly.
+    return (!range.from || hi >= range.from) && (!range.to || lo <= range.to);
+}
+function buildLedgerRows(state, range) {
     const methods = (state.methods && state.methods.length) ? state.methods : DEFAULT_METHODS;
     const categories = (state.categories && state.categories.length) ? state.categories : DEFAULT_CATEGORIES;
     const methodName = Object.fromEntries(methods.map(m => [m.id, m.name]));
     const catName = Object.fromEntries(categories.map(c => [c.id, c.name]));
-    const cols = ["period", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
-        "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
-        "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
-        "reimbursable", "settled", "settledOn", "id"];
-    const rows = [cols.join(",")];
+    const rows = [];
     const iso = (d) => (d ? dayKey(d) : "");
     const owedType = (t) => t === "business" || t === "excluded";
     exportPeriods(state).forEach(p => {
         const d = p.data;
-        const push = (r) => rows.push(cols.map(c => csvEscape(r[c])).join(","));
+        const push = (r) => { if (ledgerRowInRange(r, range))
+            rows.push(r); };
         const base = {
-            period: d.monthLabel || "",
+            loggingPeriod: d.monthLabel || "",
             periodStart: iso(p.weeks.length ? p.weeks[0].start : null),
             periodEnd: iso(p.weeks.length ? p.weeks[p.weeks.length - 1].end : null),
         };
@@ -3629,7 +3649,21 @@ function buildLedgerCSV(state) {
             reimbursable: "no", settled: "", settledOn: "", id: c.id || "",
         }));
     });
-    return rows.join("\n");
+    return rows;
+}
+function buildLedgerCSV(state, range) {
+    const lines = [LEDGER_COLS.join(",")];
+    buildLedgerRows(state, range).forEach(r => lines.push(LEDGER_COLS.map(c => csvEscape(r[c])).join(",")));
+    return lines.join("\n");
+}
+// The UK tax year containing `today` (6 April to 5 April), as day keys. `offset` of -1 gives the one
+// before. Offered as a preset because a work-expense claim or a self-assessment return is usually
+// what someone wants a dated slice of their spending for.
+function ukTaxYearRange(today, offset) {
+    const y = today.getFullYear();
+    const afterStart = today.getMonth() > 3 || (today.getMonth() === 3 && today.getDate() >= 6);
+    const startYear = (afterStart ? y : y - 1) + (offset || 0);
+    return { from: `${startYear}-04-06`, to: `${startYear + 1}-04-05` };
 }
 // ─── Report (text) ────────────────────────────────────────────────────────────
 // The readable one. `data` is the period being viewed with scheduled pins ALREADY expanded into
@@ -3884,8 +3918,26 @@ const exportSlug = (s) => String(s || "export").toLowerCase().replace(/[^a-z0-9]
 function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
     const [format, setFormat] = useState("report");
     const [copied, setCopied] = useState(false);
+    // Spreadsheet date window, as day keys. Both empty = everything, which is what the sheet always
+    // exported before the range existed.
+    const [from, setFrom] = useState("");
+    const [to, setTo] = useState("");
     const build = (window.SpendVault && window.SpendVault.build) || null;
     const periodSlug = exportSlug(data.monthLabel);
+    const today = londonNow();
+    const livePeriod = reconcilePeriods(account)[0];
+    const PRESETS = [
+        { label: "All time", range: { from: "", to: "" } },
+        { label: "This period", range: livePeriod.weeks.length
+                ? { from: dayKey(livePeriod.weeks[0].start), to: dayKey(livePeriod.weeks[livePeriod.weeks.length - 1].end) }
+                : { from: "", to: "" } },
+        { label: "This tax year", range: ukTaxYearRange(today, 0) },
+        { label: "Last tax year", range: ukTaxYearRange(today, -1) },
+    ];
+    const rangeBackwards = from && to && from > to;
+    const range = { from, to };
+    const ledgerCount = format === "ledger" && !rangeBackwards ? buildLedgerRows(account, range).length : 0;
+    const rangeSlug = from || to ? `${from || "start"}-to-${to || dayKey(today)}` : exportSlug(dayKey(today));
     const FORMATS = {
         report: {
             label: "Report",
@@ -3896,9 +3948,13 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
         },
         ledger: {
             label: "Spreadsheet",
-            blurb: "Every transaction across every period, one row each, with all its detail in columns. Opens in Excel or Numbers. This is a view of your data, not the file to import.",
-            make: () => buildLedgerCSV(account),
-            name: `spendtracker-ledger-${exportSlug(new Date().toISOString().slice(0, 10))}.csv`,
+            blurb: "Every transaction in the dates you choose, one row each, with all its detail in columns — including the pay period it was logged in. Opens in Excel or Numbers. This is a view of your data, not the file to import.",
+            make: () => {
+                if (rangeBackwards)
+                    throw new Error("the start date is after the end date");
+                return buildLedgerCSV(account, range);
+            },
+            name: `spendtracker-ledger-${rangeSlug}.csv`,
             mime: "text/csv",
         },
         data: {
@@ -3932,6 +3988,23 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
     return (React.createElement(Modal, { onClose: onClose, title: "Export" },
         React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, Object.keys(FORMATS).map(k => (React.createElement("button", { key: k, style: chip(format === k), onClick: () => { setFormat(k); setCopied(false); } }, FORMATS[k].label)))),
         React.createElement("div", { style: { fontSize: 12, color: "var(--text-tertiary)", lineHeight: 1.5, marginBottom: 10 } }, active.blurb),
+        format === "ledger" && (React.createElement("div", { style: { marginBottom: 10 } },
+            React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 } }, PRESETS.map(p => {
+                const on = p.range.from === from && p.range.to === to;
+                return React.createElement("button", { key: p.label, style: { ...chip(on), flex: "1 1 auto", padding: "6px 8px", fontSize: 11 }, onClick: () => { setFrom(p.range.from); setTo(p.range.to); setCopied(false); } }, p.label);
+            })),
+            React.createElement("div", { style: { display: "flex", gap: 8 } },
+                React.createElement("label", { style: { flex: 1, fontSize: 11, color: "var(--text-muted)" } },
+                    "From",
+                    React.createElement("input", { type: "date", "aria-label": "From date", style: { ...S.input, marginTop: 4, fontSize: 13 }, value: from, max: to || undefined, onChange: e => { setFrom(e.target.value); setCopied(false); } })),
+                React.createElement("label", { style: { flex: 1, fontSize: 11, color: "var(--text-muted)" } },
+                    "To",
+                    React.createElement("input", { type: "date", "aria-label": "To date", style: { ...S.input, marginTop: 4, fontSize: 13 }, value: to, min: from || undefined, onChange: e => { setTo(e.target.value); setCopied(false); } }))),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 6, lineHeight: 1.5 } },
+                rangeBackwards ? null : `${ledgerCount} row${ledgerCount === 1 ? "" : "s"}`,
+                !from && !to ? " · leave both blank for everything" : "",
+                " ",
+                "\u00B7 undated items are included when their week falls in the range."))),
         format === "data" && (React.createElement("div", { style: { background: chipColors("#f59e0b").bg, border: "1px solid #f59e0b", borderRadius: 10, padding: "10px 12px", fontSize: 11, color: "#f59e0b", lineHeight: 1.6, marginBottom: 10 } },
             React.createElement("strong", null, "This file is not encrypted."),
             " Anyone who opens it can read everything you've logged. For a copy that's safe to store or send to yourself, use ",
