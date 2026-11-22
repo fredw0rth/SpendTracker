@@ -71,3 +71,45 @@ test("new columns are appended, so the original 26 keep their positions", () => 
   assert.equal(A.LEDGER_COLS[25], "id");
   assert.ok(A.LEDGER_COLS.indexOf("status") > 25);
 });
+
+// ─── 2. Housing / essentials / discretionary ─────────────────────────────────
+
+test("built-in categories default to a group; ones you made start unset", () => {
+  assert.equal(A.categoryGroupOf({ id: "groceries" }), "essentials");
+  assert.equal(A.categoryGroupOf({ id: "eatingout" }), "discretionary");
+  assert.equal(A.categoryGroupOf({ id: "general" }), "");
+  assert.equal(A.categoryGroupOf({ id: "x1", name: "Food & Drink" }), "");
+  assert.equal(A.categoryGroupOf(null), "");
+});
+
+test("a group you set wins, and clearing it doesn't bring the default back", () => {
+  assert.equal(A.categoryGroupOf({ id: "bills", group: "housing" }), "housing");
+  assert.equal(A.categoryGroupOf({ id: "groceries", group: "" }), "");
+});
+
+test("the ledger carries each personal row's group, and flags the ones without one", () => {
+  const s = account();
+  s.categories = [...s.categories, { id: "home", name: "Rent & mortgage", icon: "home", color: "#000", group: "housing" }];
+  s.pins = [{ id: "rent", label: "Rent", amount: 900, method: "Lloyds", type: "personal", freq: "monthly", day: 5, category: "home" }];
+  s.entries = [
+    { id: "g", amount: 40, label: "Tesco", method: "Amex", type: "personal", category: "groceries", weekIndex: 1, day: "2026-08-01", order: 1 },
+    { id: "o", amount: 20, label: "Pizza", method: "Amex", type: "personal", category: "eatingout", weekIndex: 1, day: "2026-08-01", order: 2 },
+    { id: "u", amount: 5, label: "Misc", method: "Amex", type: "personal", weekIndex: 1, day: "2026-08-01", order: 3 },
+    { id: "w", amount: 60, label: "Client lunch", method: "Amex", type: "business", weekIndex: 1, day: "2026-08-01", order: 4 },
+  ];
+  const r = A.buildLedgerRows(s, null, { today: "2026-08-31" });
+  const g = Object.fromEntries(r.map(x => [x.description, x.spendGroup]));
+  assert.equal(g.Rent, "housing");
+  assert.equal(g.Tesco, "essentials");
+  assert.equal(g.Pizza, "discretionary");
+  assert.equal(g.Misc, "unclassified");
+  assert.equal(g["Client lunch"], "", "a work expense isn't part of your own spending");
+});
+
+test("setting a group is a settings change only: no logged entry is touched", () => {
+  const s = account();
+  const before = JSON.stringify(s.entries);
+  const cats = s.categories.map(c => c.id === "bills" ? { ...c, group: "housing" } : c);
+  const after = A.reducer(s, { type: "SETTINGS", patch: { categories: cats } });
+  assert.equal(JSON.stringify(after.entries), before);
+});
