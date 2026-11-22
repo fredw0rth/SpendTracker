@@ -12,7 +12,9 @@ const monthlyPin = (over) => Object.assign({
 }, over || {});
 
 const occurrences = (pin) => A.expandScheduledPins([pin], weeks);
-const st = () => A.normalizeState(A.defaultState());
+// Pinned to the same August 2026 period the occurrences above are built from. defaultState() alone
+// follows TODAY's period, so these tests passed only while the real date was in August 2026.
+const st = () => ({ ...A.normalizeState(A.defaultState()), payYear: 2026, payMonth: 7, monthLabel: "Aug 2026", paydayKind: "last-working" });
 
 test("a pin with no override maps behaves exactly as before", () => {
   const occ = occurrences(monthlyPin());

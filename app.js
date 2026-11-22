@@ -11,6 +11,20 @@ const DEFAULT_METHODS = [
     { id: "Cash", name: "Cash", color: "#fbbf24" },
 ];
 const MAX_METHODS = 12;
+// Which real account a payment type is, for anything that reads the export outside the app (a
+// net-worth review needs to know a credit card is a debt and a current account isn't). Both are
+// OPTIONAL fields on the method, set once in Customisation: `account` is free text ("Club Lloyds
+// current ·· 4821"), `kind` one of the ids below. The two built-ins whose kind is unambiguous get a
+// default; anything else stays blank until chosen. Read through methodKindOf.
+const ACCOUNT_KINDS = [
+    { id: "credit-card", label: "Credit card" },
+    { id: "current", label: "Current account" },
+    { id: "savings", label: "Savings" },
+    { id: "cash", label: "Cash" },
+    { id: "other", label: "Other" },
+];
+const DEFAULT_METHOD_KIND = { Amex: "credit-card", Cash: "cash" };
+const methodKindOf = (m) => !m ? "" : (m.kind !== undefined ? (m.kind || "") : (DEFAULT_METHOD_KIND[m.id] || ""));
 const genId = () => Math.random().toString(36).slice(2);
 // Spending categories: what a spend was *for* (Groceries, Transport, …). Like methods, these are
 // a user-editable list of {id, name, emoji, color} living in state.categories. Entries store the
@@ -29,6 +43,39 @@ const DEFAULT_CATEGORIES = [
 // Map default ids → icons, used to upgrade accounts saved with the earlier emoji-based defaults.
 const DEFAULT_CATEGORY_ICON = Object.fromEntries(DEFAULT_CATEGORIES.map(c => [c.id, c.icon]));
 const MAX_CATEGORIES = 24;
+// What a credit actually was. Asked only when logging a credit (rare next to spending), as one row
+// of chips that always starts on Refund / paid back — the common case, so it costs no extra taps.
+// Stored as `credit.kind`; credits logged before this have none and export as "unspecified"
+// rather than being guessed at.
+const CREDIT_KINDS = [
+    { id: "refund", label: "Refund / paid back" },
+    { id: "income", label: "Income" },
+    { id: "transfer", label: "Transfer in" },
+    { id: "interest", label: "Interest/cashback" },
+    { id: "gift", label: "Gift" },
+    { id: "other", label: "Other" },
+];
+// Whether a credit adds to the period's budget. Income and transfers in are recorded (for the
+// review and the export) but are not spending money handed back, so they don't. Everything else —
+// and every credit logged before kinds existed — counts exactly as it always did, so no existing
+// period's figures move. EVERY budget calculation must sum credits through budgetCreditTotal.
+const NON_BUDGET_CREDIT_KINDS = ["income", "transfer"];
+const creditCountsToBudget = (c) => !!c && !NON_BUDGET_CREDIT_KINDS.includes(c.kind);
+const budgetCreditTotal = (credits) => (credits || []).filter(creditCountsToBudget).reduce((s, c) => s + (c.amount || 0), 0);
+// Which bucket of a monthly review a category's spending belongs to. Set once per category in
+// Customisation (`category.group`), never per spend, so logging is no slower. A category that has
+// never been given one falls back to these defaults for the built-in ids; "" stored explicitly
+// means "deliberately not set". Read through categoryGroupOf, never off the object directly.
+const SPEND_GROUPS = [
+    { id: "housing", label: "Housing" },
+    { id: "essentials", label: "Essentials" },
+    { id: "discretionary", label: "Discretionary" },
+];
+const DEFAULT_CATEGORY_GROUP = {
+    groceries: "essentials", transport: "essentials", bills: "essentials",
+    eatingout: "discretionary", shopping: "discretionary", entertain: "discretionary",
+};
+const categoryGroupOf = (cat) => !cat ? "" : (cat.group !== undefined ? (cat.group || "") : (DEFAULT_CATEGORY_GROUP[cat.id] || ""));
 // Monochrome line icons (Lucide, ISC) inlined as SVG inner-markup, keyed by a short name.
 // Rendered white on a category's coloured circle (Monzo-style) via <CategoryIcon>.
 const ICONS = { "cart": "<circle cx=\"8\" cy=\"21\" r=\"1\" /><circle cx=\"19\" cy=\"21\" r=\"1\" /><path d=\"M2.05 2.05h2l2.66 12.42a2 2 0 0 0 2 1.58h9.78a2 2 0 0 0 1.95-1.57l1.65-7.43H5.12\" />", "utensils": "<path d=\"M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2\" /><path d=\"M7 2v20\" /><path d=\"M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7\" />", "train": "<path d=\"M8 3.1V7a4 4 0 0 0 8 0V3.1\" /><path d=\"m9 15-1-1\" /><path d=\"m15 15 1-1\" /><path d=\"M9 19c-2.8 0-5-2.2-5-5v-4a8 8 0 0 1 16 0v4c0 2.8-2.2 5-5 5Z\" /><path d=\"m8 19-2 3\" /><path d=\"m16 19 2 3\" />", "bag": "<path d=\"M16 10a4 4 0 0 1-8 0\" /><path d=\"M3.103 6.034h17.794\" /><path d=\"M3.4 5.467a2 2 0 0 0-.4 1.2V20a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6.667a2 2 0 0 0-.4-1.2l-2-2.667A2 2 0 0 0 17 2H7a2 2 0 0 0-1.6.8z\" />", "bulb": "<path d=\"M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5\" /><path d=\"M9 18h6\" /><path d=\"M10 22h4\" />", "film": "<path d=\"m12.296 3.464 3.02 3.956\" /><path d=\"M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z\" /><path d=\"M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" /><path d=\"m6.18 5.276 3.1 3.899\" />", "heart": "<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" />", "shapes": "<path d=\"M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z\" /><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\" rx=\"1\" /><circle cx=\"17.5\" cy=\"17.5\" r=\"3.5\" />", "home": "<path d=\"M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8\" /><path d=\"M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z\" />", "dumbbell": "<path d=\"M17.596 12.768a2 2 0 1 0 2.829-2.829l-1.768-1.767a2 2 0 0 0 2.828-2.829l-2.828-2.828a2 2 0 0 0-2.829 2.828l-1.767-1.768a2 2 0 1 0-2.829 2.829z\" /><path d=\"m2.5 21.5 1.4-1.4\" /><path d=\"m20.1 3.9 1.4-1.4\" /><path d=\"M5.343 21.485a2 2 0 1 0 2.829-2.828l1.767 1.768a2 2 0 1 0 2.829-2.829l-6.364-6.364a2 2 0 1 0-2.829 2.829l1.768 1.767a2 2 0 0 0-2.828 2.829z\" /><path d=\"m9.6 14.4 4.8-4.8\" />", "coffee": "<path d=\"M10 2v2\" /><path d=\"M14 2v2\" /><path d=\"M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1\" /><path d=\"M6 2v2\" />", "car": "<path d=\"M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2\" /><circle cx=\"7\" cy=\"17\" r=\"2\" /><path d=\"M9 17h6\" /><circle cx=\"17\" cy=\"17\" r=\"2\" />", "gift": "<path d=\"M12 7v14\" /><path d=\"M20 11v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8\" /><path d=\"M7.5 7a1 1 0 0 1 0-5A4.8 8 0 0 1 12 7a4.8 8 0 0 1 4.5-5 1 1 0 0 1 0 5\" /><rect x=\"3\" y=\"7\" width=\"18\" height=\"4\" rx=\"1\" />", "plane": "<path d=\"M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z\" />", "health": "<path d=\"M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5\" /><path d=\"M3.22 13H9.5l.5-1 2 4.5 2-7 1.5 3.5h5.27\" />", "piggy": "<path d=\"M11 17h3v2a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-3a3.16 3.16 0 0 0 2-2h1a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1h-1a5 5 0 0 0-2-4V3a4 4 0 0 0-3.2 1.6l-.3.4H11a6 6 0 0 0-6 6v1a5 5 0 0 0 2 4v3a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1z\" /><path d=\"M16 10h.01\" /><path d=\"M2 8v1a2 2 0 0 0 2 2h1\" />", "sprout": "<path d=\"M14 9.536V7a4 4 0 0 1 4-4h1.5a.5.5 0 0 1 .5.5V5a4 4 0 0 1-4 4 4 4 0 0 0-4 4c0 2 1 3 1 5a5 5 0 0 1-1 3\" /><path d=\"M4 9a5 5 0 0 1 8 4 5 5 0 0 1-8-4\" /><path d=\"M5 21h14\" />", "phone": "<rect width=\"14\" height=\"20\" x=\"5\" y=\"2\" rx=\"2\" ry=\"2\" /><path d=\"M12 18h.01\" />", "book": "<path d=\"M12 7v14\" /><path d=\"M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z\" />", "pet": "<path d=\"M11.25 16.25h1.5L12 17z\" /><path d=\"M16 14v.5\" /><path d=\"M4.42 11.247A13.152 13.152 0 0 0 4 14.556C4 18.728 7.582 21 12 21s8-2.272 8-6.444a11.702 11.702 0 0 0-.493-3.309\" /><path d=\"M8 14v.5\" /><path d=\"M8.5 8.5c-.384 1.05-1.083 2.028-2.344 2.5-1.931.722-3.576-.297-3.656-1-.113-.994 1.177-6.53 4-7 1.923-.321 3.651.845 3.651 2.235A7.497 7.497 0 0 1 14 5.277c0-1.39 1.844-2.598 3.767-2.277 2.823.47 4.113 6.006 4 7-.08.703-1.725 1.722-3.656 1-1.261-.472-1.855-1.45-2.239-2.5\" />", "fuel": "<path d=\"M14 13h2a2 2 0 0 1 2 2v2a2 2 0 0 0 4 0v-6.998a2 2 0 0 0-.59-1.42L18 5\" /><path d=\"M14 21V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v16\" /><path d=\"M2 21h13\" /><path d=\"M3 9h11\" />", "work": "<path d=\"M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16\" /><rect width=\"20\" height=\"14\" x=\"2\" y=\"6\" rx=\"2\" />", "edu": "<path d=\"M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z\" /><path d=\"M22 10v6\" /><path d=\"M6 12.5V16a6 3 0 0 0 12 0v-3.5\" />", "music": "<path d=\"M9 18V5l12-2v13\" /><circle cx=\"6\" cy=\"18\" r=\"3\" /><circle cx=\"18\" cy=\"16\" r=\"3\" />", "wine": "<path d=\"M8 22h8\" /><path d=\"M7 10h10\" /><path d=\"M12 15v7\" /><path d=\"M12 15a5 5 0 0 0 5-5c0-2-.5-4-2-8H9c-1.5 4-2 6-2 8a5 5 0 0 0 5 5Z\" />", "shirt": "<path d=\"M20.38 3.46 16 2a4 4 0 0 1-8 0L3.62 3.46a2 2 0 0 0-1.34 2.23l.58 3.47a1 1 0 0 0 .99.84H6v10c0 1.1.9 2 2 2h8a2 2 0 0 0 2-2V10h2.15a1 1 0 0 0 .99-.84l.58-3.47a2 2 0 0 0-1.34-2.23z\" />", "baby": "<path d=\"M10 16c.5.3 1.2.5 2 .5s1.5-.2 2-.5\" /><path d=\"M15 12h.01\" /><path d=\"M19.38 6.813A9 9 0 0 1 20.8 10.2a2 2 0 0 1 0 3.6 9 9 0 0 1-17.6 0 2 2 0 0 1 0-3.6A9 9 0 0 1 12 3c2 0 3.5 1.1 3.5 2.5s-.9 2.5-2 2.5c-.8 0-1.5-.4-1.5-1\" /><path d=\"M9 12h.01\" />", "tools": "<path d=\"M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 7.057-8.259c.438.12.54.662.219.984z\" />", "card": "<rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\" /><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\" />", "cash": "<rect width=\"20\" height=\"12\" x=\"2\" y=\"6\" rx=\"2\" /><circle cx=\"12\" cy=\"12\" r=\"2\" /><path d=\"M6 12h.01M18 12h.01\" />", "ticket": "<path d=\"M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z\" /><path d=\"M13 5v2\" /><path d=\"M13 17v2\" /><path d=\"M13 11v2\" />", "game": "<line x1=\"6\" x2=\"10\" y1=\"11\" y2=\"11\" /><line x1=\"8\" x2=\"8\" y1=\"9\" y2=\"13\" /><line x1=\"15\" x2=\"15.01\" y1=\"12\" y2=\"12\" /><line x1=\"18\" x2=\"18.01\" y1=\"10\" y2=\"10\" /><path d=\"M17.32 5H6.68a4 4 0 0 0-3.978 3.59c-.006.052-.01.101-.017.152C2.604 9.416 2 14.456 2 16a3 3 0 0 0 3 3c1 0 1.5-.5 2-1l1.414-1.414A2 2 0 0 1 9.828 16h4.344a2 2 0 0 1 1.414.586L17 18c.5.5 1 1 2 1a3 3 0 0 0 3-3c0-1.545-.604-6.584-.685-7.258-.007-.05-.011-.1-.017-.151A4 4 0 0 0 17.32 5z\" />", "pizza": "<path d=\"m12 14-1 1\" /><path d=\"m13.75 18.25-1.25 1.42\" /><path d=\"M17.775 5.654a15.68 15.68 0 0 0-12.121 12.12\" /><path d=\"M18.8 9.3a1 1 0 0 0 2.1 7.7\" /><path d=\"M21.964 20.732a1 1 0 0 1-1.232 1.232l-18-5a1 1 0 0 1-.695-1.232A19.68 19.68 0 0 1 15.732 2.037a1 1 0 0 1 1.232.695z\" />", "bus": "<path d=\"M8 6v6\" /><path d=\"M15 6v6\" /><path d=\"M2 12h19.6\" /><path d=\"M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3\" /><circle cx=\"7\" cy=\"18\" r=\"2\" /><path d=\"M9 18h5\" /><circle cx=\"16\" cy=\"18\" r=\"2\" />", "bike": "<circle cx=\"18.5\" cy=\"17.5\" r=\"3.5\" /><circle cx=\"5.5\" cy=\"17.5\" r=\"3.5\" /><circle cx=\"15\" cy=\"5\" r=\"1\" /><path d=\"M12 17.5V14l-3-3 4-3 2 3h2\" />", "star": "<path d=\"M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z\" />", "tag": "<path d=\"M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z\" /><circle cx=\"7.5\" cy=\"7.5\" r=\".5\" fill=\"currentColor\" />" };
@@ -912,12 +959,12 @@ const HELP_TOPICS = [
     ["The pay period", "SpendTracker follows your pay cycle, not the calendar month. A period runs from your last payday up to the day before your next one, and switches over automatically the moment payday arrives. Set your payday rule in Settings — last working day, last Friday, last calendar day, or a fixed date. The month label at the top names the period you're currently spending in."],
     ["Weekly budgets & rollover", "Your monthly budget is split into weekly allowances. If you go over in a week, the difference is spread across the days of every week you have left, so a single big week doesn't all land on the next one and a short week gives up proportionally less than a full one. Overspend in the final week has nowhere left to spread, so it just shows as over. Fixed costs come off the weekly rate first, which is what keeps the weeks adding up to the same pot your remaining figure is measured against."],
     ["The “per day” figures", "On the current week you'll see two per-day numbers: how much you can spend each remaining day to stay inside this week, and the same across the rest of the whole period. They turn red as they get tight."],
-    ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. You can log to any day of the period, not just today — the day picker sits above the keypad, and ‹ › step between weeks. Add a description if you want one, and you'll be asked for a category after saving. Tap any logged item to edit it. The ＋ button at the bottom-left logs to today from any tab."],
+    ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. A credit also asks what it was, starting on Refund / paid back. Refunds, gifts and interest add to your budget as before; income and transfers in are recorded for your review but don't. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. You can log to any day of the period, not just today — the day picker sits above the keypad, and ‹ › step between weeks. Add a description if you want one, and you'll be asked for a category after saving. Tap any logged item to edit it. The ＋ button at the bottom-left logs to today from any tab."],
     ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't. Both halves stay linked, so tapping either opens the whole split in one editor, and reconciliation treats it as the single card transaction it really was."],
-    ["Spending categories", "Categories say what a spend was for — Groceries, Transport, and so on. Pick one when you log, or from the prompt straight after saving. Only personal spending carries a category, since that's what's being budgeted. In Edit mode on the week log you can categorise a run of spends at once. The Summary tab totals your spending by category, and you can tap into any of them. Make your own in Settings → Customisation: name, colour and icon, up to 24, drag to reorder."],
+    ["Spending categories", "Categories say what a spend was for — Groceries, Transport, and so on. Pick one when you log, or from the prompt straight after saving. Only personal spending carries a category, since that's what's being budgeted. In Edit mode on the week log you can categorise a run of spends at once. The Summary tab totals your spending by category, and you can tap into any of them. Make your own in Settings → Customisation: name, colour and icon, up to 24, drag to reorder. Each category also says whether it counts as Housing, Essentials or Discretionary — set once there, never asked when logging — and the spreadsheet export carries that on every row."],
     ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Daily, Weekly or Monthly frequency and it's dropped straight into the right day of the log, counting against that week; leave it as One-off and it's a flat cost for the whole period instead. Any single occurrence can be skipped, moved to another week, reordered, or given a different amount without disturbing the others — useful when one month's bill comes in higher. Mark a pin Work or Split to keep it out of your personal total."],
     ["Editing and tidying a week", "Tap Edit on a week to select several items at once and delete them, move them to another week, or give them all a category. Outside Edit mode you can drag an item to reorder it, and dragging it across a day heading files it under that day. The card chips at the top filter the week down to one card. Deleted something by mistake? Undo appears straight after, and it puts back both halves of a split or a skipped pinned cost."],
-    ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. For the same reason, do NOT also log a credit: that would hand you back budget you never spent. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
+    ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Work expenses have a step in between: tap Claim (or Mark claimed… for a batch) when you submit the claim, so you can tell what is waiting on payroll from what you have not claimed yet. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. For the same reason, do NOT also log a credit: that would hand you back budget you never spent. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
     ["Gross vs net", "Gross is what actually hit your cards — it's the figure your bank statement shows, because work expenses and the full amount of a split are charged in full and paid back separately. Net is the part that was genuinely yours, and that's what your budget measures. Work plus the not-yours half of splits makes up the reimbursable difference between them. Credits sit below that sum rather than inside it: money coming in isn't spending undone. The Summary tab shows all of it, and each line opens the transactions behind it."],
     ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover, worked out against that period's own budget rather than today's."],
     ["The Summary tab", "The period at a glance: what's left, gross vs net, a per-card breakdown that matches each card's own statement, spending by category, a week-by-week breakdown you can tap to jump to, your largest spends (individually or added up by name), and how much of your spending came from pinned costs rather than logged ones. Almost everything on it opens the transactions behind it."],
@@ -973,7 +1020,7 @@ function getRebalancedBudgets(weeks, entries, weeklyBudget, credits) {
     const dailyRate = weeklyBudget / 7;
     const spend = weeks.map(w => {
         const gross = entries.filter(e => e.weekIndex === w.index && e.type === "personal").reduce((s, e) => s + e.amount, 0);
-        const wCredits = (credits || []).filter(c => c.weekIndex === w.index).reduce((s, c) => s + c.amount, 0);
+        const wCredits = budgetCreditTotal((credits || []).filter(c => c.weekIndex === w.index));
         return gross - wCredits;
     });
     const reduction = new Array(N).fill(0); // budget cut carried into each week from earlier overspends
@@ -1008,7 +1055,7 @@ function periodLeftover(m) {
     const pinEntries = expandScheduledPins(mPins, mWeeks);
     const spentEntries = [...mEntries, ...pinEntries].filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0);
     const spentPins = mPins.filter(p => !isScheduledPin(p) && p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
-    const credits = (m.credits || []).reduce((s, c) => s + c.amount, 0);
+    const credits = budgetCreditTotal(m.credits);
     return m.monthlyBudget - (spentEntries + spentPins) + credits;
 }
 // ─── Money owed back ──────────────────────────────────────────────────────────
@@ -1042,6 +1089,9 @@ function owedItems(state) {
                 periodLabel: p.label,
                 kind: e.type === "business" ? "work" : "split",
                 settled: !!e.settledOn,
+                // A work claim's middle stage: submitted to your employer, not yet paid. `claimedOn` is a
+                // dayKey on the entry, inert like settledOn. Splits have no claim stage — a friend just pays.
+                claimed: e.type === "business" && !!e.claimedOn,
                 // How many periods back this was logged, for surfacing a claim going stale. Archives are
                 // capped at 12 (see MONTH_ROLLOVER), so anything approaching that is close to being
                 // trimmed away along with its period.
@@ -1065,6 +1115,7 @@ function owedTotals(rows) {
     const out = rows.filter(r => !r.settled);
     const sum = (k) => out.filter(r => r.kind === k).reduce((s, r) => s + (r.entry.amount || 0), 0);
     return { outstanding: out.length, split: sum("split"), work: sum("work"),
+        claimed: out.filter(r => r.claimed).reduce((s, r) => s + (r.entry.amount || 0), 0),
         total: out.reduce((s, r) => s + (r.entry.amount || 0), 0),
         stale: out.filter(r => r.periodsAgo >= OWED_STALE_PERIODS).length };
 }
@@ -1096,7 +1147,7 @@ function computeBudgetSummary(effectiveData, weeksInPeriod, daysLeftInMonth) {
     const totalPinned = effectiveData.pins.filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
     const totalEntries = personalEntries.reduce((s, e) => s + e.amount, 0);
     const totalSpent = totalPinned + totalEntries;
-    const totalCredits = (effectiveData.credits || []).reduce((s, c) => s + c.amount, 0);
+    const totalCredits = budgetCreditTotal(effectiveData.credits);
     const remaining = effectiveData.monthlyBudget - totalSpent + totalCredits;
     const spendableWeekly = effectiveData.weeklyBudget - (weeksInPeriod > 0 ? totalPinned / weeksInPeriod : 0);
     const dailyFromMonth = daysLeftInMonth > 0 ? remaining / daysLeftInMonth : 0;
@@ -1166,9 +1217,11 @@ function computeSummaryTotals(data, methods, categories) {
         ...cs.map(c => ({ cat: c, total: byCategory[c.id] || 0 })),
         { cat: null, total: uncategorisedTotal }, // null = Uncategorised
     ].filter(r => r.total > 0).sort((a, b) => b.total - a.total);
-    const totalCredits = (data.credits || []).reduce((s, c) => s + c.amount, 0);
+    // totalCredits is what adds to the budget; otherMoneyIn is income/transfers, shown but not counted.
+    const totalCredits = budgetCreditTotal(data.credits);
+    const otherMoneyIn = (data.credits || []).filter(c => !creditCountsToBudget(c)).reduce((s, c) => s + (c.amount || 0), 0);
     return { grossByMethod, netByMethod, grossSpend, businessTotal, reimbursableTotal, splitTotal, netTotal,
-        byCategory, uncategorisedTotal, categoryRows, totalCredits };
+        byCategory, uncategorisedTotal, categoryRows, totalCredits, otherMoneyIn };
 }
 function App() {
     var _a;
@@ -1184,7 +1237,8 @@ function App() {
     METHOD_NAME = Object.fromEntries(METHODS.map(m => [m.id, m.name]));
     CATEGORY_BY_ID = Object.fromEntries(CATEGORIES.map(c => [c.id, c]));
     const [tab, setTab] = useState("week");
-    const [owedCutoff, setOwedCutoff] = useState(null); // dayKey while the "mark paid up to" picker is open
+    const [owedCutoff, setOwedCutoff] = useState(null); // dayKey while the "mark … up to" picker is open
+    const [owedCutoffMode, setOwedCutoffMode] = useState("paid"); // which batch the picker applies: "paid" | "claimed"
     const [showSettledOwed, setShowSettledOwed] = useState(false);
     const [activeWeek, setActiveWeek] = useState(1);
     const [showEntryFor, setShowEntryFor] = useState(null);
@@ -1327,7 +1381,7 @@ function App() {
     const rebalancedBudgets = getRebalancedBudgets(weeks, effectiveData.entries, spendableWeekly, effectiveData.credits);
     const currentWeekBudget = currentWeekObj ? ((_a = rebalancedBudgets[currentWeekObj.index]) !== null && _a !== void 0 ? _a : spendableWeekly) : spendableWeekly;
     const currentWeekSpent = currentWeekObj ? effectiveData.entries.filter(e => e.weekIndex === currentWeekObj.index && e.type === "personal").reduce((s, e) => s + e.amount, 0) : 0;
-    const currentWeekCredits = currentWeekObj ? (effectiveData.credits || []).filter(c => c.weekIndex === currentWeekObj.index).reduce((s, c) => s + c.amount, 0) : 0;
+    const currentWeekCredits = currentWeekObj ? budgetCreditTotal((effectiveData.credits || []).filter(c => c.weekIndex === currentWeekObj.index)) : 0;
     // Deliberately unclamped, to match the month figure: once you're over, both per-day cards go
     // negative together. Flooring one at zero while the other ran negative made the pair disagree
     // exactly when the overspend mattered most.
@@ -1362,6 +1416,25 @@ function App() {
     function settleOwedUpTo(cutoff) {
         owedRows.filter(r => !r.settled && r.entry.day && r.entry.day <= cutoff)
             .forEach(r => setOwedSettled(r, true));
+    }
+    // Same routing as setOwedSettled, for the claim stage. Work expenses only.
+    function setOwedClaimed(row, on) {
+        if (row.kind !== "work")
+            return;
+        const next = { ...row.entry };
+        if (on)
+            next.claimedOn = dayKey(londonNow());
+        else
+            delete next.claimedOn;
+        if (row.archiveIndex === null)
+            dispatch({ type: "UPD_ENTRY", entry: next });
+        else
+            dispatch({ type: "EDIT_PAST_ENTRY", op: "upd", archiveIndex: row.archiveIndex, entry: next });
+    }
+    // A real expense claim covers everything up to a date, so this is the usual path.
+    function claimOwedUpTo(cutoff) {
+        owedRows.filter(r => r.kind === "work" && !r.settled && !r.claimed && r.entry.day && r.entry.day <= cutoff)
+            .forEach(r => setOwedClaimed(r, true));
     }
     // Install a parsed data export over this device's data (see ImportDataModal). Deliberately NOT
     // a page reload the way importing an *account* is: that swaps the vault record on disk, whereas
@@ -1556,24 +1629,29 @@ function App() {
             const settled = owedRows.filter(r => r.settled).reverse(); // most recently logged first
             const label = (r) => r.entry.label || (r.kind === "work" ? "Work expense" : "Split");
             const tint = (r) => r.kind === "work" ? "#f59e0b" : "#a855f7";
-            const Row = ({ r, onTap }) => (React.createElement("button", { onClick: onTap, style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", background: "none", border: "none", borderBottom: "1px solid var(--border)", cursor: "pointer", textAlign: "left" } },
-                React.createElement("span", { style: { minWidth: 0 } },
-                    React.createElement("span", { style: { display: "block", fontSize: 14, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-                        label(r),
-                        React.createElement("span", { style: { ...S.badge, background: chipColors(tint(r)).bg, color: tint(r) } }, r.kind === "work" ? "work" : "split")),
-                    React.createElement("span", { style: { display: "block", fontSize: 11, color: "var(--text-secondary)", marginTop: 2 } },
-                        r.entry.day ? dayKeyLabel(r.entry.day) : "Undated",
-                        " \u00B7 ",
-                        r.periodLabel,
-                        r.settled && r.entry.settledOn ? ` · paid ${dayKeyLabel(r.entry.settledOn)}` : "",
-                        !r.settled && r.periodsAgo >= OWED_STALE_PERIODS
-                            ? React.createElement("span", { style: { color: "#f97316" } },
-                                " \u00B7 ",
-                                r.periodsAgo,
-                                " periods ago") : null)),
-                React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 } },
-                    React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: r.settled ? "var(--text-muted)" : tint(r), textDecoration: r.settled ? "line-through" : "none" } }, fmt(r.entry.amount)),
-                    React.createElement("span", { style: { fontSize: 15, color: r.settled ? "#22c55e" : "var(--text-tertiary)" } }, r.settled ? "✓" : "○"))));
+            // The claim chip sits beside the row rather than inside it (a button can't hold a button),
+            // and only on outstanding work expenses: tapping the row itself still means "paid".
+            const Row = ({ r, onTap }) => (React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid var(--border)" } },
+                React.createElement("button", { onClick: onTap, style: { flex: 1, minWidth: 0, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "10px 0", background: "none", border: "none", cursor: "pointer", textAlign: "left" } },
+                    React.createElement("span", { style: { minWidth: 0 } },
+                        React.createElement("span", { style: { display: "block", fontSize: 14, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+                            label(r),
+                            React.createElement("span", { style: { ...S.badge, background: chipColors(tint(r)).bg, color: tint(r) } }, r.kind === "work" ? "work" : "split")),
+                        React.createElement("span", { style: { display: "block", fontSize: 11, color: "var(--text-secondary)", marginTop: 2 } },
+                            r.entry.day ? dayKeyLabel(r.entry.day) : "Undated",
+                            " \u00B7 ",
+                            r.periodLabel,
+                            r.claimed && r.entry.claimedOn ? ` · claimed ${dayKeyLabel(r.entry.claimedOn)}` : "",
+                            r.settled && r.entry.settledOn ? ` · paid ${dayKeyLabel(r.entry.settledOn)}` : "",
+                            !r.settled && r.periodsAgo >= OWED_STALE_PERIODS
+                                ? React.createElement("span", { style: { color: "#f97316" } },
+                                    " \u00B7 ",
+                                    r.periodsAgo,
+                                    " periods ago") : null)),
+                    React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 } },
+                        React.createElement("span", { style: { fontSize: 14, fontWeight: 700, color: r.settled ? "var(--text-muted)" : tint(r), textDecoration: r.settled ? "line-through" : "none" } }, fmt(r.entry.amount)),
+                        React.createElement("span", { style: { fontSize: 15, color: r.settled ? "#22c55e" : "var(--text-tertiary)" } }, r.settled ? "✓" : "○"))),
+                r.kind === "work" && !r.settled && (React.createElement("button", { "aria-pressed": r.claimed, "aria-label": r.claimed ? `Undo claimed for ${label(r)}` : `Mark ${label(r)} as claimed`, onClick: () => setOwedClaimed(r, !r.claimed), style: { flexShrink: 0, background: r.claimed ? chipColors("#f59e0b").bg : "transparent", border: `1px solid ${r.claimed ? "#f59e0b" : "var(--border)"}`, borderRadius: 6, color: r.claimed ? readableAccentText("#f59e0b") : "var(--text-muted)", padding: "4px 7px", fontSize: 11, fontWeight: r.claimed ? 600 : 400, cursor: "pointer" } }, r.claimed ? "Claimed" : "Claim"))));
             return (React.createElement("div", { style: { padding: "12px 16px" } },
                 React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "18px", marginBottom: 12 } },
                     React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6, textTransform: "uppercase" } }, "Owed back to you"),
@@ -1586,7 +1664,10 @@ function App() {
                         owed.work > 0 && React.createElement("span", null,
                             fmt(owed.work),
                             " from work"),
-                        owed.total === 0 && React.createElement("span", { style: { color: "var(--text-muted)" } }, "Nothing outstanding.")),
+                        owed.total === 0 && React.createElement("span", { style: { color: "var(--text-muted)" } }, "Nothing outstanding."),
+                        owed.claimed > 0 && React.createElement("div", { style: { marginTop: 4, color: "var(--text-secondary)" } },
+                            fmt(owed.claimed),
+                            " of the work total is claimed and awaiting payment.")),
                     React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 10, lineHeight: 1.45 } }, "None of this was ever taken off your budget, so ticking an item off just records that you were paid back \u2014 your remaining figure will not move. Do not log a credit as well.")),
                 owed.stale > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid #f97316", borderRadius: 10, padding: "11px 13px", marginBottom: 12, fontSize: 12, color: "var(--text-body)", lineHeight: 1.45 } },
                     React.createElement("strong", { style: { color: "#f97316" } },
@@ -1599,13 +1680,18 @@ function App() {
                 React.createElement("div", { style: S.settingsCard },
                     React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 } },
                         React.createElement("div", { style: S.sectionTitle }, "Outstanding"),
-                        outstanding.length > 1 && (React.createElement("button", { style: { ...S.editToggle, padding: "5px 10px", fontSize: 12 }, onClick: () => setOwedCutoff(dayKey(londonNow())) }, "Mark paid\u2026"))),
+                        React.createElement("span", { style: { display: "inline-flex", gap: 6 } },
+                            outstanding.some(r => r.kind === "work" && !r.claimed) && (React.createElement("button", { style: { ...S.editToggle, padding: "5px 10px", fontSize: 12 }, onClick: () => { setOwedCutoffMode("claimed"); setOwedCutoff(dayKey(londonNow())); } }, "Mark claimed\u2026")),
+                            outstanding.length > 1 && (React.createElement("button", { style: { ...S.editToggle, padding: "5px 10px", fontSize: 12 }, onClick: () => { setOwedCutoffMode("paid"); setOwedCutoff(dayKey(londonNow())); } }, "Mark paid\u2026")))),
                     owedCutoff !== null && (React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 8, padding: "10px 12px", marginBottom: 10 } },
-                        React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 } }, "Tick off everything spent on or before:"),
+                        React.createElement("div", { style: { fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 } }, owedCutoffMode === "claimed" ? "Mark every unclaimed work expense spent on or before this as claimed:" : "Tick off everything spent on or before:"),
                         React.createElement("input", { style: { ...S.input, marginBottom: 8 }, type: "date", value: owedCutoff, onChange: e => setOwedCutoff(e.target.value) }),
                         React.createElement("div", { style: { display: "flex", gap: 8 } },
                             React.createElement("button", { style: { ...S.editToggle, flex: 1 }, onClick: () => setOwedCutoff(null) }, "Cancel"),
-                            React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1 }, onClick: () => { settleOwedUpTo(owedCutoff); setOwedCutoff(null); } }, "Mark paid")))),
+                            React.createElement("button", { style: { ...S.btn, background: "#0369a1", flex: 1 }, onClick: () => { if (owedCutoffMode === "claimed")
+                                    claimOwedUpTo(owedCutoff);
+                                else
+                                    settleOwedUpTo(owedCutoff); setOwedCutoff(null); } }, owedCutoffMode === "claimed" ? "Mark claimed" : "Mark paid")))),
                     outstanding.length === 0
                         ? React.createElement("div", { style: S.empty }, "Nothing outstanding. Splits and work expenses appear here until you tick them off.")
                         : outstanding.map(r => React.createElement(Row, { key: r.entry.id, r: r, onTap: () => setOwedSettled(r, true) }))),
@@ -1804,7 +1890,7 @@ function WeekPanel({ week, weeks, entries, credits, weeklyBudget, isLastWeek, ca
     const pinEditable = !!onSkipPin;
     const personal = entries.filter(e => e.type === "personal");
     const spent = personal.reduce((s, e) => s + e.amount, 0);
-    const creditsTotal = credits.reduce((s, c) => s + c.amount, 0);
+    const creditsTotal = budgetCreditTotal(credits);
     const netSpent = spent - creditsTotal;
     const over = netSpent - weeklyBudget;
     const pct = weeklyBudget > 0 ? Math.min((netSpent / weeklyBudget) * 100, 100) : 0;
@@ -2273,7 +2359,8 @@ function CreditLine({ credit, onDel, onEdit, hideDelete }) {
             credit.label || "Credit",
             credit.from && React.createElement("span", { style: { color: "var(--text-secondary)" } },
                 " from ",
-                credit.from)),
+                credit.from),
+            !creditCountsToBudget(credit) && React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, "not in budget")),
         React.createElement("span", { style: { color: "#22c55e", fontWeight: 600, fontSize: 13 } },
             "+",
             fmt(credit.amount)),
@@ -2350,6 +2437,7 @@ function IconPicker({ value, onPick }) {
 // icon picker below expands. Owns its own icon-picker open state via the controlled `open`/`onToggle`
 // props (only one row's icon picker is open at a time, coordinated by the parent).
 function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdate, onRemove, dragLabel, onDragMouseDown, onDragTouchStart }) {
+    const group = categoryGroupOf(cat);
     return (React.createElement("div", { style: { marginBottom: 8 } },
         React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
             React.createElement("input", { type: "color", value: cat.color, onChange: e => onUpdate({ color: e.target.value }), "aria-label": `${cat.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
@@ -2362,6 +2450,10 @@ function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdat
             React.createElement("button", { onClick: () => { if (canDelete)
                     onRemove(); }, disabled: !canDelete, title: lockReason, style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715"),
             onDragMouseDown && React.createElement("button", { style: S.dragHandle, "aria-label": dragLabel, onMouseDown: onDragMouseDown, onTouchStart: onDragTouchStart }, "\u2261")),
+        React.createElement("div", { style: { display: "flex", gap: 4, marginTop: 4, marginLeft: 84 }, role: "group", "aria-label": `${cat.name} review group` }, SPEND_GROUPS.map(g => {
+            const on = group === g.id;
+            return React.createElement("button", { key: g.id, "aria-pressed": on, onClick: () => onUpdate({ group: on ? "" : g.id }), style: { flex: 1, background: on ? "var(--surface-2)" : "transparent", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 6, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "3px 2px", fontSize: 10, fontWeight: on ? 600 : 400, cursor: "pointer" } }, g.label);
+        })),
         open && React.createElement("div", { style: { marginTop: 6 } },
             React.createElement(IconPicker, { value: cat.icon, onPick: k => { onUpdate({ icon: k }); onToggle(); } }))));
 }
@@ -2381,16 +2473,24 @@ function PaymentMethodsSettingsCard({ state, dispatch }) {
     const anyInUse = state.methods.some(m => used.has(m.id));
     return (React.createElement("div", { style: S.settingsCard },
         React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Payment methods"),
+        React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: -4, marginBottom: 10, lineHeight: 1.4 } }, "Under each, say which account it is \u2014 it goes into the spreadsheet export. Use the last four digits at most: the export isn't encrypted."),
         state.methods.map(m => {
             const canDelete = !used.has(m.id) && state.methods.length > 1;
-            return (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
-                React.createElement("input", { type: "color", value: m.color, onChange: e => update(m.id, { color: e.target.value }), "aria-label": `${m.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
-                React.createElement("input", { key: `mname-${m.id}-${m.name}`, defaultValue: m.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== m.name)
-                        update(m.id, { name: v });
-                    else if (!v)
-                        e.target.value = m.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
-                React.createElement("button", { onClick: () => { if (canDelete)
-                        remove(m.id); }, disabled: !canDelete, title: used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")));
+            return (React.createElement("div", { key: m.id, style: { marginBottom: 10 } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+                    React.createElement("input", { type: "color", value: m.color, onChange: e => update(m.id, { color: e.target.value }), "aria-label": `${m.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
+                    React.createElement("input", { key: `mname-${m.id}-${m.name}`, defaultValue: m.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== m.name)
+                            update(m.id, { name: v });
+                        else if (!v)
+                            e.target.value = m.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
+                    React.createElement("button", { onClick: () => { if (canDelete)
+                            remove(m.id); }, disabled: !canDelete, title: used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")),
+                React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 4, marginLeft: 42 } },
+                    React.createElement("input", { key: `macct-${m.id}-${m.account || ""}`, defaultValue: m.account || "", placeholder: "Which account, e.g. Club current \u00B7\u00B7 4821", "aria-label": `${m.name} account`, onBlur: e => { const v = e.target.value.trim(); if (v !== (m.account || ""))
+                            update(m.id, { account: v }); }, style: { ...S.input, marginBottom: 0, flex: 1, minWidth: 0, fontSize: 12, padding: "6px 8px" } }),
+                    React.createElement("select", { value: methodKindOf(m), "aria-label": `${m.name} account type`, onChange: e => update(m.id, { kind: e.target.value }), style: { ...S.input, marginBottom: 0, width: "auto", flexShrink: 0, fontSize: 12, padding: "6px 4px" } },
+                        React.createElement("option", { value: "" }, "Type\u2026"),
+                        ACCOUNT_KINDS.map(k => React.createElement("option", { key: k.id, value: k.id }, k.label))))));
         }),
         anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Types with logged transactions can't be removed."),
         React.createElement("button", { onClick: add, disabled: state.methods.length >= MAX_METHODS, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" } }, state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type")));
@@ -2481,7 +2581,8 @@ function CategoriesSettingsCard({ state, dispatch }) {
         React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, gap: 8 } },
             React.createElement("div", null,
                 React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" } }, "Spending categories"),
-                React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginTop: 2 } }, "Ask for a category after logging a spend")),
+                React.createElement("div", { style: { fontSize: 12, color: "var(--text-muted)", marginTop: 2 } }, "Ask for a category after logging a spend"),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 4, lineHeight: 1.4 } }, "The chips under each one say which part of a monthly review it counts towards \u2014 set once here, never asked when logging.")),
             React.createElement(ToggleSwitch, { on: state.categoryPrompt, onToggle: () => dispatch({ type: "SETTINGS", patch: { categoryPrompt: !state.categoryPrompt } }), ariaLabel: "Toggle category prompt", thumbOn: "\uD83C\uDFF7\uFE0F", thumbOff: "\u2715" })),
         renderCats.map(c => (React.createElement("div", { key: c.id, ref: el => { if (el)
                 rowRefs.current[c.id] = el;
@@ -2625,6 +2726,9 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
             : (splitRef ? splitRef.method : ((prefill && prefill.method) || defaultMethod));
         return METHOD_NAME[seed] ? seed : METHODS[0].id;
     });
+    // Editing an older credit with no kind leaves it unpicked: nothing here knows what it was, and
+    // saving without choosing must not stamp the default onto it.
+    const [creditKind, setCreditKind] = useState(() => editCredit ? (editCredit.kind || null) : "refund");
     const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : ((prefill && prefill.type) || "personal")));
     const [note, setNote] = useState(() => editData ? (editData.label || "") : (splitRef ? (splitRef.label || "") : ((prefill && prefill.label) || "")));
     const [flash, setFlash] = useState(null);
@@ -2739,6 +2843,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
     }
     function resetAfterSave() {
         setCents(0);
+        setCreditKind("refund"); // every new credit starts on Refund / paid back, even mid-session
         setNote("");
         setSplitStage(null);
         setSplitTotal(0);
@@ -2779,7 +2884,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
         // Editing an existing item: write the change back in place, keeping id/date/week/split.
         if (isEdit) {
             if (editCredit) {
-                onUpdateCredit({ ...editCredit, amount, label: note.trim(), method: method || undefined });
+                onUpdateCredit({ ...editCredit, amount, label: note.trim(), method: method || undefined, ...(creditKind ? { kind: creditKind } : {}) });
             }
             else {
                 // Personal entries carry the (possibly changed) category; other kinds keep none.
@@ -2823,7 +2928,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
             // `method` matters: a refund lands on a specific card, so without it a credit can't be
             // reconciled against that card's statement. The selector above was already being shown and
             // its choice quietly discarded.
-            onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), method, weekIndex: selectedWeek, day: selectedDay || undefined, from: "", date: new Date().toISOString(), order: Date.now() });
+            onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), method, kind: creditKind || "refund", weekIndex: selectedWeek, day: selectedDay || undefined, from: "", date: new Date().toISOString(), order: Date.now() });
             setFlash({ amount, credit: true });
             setTimeout(() => setFlash(null), 900);
             resetAfterSave();
@@ -2953,6 +3058,13 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
         classOptions.length > 0 && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Classification"),
             React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#22c55e" : v === "split" ? "#a855f7" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
+        type === "credit" && React.createElement(React.Fragment, null,
+            React.createElement("div", { style: subheading }, "What is it?"),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: (creditKind === "income" || creditKind === "transfer") ? 6 : 10 } }, CREDIT_KINDS.map(k => {
+                const on = creditKind === k.id;
+                return React.createElement("button", { key: k.id, "aria-pressed": on, onClick: () => setCreditKind(k.id), style: { flex: "1 1 auto", background: on ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${on ? "#22c55e" : "var(--border)"}`, borderRadius: 8, color: on ? "#22c55e" : "var(--text-muted)", padding: "6px 8px", fontSize: 12, fontWeight: on ? 600 : 400, cursor: "pointer" } }, k.label);
+            })),
+            (creditKind === "income" || creditKind === "transfer") && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 10 } }, "Recorded for your review, but it won't add to what you can spend this period."))),
         isEdit && !editCredit && !isSplitEdit && type === "personal" && (React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Category"),
             editPickCat ? (React.createElement("div", { style: { marginBottom: 10 } },
@@ -3038,7 +3150,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
     const heroRemaining = remainingDisplay(remaining, state.monthlyBudget);
     // The gross/net waterfall and the per-category split — see computeSummaryTotals for the
     // invariants they hold to. Shared with the export so the two can't disagree.
-    const { grossByMethod, grossSpend, businessTotal, reimbursableTotal, splitTotal, netTotal, byCategory, uncategorisedTotal, categoryRows } = computeSummaryTotals(state, METHODS, CATEGORIES);
+    const { grossByMethod, grossSpend, businessTotal, reimbursableTotal, splitTotal, netTotal, byCategory, uncategorisedTotal, categoryRows, otherMoneyIn } = computeSummaryTotals(state, METHODS, CATEGORIES);
     // Per-week, per-method breakdown
     const weekRows = weeks.map(w => {
         var _a;
@@ -3148,7 +3260,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                 fmt(totalSpent),
                 " spent of ",
                 fmt(state.monthlyBudget))),
-        (reimbursableTotal > 0 || totalCredits > 0) && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+        (reimbursableTotal > 0 || totalCredits > 0 || otherMoneyIn > 0) && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Gross vs net"),
             businessTotal > 0 && (React.createElement("button", { onClick: () => setWaterfallDetail("business"), style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", fontSize: 13, background: "none", border: "none", cursor: "pointer", textAlign: "left" } },
                 React.createElement("span", { style: { color: "#f59e0b" } }, "Business spend"),
@@ -3171,7 +3283,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
             React.createElement("div", { style: { borderTop: "1px solid var(--border)", marginTop: 6, paddingTop: 8, display: "flex", justifyContent: "space-between", alignItems: "baseline" } },
                 React.createElement("span", { style: { color: "var(--text-heading)", fontSize: 13, fontWeight: 700 } }, "Net spend"),
                 React.createElement("span", { style: { color: "var(--text-heading)", fontWeight: 800, fontSize: 15 } }, fmt(netTotal))),
-            totalCredits > 0 && (React.createElement(React.Fragment, null,
+            (totalCredits > 0 || otherMoneyIn > 0) && (React.createElement(React.Fragment, null,
                 React.createElement("button", { onClick: () => setWaterfallDetail("credits"), style: { width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 0", marginTop: 8, borderTop: "1px solid var(--border)", paddingTop: 8, fontSize: 13, background: "none", border: "none", cursor: "pointer", textAlign: "left" } },
                     React.createElement("span", { style: { color: "#22c55e" } }, "Credits"),
                     React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 4 } },
@@ -3179,7 +3291,12 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                             "+ ",
                             fmt(totalCredits)),
                         React.createElement("span", { style: { color: "var(--text-tertiary)", fontSize: 18, fontWeight: 700, lineHeight: 1 } }, "\u203A"))),
-                React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.45 } }, "Money in, not spending undone \u2014 this adds to what's left in your budget rather than reducing net spend."))))),
+                React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.45 } },
+                    "Money in, not spending undone \u2014 this adds to what's left in your budget rather than reducing net spend.",
+                    otherMoneyIn > 0 && React.createElement(React.Fragment, null,
+                        " Income and transfers in (",
+                        fmt(otherMoneyIn),
+                        ") are listed there but don't add to it.")))))),
         React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
             React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 2, textTransform: "uppercase" } }, "By card \u00B7 as charged"),
             React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginBottom: 10 } }, "Matches your card statement"),
@@ -3479,7 +3596,8 @@ function CreditsDetailModal({ total, groups, onEditCredit, onClose }) {
             React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)" } },
                 count,
                 " credit",
-                count === 1 ? "" : "s")),
+                count === 1 ? "" : "s",
+                " \u00B7 income and transfers in are listed but don't add to your budget")),
         React.createElement(WeekGroupedList, { groups: groups, empty: "No credits yet", renderRow: (c, i, sep) => (React.createElement("div", { key: c.id, onClick: onEditCredit ? () => onEditCredit(c) : undefined, style: { display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: sep ? "1px solid var(--border)" : "none", cursor: onEditCredit ? "pointer" : "default" } },
                 React.createElement("span", { style: { ...S.dot, background: "#22c55e" } }),
                 React.createElement("div", { style: { flex: 1 } },
@@ -3487,7 +3605,8 @@ function CreditsDetailModal({ total, groups, onEditCredit, onClose }) {
                         c.label || "Credit",
                         c.from && React.createElement("span", { style: { color: "var(--text-secondary)" } },
                             " from ",
-                            c.from))),
+                            c.from),
+                        !creditCountsToBudget(c) && React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, "not in budget"))),
                 React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: "#22c55e" } },
                     "+",
                     fmt(c.amount)),
@@ -3546,10 +3665,33 @@ function paydayRuleLabel(d) {
 // window. A row is kept when the span it covers overlaps the window: its own date if it has one,
 // otherwise its week (undated entries), otherwise its whole period (flat pins). Falling back to the
 // wider span means an undated row near the edge is included rather than silently lost.
+//
+// Columns added after the original 26 are APPENDED, never inserted, so a spreadsheet that refers to
+// an existing column by position keeps working:
+//   • status — how far to trust the amount. "logged" / "reconciled" for what you entered (the latter
+//     once a statement has matched it); for a pinned cost, "confirmed" when that occurrence's amount
+//     was set by hand or matched to a statement, "unconfirmed" when it is still just the pin's
+//     standing amount, and "upcoming" when its date hasn't arrived yet.
+//   • spendGroup — housing / essentials / discretionary, from the row's category (see
+//     categoryGroupOf). Only personal spending has one; a personal row whose category has no group,
+//     or that has no category, says "unclassified" so it shows up rather than disappearing.
+//   • dateBasis — where `date` came from. "exact" is the day you picked; "scheduled" is a pinned
+//     cost's own date. Rows logged before day-specific logging have no day, so `date` is filled with
+//     an ESTIMATE rather than left blank: "estimated-logged" is the day it was logged, used only when
+//     that falls inside the row's own week; otherwise "estimated-week", the last day of that week.
+//     A flat (one-off) pin covers its whole period and has no date — "period", `date` left blank.
+//     Nothing stored is changed; the estimate exists only in the export.
+//   • cardAccount / accountType — which real account the card is, from Customisation (see
+//     methodKindOf). Blank until set, except the built-in Amex (credit-card) and Cash (cash).
+//   • creditKind — for incoming money: refund / income / transfer / interest / gift / other, or
+//     "unspecified" for a credit logged before kinds existed. Blank on spending rows.
+//   • claimStatus / claimedOn — a work expense's stage: "not claimed", "claimed" (with the date it
+//     was marked claimed on the Owed tab) or "paid" (settledOn). Blank for anything not a work claim.
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
     "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
     "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
-    "reimbursable", "settled", "settledOn", "id"];
+    "reimbursable", "settled", "settledOn", "id",
+    "status", "spendGroup", "dateBasis", "cardAccount", "accountType", "creditKind", "claimStatus", "claimedOn"];
 function ledgerRowInRange(r, range) {
     if (!range || (!range.from && !range.to))
         return true;
@@ -3560,18 +3702,67 @@ function ledgerRowInRange(r, range) {
     // Day keys are zero-padded YYYY-MM-DD, so plain string comparison orders them correctly.
     return (!range.from || hi >= range.from) && (!range.to || lo <= range.to);
 }
-function buildLedgerRows(state, range) {
+// `opts.today` (a day key, defaulting to today in London) is what "upcoming" is measured against;
+// `opts.includeUpcoming` keeps scheduled pin occurrences that haven't happened yet. They are left
+// out by default because they are a forecast at the pin's set amount, not a record — exported
+// alongside real spending they made a review count money that hadn't left, at a price that might
+// not be the one actually charged.
+function buildLedgerRows(state, range, opts) {
+    const o = opts || {};
+    const today = o.today || dayKey(londonNow());
+    const includeUpcoming = !!o.includeUpcoming;
     const methods = (state.methods && state.methods.length) ? state.methods : DEFAULT_METHODS;
     const categories = (state.categories && state.categories.length) ? state.categories : DEFAULT_CATEGORIES;
     const methodName = Object.fromEntries(methods.map(m => [m.id, m.name]));
+    const methodById = Object.fromEntries(methods.map(m => [m.id, m]));
     const catName = Object.fromEntries(categories.map(c => [c.id, c.name]));
+    const catById = Object.fromEntries(categories.map(c => [c.id, c]));
+    const spendGroup = (type, catId) => (type || "personal") !== "personal" ? ""
+        : (categoryGroupOf(catById[catId]) || "unclassified");
     const rows = [];
     const iso = (d) => (d ? dayKey(d) : "");
     const owedType = (t) => t === "business" || t === "excluded";
     exportPeriods(state).forEach(p => {
         const d = p.data;
-        const push = (r) => { if (ledgerRowInRange(r, range))
-            rows.push(r); };
+        // `hint` carries what a missing date can be estimated from: `logged` (when the row was entered)
+        // or `real` (a moved pin occurrence's true date). The range filter runs on the row as stored, so
+        // an estimate never changes which rows a date range picks up.
+        const push = (r, hint) => {
+            if (!includeUpcoming && r.status === "upcoming")
+                return;
+            if (!ledgerRowInRange(r, range))
+                return;
+            const h = hint || {};
+            if (r.date)
+                r.dateBasis = r.source === "pinned" ? "scheduled" : "exact";
+            else if (h.real) {
+                r.date = dayKey(new Date(h.real));
+                r.dateBasis = "scheduled";
+            }
+            else if (r.weekStart) {
+                const logged = h.logged && !isNaN(Date.parse(h.logged)) ? dayKey(new Date(h.logged)) : "";
+                if (logged && logged >= r.weekStart && logged <= r.weekEnd) {
+                    r.date = logged;
+                    r.dateBasis = "estimated-logged";
+                }
+                else {
+                    r.date = r.weekEnd;
+                    r.dateBasis = "estimated-week";
+                }
+            }
+            else
+                r.dateBasis = "period";
+            const m = methodById[r.cardId];
+            r.cardAccount = (m && m.account) || "";
+            r.accountType = methodKindOf(m);
+            if (r.creditKind === undefined)
+                r.creditKind = "";
+            if (r.claimStatus === undefined) {
+                r.claimStatus = "";
+                r.claimedOn = "";
+            }
+            rows.push(r);
+        };
         const base = {
             loggingPeriod: d.monthLabel || "",
             periodStart: iso(p.weeks.length ? p.weeks[0].start : null),
@@ -3616,11 +3807,19 @@ function buildLedgerRows(state, range) {
             settled: owedType(e.type) ? (e.settledOn ? "yes" : "no") : "",
             settledOn: e.settledOn || "",
             id: e.id || "",
+            claimStatus: e.type === "business" && !e.pinned ? (e.settledOn ? "paid" : e.claimedOn ? "claimed" : "not claimed") : "",
+            claimedOn: e.type === "business" && e.claimedOn ? e.claimedOn : "",
+            status: e.recon ? "reconciled" : "logged",
+            spendGroup: spendGroup(e.type, e.category),
         });
-        entries.forEach(e => push(spendRow(e, "logged", "")));
+        entries.forEach(e => push(spendRow(e, "logged", ""), { logged: e.date }));
         expandScheduledPins(pins, p.weeks).forEach(occ => {
             const pin = pins.find(x => x.id === occ.pinId);
-            push(spendRow(occ, "pinned", pin ? pin.freq : ""));
+            // A moved occurrence has no `day` (see expandScheduledPins) but keeps its real date in `date`.
+            const occDay = occ.day || dayKey(new Date(occ.date));
+            const confirmed = !!pin && ((pin.amounts && pin.amounts[occ.occKey] != null) || !!(pin.recons && pin.recons[occ.occKey]));
+            const status = occDay > today ? "upcoming" : confirmed ? "confirmed" : "unconfirmed";
+            push({ ...spendRow(occ, "pinned", pin ? pin.freq : ""), status }, { real: occ.date });
         });
         pins.filter(x => !isScheduledPin(x)).forEach(pin => push({
             ...base, week: "", weekStart: "", weekEnd: "",
@@ -3636,6 +3835,10 @@ function buildLedgerRows(state, range) {
             splitGroupId: "", splitRole: "", splitTotal: "",
             reimbursable: owedType(pin.type) ? "yes" : "no",
             settled: "", settledOn: "", id: pin.id || "",
+            // A flat pin is a whole-period cost with no date of its own, so it is only "upcoming" when
+            // the whole period is still in the future.
+            status: base.periodStart && base.periodStart > today ? "upcoming" : "unconfirmed",
+            spendGroup: spendGroup(pin.type, pin.category),
         }));
         (d.credits || []).forEach(c => push({
             ...base, ...weekCols(c.weekIndex),
@@ -3647,13 +3850,16 @@ function buildLedgerRows(state, range) {
             source: "logged", pinFrequency: "",
             splitGroupId: "", splitRole: "", splitTotal: "",
             reimbursable: "no", settled: "", settledOn: "", id: c.id || "",
-        }));
+            status: c.recon ? "reconciled" : "logged",
+            spendGroup: "",
+            creditKind: c.kind || "unspecified",
+        }, { logged: c.date }));
     });
     return rows;
 }
-function buildLedgerCSV(state, range) {
+function buildLedgerCSV(state, range, opts) {
     const lines = [LEDGER_COLS.join(",")];
-    buildLedgerRows(state, range).forEach(r => lines.push(LEDGER_COLS.map(c => csvEscape(r[c])).join(",")));
+    buildLedgerRows(state, range, opts).forEach(r => lines.push(LEDGER_COLS.map(c => csvEscape(r[c])).join(",")));
     return lines.join("\n");
 }
 // The UK tax year containing `today` (6 April to 5 April), as day keys. `offset` of -1 gives the one
@@ -3695,6 +3901,8 @@ function buildReportText(data, weeks, rebalancedBudgets, account) {
     L.push(pad("= Net personal spend", fmt(t.netTotal)));
     if (t.totalCredits > 0)
         L.push(pad("Credits (money in)", "+" + fmt(t.totalCredits)));
+    if (t.otherMoneyIn > 0)
+        L.push(pad("Income/transfers (not in budget)", fmt(t.otherMoneyIn)));
     const remaining = data.monthlyBudget - t.netTotal + t.totalCredits;
     const rd = remainingDisplay(remaining, data.monthlyBudget);
     L.push(pad(`Of ${fmt(data.monthlyBudget)}`, `${rd.figure} ${rd.label}`));
@@ -3922,6 +4130,8 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
     // exported before the range existed.
     const [from, setFrom] = useState("");
     const [to, setTo] = useState("");
+    // Off by default: a scheduled payment that hasn't happened yet is a forecast, not a transaction.
+    const [includeUpcoming, setIncludeUpcoming] = useState(false);
     const build = (window.SpendVault && window.SpendVault.build) || null;
     const periodSlug = exportSlug(data.monthLabel);
     const today = londonNow();
@@ -3936,7 +4146,8 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
     ];
     const rangeBackwards = from && to && from > to;
     const range = { from, to };
-    const ledgerCount = format === "ledger" && !rangeBackwards ? buildLedgerRows(account, range).length : 0;
+    const ledgerOpts = { includeUpcoming };
+    const ledgerCount = format === "ledger" && !rangeBackwards ? buildLedgerRows(account, range, ledgerOpts).length : 0;
     const rangeSlug = from || to ? `${from || "start"}-to-${to || dayKey(today)}` : exportSlug(dayKey(today));
     const FORMATS = {
         report: {
@@ -3952,7 +4163,7 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
             make: () => {
                 if (rangeBackwards)
                     throw new Error("the start date is after the end date");
-                return buildLedgerCSV(account, range);
+                return buildLedgerCSV(account, range, ledgerOpts);
             },
             name: `spendtracker-ledger-${rangeSlug}.csv`,
             mime: "text/csv",
@@ -4004,7 +4215,10 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
                 rangeBackwards ? null : `${ledgerCount} row${ledgerCount === 1 ? "" : "s"}`,
                 !from && !to ? " · leave both blank for everything" : "",
                 " ",
-                "\u00B7 undated items are included when their week falls in the range."))),
+                "\u00B7 undated items are included when their week falls in the range, with a best-guess date (the dateBasis column says which)."),
+            React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 12, color: "var(--text-body)", cursor: "pointer" } },
+                React.createElement("input", { type: "checkbox", checked: includeUpcoming, onChange: e => { setIncludeUpcoming(e.target.checked); setCopied(false); } }),
+                "Include scheduled payments that haven't happened yet"))),
         format === "data" && (React.createElement("div", { style: { background: chipColors("#f59e0b").bg, border: "1px solid #f59e0b", borderRadius: 10, padding: "10px 12px", fontSize: 11, color: "#f59e0b", lineHeight: 1.6, marginBottom: 10 } },
             React.createElement("strong", null, "This file is not encrypted."),
             " Anyone who opens it can read everything you've logged. For a copy that's safe to store or send to yourself, use ",
