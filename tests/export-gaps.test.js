@@ -188,3 +188,35 @@ test("each row carries its card's account name and type", () => {
   assert.deepEqual([r.e1.cardAccount, r.e1.accountType], ["", "credit-card"], "Amex, nothing typed yet");
   assert.equal(A.buildLedgerRows(s, null, { today: "2026-08-31" }).find(x => x.description === "Rent").accountType, "current", "pins too");
 });
+
+// ─── 5. What incoming money was ──────────────────────────────────────────────
+
+test("each credit exports its kind; older ones say 'unspecified' instead of being guessed", () => {
+  const s = account();
+  s.credits = [
+    { id: "k1", amount: 20, label: "Argos", method: "Amex", kind: "refund", weekIndex: 1, day: "2026-08-01", order: 1 },
+    { id: "k2", amount: 4, label: "Cashback", method: "Amex", kind: "interest", weekIndex: 1, day: "2026-08-01", order: 2 },
+    { id: "k3", amount: 9, label: "Old credit", method: "Amex", weekIndex: 1, day: "2026-08-01", order: 3 },
+  ];
+  const r = byId(A.buildLedgerRows(s, null, { today: "2026-08-31" }));
+  assert.equal(r.k1.creditKind, "refund");
+  assert.equal(r.k2.creditKind, "interest");
+  assert.equal(r.k3.creditKind, "unspecified");
+  assert.equal(r.e1.creditKind, "", "spending rows have none");
+});
+
+test("logging a credit remembers its kind for next time, in the live period or a past one", () => {
+  let s = account();
+  s = A.reducer(s, { type: "ADD_CREDIT", credit: { id: "n1", amount: 1, kind: "income", weekIndex: 1 } });
+  assert.equal(s.lastCreditKind, "income");
+  s.monthHistory = [{ monthLabel: "Jul 2026", payYear: 2026, payMonth: 6, entries: [], pins: [], credits: [] }];
+  s = A.reducer(s, { type: "EDIT_PAST_CREDIT", op: "add", archiveIndex: 0, credit: { id: "n2", amount: 1, kind: "gift", weekIndex: 1 } });
+  assert.equal(s.lastCreditKind, "gift");
+  // An edit to an old credit is not a choice about the next one.
+  s = A.reducer(s, { type: "EDIT_PAST_CREDIT", op: "upd", archiveIndex: 0, credit: { id: "n2", amount: 2, kind: "refund", weekIndex: 1 } });
+  assert.equal(s.lastCreditKind, "gift");
+});
+
+test("the kinds are the six the logging sheet offers", () => {
+  assert.deepEqual(A.CREDIT_KINDS.map(k => k.id), ["refund", "income", "transfer", "interest", "gift", "other"]);
+});

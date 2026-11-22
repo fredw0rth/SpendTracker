@@ -43,6 +43,18 @@ const DEFAULT_CATEGORIES = [
 // Map default ids → icons, used to upgrade accounts saved with the earlier emoji-based defaults.
 const DEFAULT_CATEGORY_ICON = Object.fromEntries(DEFAULT_CATEGORIES.map(c => [c.id, c.icon]));
 const MAX_CATEGORIES = 24;
+// What a credit actually was. Asked only when logging a credit (rare next to spending), as one row
+// of chips pre-set to whichever kind was used last (`state.lastCreditKind`), so a run of refunds
+// costs no extra taps. Stored as `credit.kind`; credits logged before this have none and export as
+// "unspecified" rather than being guessed at.
+const CREDIT_KINDS = [
+    { id: "refund", label: "Refund" },
+    { id: "income", label: "Income" },
+    { id: "transfer", label: "Transfer in" },
+    { id: "interest", label: "Interest/cashback" },
+    { id: "gift", label: "Gift" },
+    { id: "other", label: "Other" },
+];
 // Which bucket of a monthly review a category's spending belongs to. Set once per category in
 // Customisation (`category.group`), never per spend, so logging is no slower. A category that has
 // never been given one falls back to these defaults for the built-in ids; "" stored explicitly
@@ -810,7 +822,7 @@ function rawReducer(s, a) {
         case "ADD_PIN": return { ...s, pins: [...s.pins, a.pin] };
         case "DEL_PIN": return { ...s, pins: s.pins.filter(p => p.id !== a.id) };
         case "UPD_PIN": return { ...s, pins: s.pins.map(p => p.id === a.pin.id ? a.pin : p) };
-        case "ADD_CREDIT": return { ...s, credits: [a.credit, ...(s.credits || [])] };
+        case "ADD_CREDIT": return { ...s, credits: [a.credit, ...(s.credits || [])], lastCreditKind: a.credit.kind || s.lastCreditKind };
         case "DEL_CREDIT": return { ...s, credits: (s.credits || []).filter(c => c.id !== a.id) };
         case "UPD_CREDIT": return { ...s, credits: (s.credits || []).map(c => c.id === a.credit.id ? a.credit : c) };
         case "SETTINGS": return { ...s, ...a.patch };
@@ -885,7 +897,9 @@ function rawReducer(s, a) {
                     return { ...arc, credits: (arc.credits || []).map(c => c.id === a.credit.id ? a.credit : c) };
                 return arc;
             });
-            return { ...s, monthHistory: newHistory };
+            // A credit added to a past period is still the kind you last picked.
+            const lastCreditKind = a.op === "add" && a.credit && a.credit.kind ? a.credit.kind : s.lastCreditKind;
+            return { ...s, monthHistory: newHistory, lastCreditKind };
         }
         case "RECONCILE_APPLY": {
             // ops: [{ archiveIndex: null|number, kind: "entry"|"credit"|"pin", op, ...payload }]
@@ -940,7 +954,7 @@ const HELP_TOPICS = [
     ["The pay period", "SpendTracker follows your pay cycle, not the calendar month. A period runs from your last payday up to the day before your next one, and switches over automatically the moment payday arrives. Set your payday rule in Settings — last working day, last Friday, last calendar day, or a fixed date. The month label at the top names the period you're currently spending in."],
     ["Weekly budgets & rollover", "Your monthly budget is split into weekly allowances. If you go over in a week, the difference is spread across the days of every week you have left, so a single big week doesn't all land on the next one and a short week gives up proportionally less than a full one. Overspend in the final week has nowhere left to spread, so it just shows as over. Fixed costs come off the weekly rate first, which is what keeps the weeks adding up to the same pot your remaining figure is measured against."],
     ["The “per day” figures", "On the current week you'll see two per-day numbers: how much you can spend each remaining day to stay inside this week, and the same across the rest of the whole period. They turn red as they get tight."],
-    ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. You can log to any day of the period, not just today — the day picker sits above the keypad, and ‹ › step between weeks. Add a description if you want one, and you'll be asked for a category after saving. Tap any logged item to edit it. The ＋ button at the bottom-left logs to today from any tab."],
+    ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. A credit also asks what it was — refund, income, transfer in and so on — already set to whatever you picked last time. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. You can log to any day of the period, not just today — the day picker sits above the keypad, and ‹ › step between weeks. Add a description if you want one, and you'll be asked for a category after saving. Tap any logged item to edit it. The ＋ button at the bottom-left logs to today from any tab."],
     ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't. Both halves stay linked, so tapping either opens the whole split in one editor, and reconciliation treats it as the single card transaction it really was."],
     ["Spending categories", "Categories say what a spend was for — Groceries, Transport, and so on. Pick one when you log, or from the prompt straight after saving. Only personal spending carries a category, since that's what's being budgeted. In Edit mode on the week log you can categorise a run of spends at once. The Summary tab totals your spending by category, and you can tap into any of them. Make your own in Settings → Customisation: name, colour and icon, up to 24, drag to reorder. Each category also says whether it counts as Housing, Essentials or Discretionary — set once there, never asked when logging — and the spreadsheet export carries that on every row."],
     ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Daily, Weekly or Monthly frequency and it's dropped straight into the right day of the log, counting against that week; leave it as One-off and it's a flat cost for the whole period instead. Any single occurrence can be skipped, moved to another week, reordered, or given a different amount without disturbing the others — useful when one month's bill comes in higher. Mark a pin Work or Split to keep it out of your personal total."],
@@ -1811,7 +1825,7 @@ function App() {
                         ...(state.statements || []).filter(x => x.method !== st.method),
                         { method: st.method, rows: st.rows, from: st.span ? st.span.from : null, to: st.span ? st.span.to : null, savedAt: new Date().toISOString() },
                     ] } }), onForgetStatement: methodId => dispatch({ type: "SETTINGS", patch: { statements: (state.statements || []).filter(x => x.method !== methodId) } }), onClose: () => { setShowReconcile(false); setReconcileWith(null); setReconTarget(undefined); } }),
-        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), prefill: entryPrefill, onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onDeleteEntry: delEntry, onClose: () => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); } }),
+        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, defaultCreditKind: state.lastCreditKind, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), prefill: entryPrefill, onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onDeleteEntry: delEntry, onClose: () => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); } }),
         (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
@@ -2615,7 +2629,7 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
         onBack && React.createElement("button", { style: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", padding: "12px 0 0", width: "100%" }, onClick: onBack }, "\u2190 Back")));
 }
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories, categoryPrompt, descriptionPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, defaultCreditKind, categories, categoryPrompt, descriptionPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
     const editEntry = edit && edit.kind === "entry" ? edit.data : null;
     const editCredit = edit && edit.kind === "credit" ? edit.data : null;
     // A split (both halves) edited as one unit — its own self-contained editor further down.
@@ -2667,6 +2681,9 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
             : (splitRef ? splitRef.method : ((prefill && prefill.method) || defaultMethod));
         return METHOD_NAME[seed] ? seed : METHODS[0].id;
     });
+    // Editing an older credit with no kind leaves it unpicked: nothing here knows what it was, and
+    // saving without choosing must not stamp the default onto it.
+    const [creditKind, setCreditKind] = useState(() => editCredit ? (editCredit.kind || null) : (defaultCreditKind || "refund"));
     const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : ((prefill && prefill.type) || "personal")));
     const [note, setNote] = useState(() => editData ? (editData.label || "") : (splitRef ? (splitRef.label || "") : ((prefill && prefill.label) || "")));
     const [flash, setFlash] = useState(null);
@@ -2821,7 +2838,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
         // Editing an existing item: write the change back in place, keeping id/date/week/split.
         if (isEdit) {
             if (editCredit) {
-                onUpdateCredit({ ...editCredit, amount, label: note.trim(), method: method || undefined });
+                onUpdateCredit({ ...editCredit, amount, label: note.trim(), method: method || undefined, ...(creditKind ? { kind: creditKind } : {}) });
             }
             else {
                 // Personal entries carry the (possibly changed) category; other kinds keep none.
@@ -2865,7 +2882,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
             // `method` matters: a refund lands on a specific card, so without it a credit can't be
             // reconciled against that card's statement. The selector above was already being shown and
             // its choice quietly discarded.
-            onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), method, weekIndex: selectedWeek, day: selectedDay || undefined, from: "", date: new Date().toISOString(), order: Date.now() });
+            onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), method, kind: creditKind || "refund", weekIndex: selectedWeek, day: selectedDay || undefined, from: "", date: new Date().toISOString(), order: Date.now() });
             setFlash({ amount, credit: true });
             setTimeout(() => setFlash(null), 900);
             resetAfterSave();
@@ -2995,6 +3012,13 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
         classOptions.length > 0 && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Classification"),
             React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#22c55e" : v === "split" ? "#a855f7" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
+        type === "credit" && React.createElement(React.Fragment, null,
+            React.createElement("div", { style: subheading }, "What is it?"),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: (creditKind === "income" || creditKind === "transfer") ? 6 : 10 } }, CREDIT_KINDS.map(k => {
+                const on = creditKind === k.id;
+                return React.createElement("button", { key: k.id, "aria-pressed": on, onClick: () => setCreditKind(k.id), style: { flex: "1 1 auto", background: on ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${on ? "#22c55e" : "var(--border)"}`, borderRadius: 8, color: on ? "#22c55e" : "var(--text-muted)", padding: "6px 8px", fontSize: 12, fontWeight: on ? 600 : 400, cursor: "pointer" } }, k.label);
+            })),
+            (creditKind === "income" || creditKind === "transfer") && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 10 } }, "Like every credit, this adds to what you can spend this period."))),
         isEdit && !editCredit && !isSplitEdit && type === "personal" && (React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Category"),
             editPickCat ? (React.createElement("div", { style: { marginBottom: 10 } },
@@ -3606,11 +3630,13 @@ function paydayRuleLabel(d) {
 //     Nothing stored is changed; the estimate exists only in the export.
 //   • cardAccount / accountType — which real account the card is, from Customisation (see
 //     methodKindOf). Blank until set, except the built-in Amex (credit-card) and Cash (cash).
+//   • creditKind — for incoming money: refund / income / transfer / interest / gift / other, or
+//     "unspecified" for a credit logged before kinds existed. Blank on spending rows.
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
     "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
     "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
     "reimbursable", "settled", "settledOn", "id",
-    "status", "spendGroup", "dateBasis", "cardAccount", "accountType"];
+    "status", "spendGroup", "dateBasis", "cardAccount", "accountType", "creditKind"];
 function ledgerRowInRange(r, range) {
     if (!range || (!range.from && !range.to))
         return true;
@@ -3674,6 +3700,8 @@ function buildLedgerRows(state, range, opts) {
             const m = methodById[r.cardId];
             r.cardAccount = (m && m.account) || "";
             r.accountType = methodKindOf(m);
+            if (r.creditKind === undefined)
+                r.creditKind = "";
             rows.push(r);
         };
         const base = {
@@ -3763,6 +3791,7 @@ function buildLedgerRows(state, range, opts) {
             reimbursable: "no", settled: "", settledOn: "", id: c.id || "",
             status: c.recon ? "reconciled" : "logged",
             spendGroup: "",
+            creditKind: c.kind || "unspecified",
         }, { logged: c.date }));
     });
     return rows;
