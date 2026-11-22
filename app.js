@@ -61,7 +61,17 @@ const CREDIT_KINDS = [
 // period's figures move. EVERY budget calculation must sum credits through budgetCreditTotal.
 const NON_BUDGET_CREDIT_KINDS = ["income", "transfer"];
 const creditCountsToBudget = (c) => !!c && !NON_BUDGET_CREDIT_KINDS.includes(c.kind);
-const budgetCreditTotal = (credits) => (credits || []).filter(creditCountsToBudget).reduce((s, c) => s + (c.amount || 0), 0);
+// A credit can be linked to the Owed items it pays back (`repays`: entry ids, `repaysAmount`: their
+// total at the time of linking). That part was never your money — the "not yours" half of a split,
+// or a work expense — and it never came off your budget, so it must not be added back on. Only the
+// remainder, if a friend rounded up, counts. Unlinked credits are unaffected.
+const creditBudgetAmount = (c) => !creditCountsToBudget(c) ? 0
+    : Math.max(0, (c.amount || 0) - Math.min(c.amount || 0, c.repaysAmount || 0));
+const budgetCreditTotal = (credits) => (credits || []).reduce((s, c) => s + creditBudgetAmount(c), 0);
+// The small grey tag on a credit's row: why some or all of it doesn't add to the budget.
+const creditBadge = (c) => (c && c.repaysAmount > 0) ? "paid back" : (!creditCountsToBudget(c) ? "not in budget" : null);
+// Kinds of money in that can be someone paying you back, so the editor offers the Owed list.
+const REPAYMENT_CREDIT_KINDS = ["refund", "transfer", "other"];
 // Which bucket of a monthly review a category's spending belongs to. Set once per category in
 // Customisation (`category.group`), never per spend, so logging is no slower. A category that has
 // never been given one falls back to these defaults for the built-in ids; "" stored explicitly
@@ -452,6 +462,8 @@ function expandScheduledPins(pins, weeks) {
             delete entry.day;
         if (p.orders && p.orders[k] != null)
             entry.order = p.orders[k];
+        if (p.posted && p.posted[k])
+            entry.postedOn = p.posted[k];
         out.push(entry);
     };
     for (const p of pins) {
@@ -797,8 +809,45 @@ function applyReconPinOp(list, op) {
             return { ...p, amount: op.amount };
         if (op.op === "recon")
             return { ...p, recons: { ...(p.recons || {}), [op.occKey]: op.recon } };
+        if (op.op === "posted")
+            return { ...p, posted: { ...(p.posted || {}), [op.occKey]: op.day } };
         return p;
     });
+}
+// ─── Posted dates ─────────────────────────────────────────────────────────────
+// The day a spend actually reached the card, as the statement shows it — often a day or three
+// after the day you logged it, because card payments sit as pending first. The logged day still
+// decides the week and the pay period; the posted day is kept alongside it (`postedOn` on an entry
+// or credit, `posted[occKey]` on a pin) so the export can line spends up with statements exactly.
+//
+// Written when a statement is uploaded or reopened, and only for pairings the matcher is sure of:
+// same amount to the penny, same day or within its few-day window. An "amounts don't match"
+// pairing is a guess, and is left alone. It is inert — nothing in any total reads it — and it
+// changes nothing you see, so recording it is not the app deciding anything about your money.
+// Returns RECONCILE_APPLY ops, and none for an item already carrying that date.
+function postedDateOps(matched) {
+    const ops = [];
+    (matched || []).forEach(m => {
+        const day = m.row && m.row.date;
+        const c = m.candidate;
+        if (!day || !c || !c.ref)
+            return;
+        const ai = c.ref.archiveIndex;
+        if (c.kind === "entry" && c.ref.entry && c.ref.entry.postedOn !== day) {
+            ops.push({ archiveIndex: ai, kind: "entry", op: "upd", entry: { ...c.ref.entry, postedOn: day } });
+        }
+        else if (c.kind === "split") {
+            [c.ref.your, c.ref.their].filter(e => e && e.postedOn !== day)
+                .forEach(e => ops.push({ archiveIndex: ai, kind: "entry", op: "upd", entry: { ...e, postedOn: day } }));
+        }
+        else if (c.kind === "credit" && c.ref.credit && c.ref.credit.postedOn !== day) {
+            ops.push({ archiveIndex: ai, kind: "credit", op: "upd", credit: { ...c.ref.credit, postedOn: day } });
+        }
+        else if (c.kind === "pin" && c.ref.entry && c.ref.entry.postedOn !== day) {
+            ops.push({ archiveIndex: ai, kind: "pin", op: "posted", pinId: c.ref.pinId, occKey: c.ref.occKey, day });
+        }
+    });
+    return ops;
 }
 // Did anything actually get recorded against this period? Decides whether a rollover archives it
 // (see MONTH_ROLLOVER) — a period nobody touched is dropped rather than stored, so that returning
@@ -835,6 +884,7 @@ function periodHasRecordedActivity(s) {
         ...Object.keys(p.orders || {}),
         ...Object.keys(p.amounts || {}),
         ...Object.keys(p.recons || {}),
+        ...Object.keys(p.posted || {}),
     ].some(k => daysInPeriod.has(k)));
 }
 function rawReducer(s, a) {
@@ -980,13 +1030,13 @@ const HELP_TOPICS = [
     ["Spending categories", "Categories say what a spend was for — Groceries, Transport, and so on. Pick one when you log, or from the prompt straight after saving. Only personal spending carries a category, since that's what's being budgeted. In Edit mode on the week log you can categorise a run of spends at once. The Summary tab totals your spending by category, and you can tap into any of them. Make your own in Settings → Customisation: name, colour and icon, up to 24, drag to reorder. Each category also says whether it counts as Housing, Essentials or Discretionary — set once there, never asked when logging — and the spreadsheet export carries that on every row."],
     ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Daily, Weekly or Monthly frequency and it's dropped straight into the right day of the log, counting against that week; leave it as One-off and it's a flat cost for the whole period instead. Any single occurrence can be skipped, moved to another week, reordered, or given a different amount without disturbing the others — useful when one month's bill comes in higher. Mark a pin Work or Split to keep it out of your personal total. A new pin starts on a date you choose — that's its first payment, and it repeats on the same day after that — so it's never added to days already behind you. You can also give it an end date, after which it stops."],
     ["Editing and tidying a week", "Tap Edit on a week to select several items at once and delete them, move them to another week, or give them all a category. Outside Edit mode you can drag an item to reorder it, and dragging it across a day heading files it under that day. The card chips at the top filter the week down to one card. Deleted something by mistake? Undo appears straight after, and it puts back both halves of a split or a skipped pinned cost."],
-    ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Work expenses have a step in between: tap Claim (or Mark claimed… for a batch) when you submit the claim, so you can tell what is waiting on payroll from what you have not claimed yet. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. For the same reason, do NOT also log a credit: that would hand you back budget you never spent. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
+    ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Work expenses have a step in between: tap Claim (or Mark claimed… for a batch) when you submit the claim, so you can tell what is waiting on payroll from what you have not claimed yet. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. If you'd rather log the payment as money in (say, to match a bank statement), choose what it pays back under “Is someone paying you back?” when you log it: those items are ticked off for you, and that part of the money doesn't add to your budget, since it never came out of it. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
     ["Gross vs net", "Gross is what actually hit your cards — it's the figure your bank statement shows, because work expenses and the full amount of a split are charged in full and paid back separately. Net is the part that was genuinely yours, and that's what your budget measures. Work plus the not-yours half of splits makes up the reimbursable difference between them. Credits sit below that sum rather than inside it: money coming in isn't spending undone. The Summary tab shows all of it, and each line opens the transactions behind it."],
     ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover, worked out against that period's own budget rather than today's."],
     ["The Summary tab", "The period at a glance: what's left, gross vs net, a per-card breakdown that matches each card's own statement, spending by category, a week-by-week breakdown you can tap to jump to, your largest spends (individually or added up by name), and how much of your spending came from pinned costs rather than logged ones. Almost everything on it opens the transactions behind it."],
-    ["Checking against your statement", "The Summary tab has a ⇄ Reconcile button. Export the CSV from your bank or card provider, upload it there, and SpendTracker cross-references it with everything you've logged — across the current period and finished ones, since a card statement rarely lines up with a payday. It separates what's on the statement but never logged, amounts that don't match, things you logged that aren't on the statement, and everything that lines up. Matching goes on date and amount, not on the name, because your note to yourself (“Lunch”) never matches what your bank writes. Card payments, transfers and salary are recognised and skipped. Nothing is changed until you save it, the file never leaves your phone, and each card's statement is remembered so you don't re-upload it."],
+    ["Checking against your statement", "The Summary tab has a ⇄ Reconcile button. Export the CSV from your bank or card provider, upload it there, and SpendTracker cross-references it with everything you've logged — across the current period and finished ones, since a card statement rarely lines up with a payday. When a spend matches the statement exactly, the date it reached your card is noted for the export — the day you logged it still decides which week and pay period it counts in. It separates what's on the statement but never logged, amounts that don't match, things you logged that aren't on the statement, and everything that lines up. Matching goes on date and amount, not on the name, because your note to yourself (“Lunch”) never matches what your bank writes. Card payments, transfers and salary are recognised and skipped. Nothing is changed until you save it, the file never leaves your phone, and each card's statement is remembered so you don't re-upload it."],
     ["Going back to a past period", "The ◀ ▶ arrows beside the month name on the Week tab step back through finished periods, and Settings has a “Go back to…” button for the most recent one. Their figures reflect that period's own budget and payday rule, and any edits you make there apply only to it — your current period is left untouched."],
-    ["Exporting your data", "Summary → ↗ Export gives you three things. The Report is the period written out in full — every spend by day, the gross/net split, categories, cards and what you're owed. The Spreadsheet is one row per transaction for Excel or Numbers — everything, or just the dates you choose (there are shortcuts for this period and the tax year) — with a column showing which pay period each one was logged in. The Data file is your whole account, and it's the one that imports back into SpendTracker (Settings → Import data) to rebuild everything: periods, pinned costs, categories, cards, budgets and settings. The data file is not encrypted, so anyone who opens it can read it — for a copy that's safe to store or send, use Export account instead."],
+    ["Exporting your data", "Summary → ↗ Export gives you three things. The Report is the period written out in full — every spend by day, the gross/net split, categories, cards and what you're owed. The Spreadsheet is one row per transaction for Excel or Numbers — everything, or just the dates you choose (there are shortcuts for this period and the tax year) — with a column showing which pay period each one was logged in, and the date it reached your card once a statement has matched it. The Report opens with this period's totals for a monthly review — housing, essentials, discretionary, card spend and money in — ready to copy across. The Data file is your whole account, and it's the one that imports back into SpendTracker (Settings → Import data) to rebuild everything: periods, pinned costs, categories, cards, budgets and settings. The data file is not encrypted, so anyone who opens it can read it — for a copy that's safe to store or send, use Export account instead."],
     ["Making it yours", "Settings → Customisation is where the app bends to you. Payment types are yours to name and colour — cards, cash, whatever you actually use, up to 12. Categories work the same way, with an icon each. And there's a light theme as well as the dark one. Anything currently in use is protected from deletion, so you can't strand a logged spend."],
     ["Your data & security", "Everything is encrypted on your device with your passphrase and never leaves your phone. Your recovery code is the only way back in if you forget the passphrase, so keep it somewhere safe. Face ID unlocks where supported, and the app locks itself again after a couple of minutes in the background."],
     ["Moving to another device", "Each browser keeps its own separate data — Safari, Chrome and the home-screen app each start fresh. There are two ways across. Export account gives you an encrypted backup: import it elsewhere and that device becomes the same account, unlocked with the same passphrase. The data file from Summary → Export carries the same information unencrypted, and Settings → Import data puts it into a device that already has its own passphrase set up. Either way, importing replaces what's on the receiving device."],
@@ -1127,6 +1177,26 @@ function owedItems(state) {
 // How stale an outstanding item is allowed to get before it is called out. Archives are trimmed at
 // 12 periods, so flagging at 6 leaves half a year of warning before anything could be lost.
 const OWED_STALE_PERIODS = 6;
+// What linking credit `creditId` to the Owed entries in `repays` changes: each listed item not yet
+// settled is ticked off on `day` and marked as settled by that credit; each item that credit had
+// settled but is no longer listed is unticked. Items ticked by hand (no settledBy) or settled by a
+// different credit are never touched. Returns [{ row, next }] — the caller writes them.
+function repaymentSyncUpdates(rows, creditId, repays, day) {
+    const want = new Set(repays || []);
+    const out = [];
+    (rows || []).forEach(r => {
+        const e = r.entry;
+        if (want.has(e.id) && !e.settledOn)
+            out.push({ row: r, next: { ...e, settledOn: day, settledBy: creditId } });
+        else if (!want.has(e.id) && e.settledBy === creditId) {
+            const next = { ...e };
+            delete next.settledOn;
+            delete next.settledBy;
+            out.push({ row: r, next });
+        }
+    });
+    return out;
+}
 function owedTotals(rows) {
     const out = rows.filter(r => !r.settled);
     const sum = (k) => out.filter(r => r.kind === k).reduce((s, r) => s + (r.entry.amount || 0), 0);
@@ -1235,7 +1305,9 @@ function computeSummaryTotals(data, methods, categories) {
     ].filter(r => r.total > 0).sort((a, b) => b.total - a.total);
     // totalCredits is what adds to the budget; otherMoneyIn is income/transfers, shown but not counted.
     const totalCredits = budgetCreditTotal(data.credits);
-    const otherMoneyIn = (data.credits || []).filter(c => !creditCountsToBudget(c)).reduce((s, c) => s + (c.amount || 0), 0);
+    // Everything that came in but doesn't add to the budget: income, transfers, and the part of a
+    // credit that paid back an Owed item.
+    const otherMoneyIn = (data.credits || []).reduce((s, c) => s + ((c.amount || 0) - creditBudgetAmount(c)), 0);
     return { grossByMethod, netByMethod, grossSpend, businessTotal, reimbursableTotal, splitTotal, netTotal,
         byCategory, uncategorisedTotal, categoryRows, totalCredits, otherMoneyIn };
 }
@@ -1416,16 +1488,26 @@ function App() {
     // it into the live period no matter which period the item actually belongs to.
     const owedRows = owedItems(state);
     const owed = owedTotals(owedRows);
-    function setOwedSettled(row, on) {
-        const next = { ...row.entry };
-        if (on)
-            next.settledOn = dayKey(londonNow());
-        else
-            delete next.settledOn;
+    function writeOwedEntry(row, next) {
         if (row.archiveIndex === null)
             dispatch({ type: "UPD_ENTRY", entry: next });
         else
             dispatch({ type: "EDIT_PAST_ENTRY", op: "upd", archiveIndex: row.archiveIndex, entry: next });
+    }
+    function setOwedSettled(row, on) {
+        const next = { ...row.entry };
+        // Ticking by hand breaks any link to the credit that paid it: the tick is now the record.
+        delete next.settledBy;
+        if (on)
+            next.settledOn = dayKey(londonNow());
+        else
+            delete next.settledOn;
+        writeOwedEntry(row, next);
+    }
+    // A credit linked to Owed items (see creditBudgetAmount) ticks them off as paid back on the
+    // credit's own day, and unticks them again if the link is removed or the credit deleted.
+    function syncRepayments(creditId, repays, day) {
+        repaymentSyncUpdates(owedRows, creditId, repays, day || dayKey(londonNow())).forEach(u => writeOwedEntry(u.row, u.next));
     }
     // Claims are repaid in batches — a friend clearing a run of dinners, a work claim paid in one
     // go — so settling one row at a time is the tedious path, not the main one.
@@ -1482,6 +1564,8 @@ function App() {
             dispatch({ type: "DEL_ENTRY", id });
     }
     function addCredit(credit) {
+        if (credit.repays && credit.repays.length)
+            syncRepayments(credit.id, credit.repays, credit.day);
         if (reconTarget !== undefined)
             return reconOp("credit", "add", { credit });
         if (viewingPast)
@@ -1490,6 +1574,7 @@ function App() {
             dispatch({ type: "ADD_CREDIT", credit });
     }
     function delCredit(id) {
+        syncRepayments(id, [], null);
         if (reconTarget !== undefined)
             return reconOp("credit", "del", { id });
         if (viewingPast)
@@ -1506,6 +1591,7 @@ function App() {
             dispatch({ type: "UPD_ENTRY", entry });
     }
     function updCredit(credit) {
+        syncRepayments(credit.id, credit.repays || [], credit.day);
         if (reconTarget !== undefined)
             return reconOp("credit", "upd", { credit });
         if (viewingPast)
@@ -1684,7 +1770,7 @@ function App() {
                         owed.claimed > 0 && React.createElement("div", { style: { marginTop: 4, color: "var(--text-secondary)" } },
                             fmt(owed.claimed),
                             " of the work total is claimed and awaiting payment.")),
-                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 10, lineHeight: 1.45 } }, "None of this was ever taken off your budget, so ticking an item off just records that you were paid back \u2014 your remaining figure will not move. Do not log a credit as well.")),
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 10, lineHeight: 1.45 } }, "None of this was ever taken off your budget, so ticking an item off just records that you were paid back \u2014 your remaining figure will not move. If you log their payment as money in, tick the item there under \u201CIs someone paying you back?\u201D instead \u2014 it is marked paid here and isn\u2019t counted twice.")),
                 owed.stale > 0 && (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid #f97316", borderRadius: 10, padding: "11px 13px", marginBottom: 12, fontSize: 12, color: "var(--text-body)", lineHeight: 1.45 } },
                     React.createElement("strong", { style: { color: "#f97316" } },
                         owed.stale,
@@ -1869,6 +1955,7 @@ function App() {
                 }
                 else if (c.kind === "credit") {
                     setLastDeleted({ kind: "credit", credit: ref.credit });
+                    syncRepayments(ref.credit.id, [], null);
                     dispatch({ type: "RECONCILE_APPLY", ops: [{ archiveIndex: ai, kind: "credit", op: "del", id: ref.credit.id }] });
                 }
                 else {
@@ -1884,8 +1971,8 @@ function App() {
                         // One statement per card: uploading again updates that card's rather than stacking copies.
                         ...(state.statements || []).filter(x => x.method !== st.method),
                         { method: st.method, rows: st.rows, from: st.span ? st.span.from : null, to: st.span ? st.span.to : null, savedAt: new Date().toISOString() },
-                    ] } }), onForgetStatement: methodId => dispatch({ type: "SETTINGS", patch: { statements: (state.statements || []).filter(x => x.method !== methodId) } }), onClose: () => { setShowReconcile(false); setReconcileWith(null); setReconTarget(undefined); } }),
-        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), prefill: entryPrefill, onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onDeleteEntry: delEntry, onClose: () => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); } }),
+                    ] } }), onForgetStatement: methodId => dispatch({ type: "SETTINGS", patch: { statements: (state.statements || []).filter(x => x.method !== methodId) } }), onStampPosted: ops => dispatch({ type: "RECONCILE_APPLY", ops }), onClose: () => { setShowReconcile(false); setReconcileWith(null); setReconTarget(undefined); } }),
+        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, owedRows: owedRows, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), prefill: entryPrefill, onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onDeleteEntry: delEntry, onClose: () => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); } }),
         (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
@@ -2376,7 +2463,7 @@ function CreditLine({ credit, onDel, onEdit, hideDelete }) {
             credit.from && React.createElement("span", { style: { color: "var(--text-secondary)" } },
                 " from ",
                 credit.from),
-            !creditCountsToBudget(credit) && React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, "not in budget")),
+            creditBadge(credit) && React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, creditBadge(credit))),
         React.createElement("span", { style: { color: "#22c55e", fontWeight: 600, fontSize: 13 } },
             "+",
             fmt(credit.amount)),
@@ -2700,7 +2787,7 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
         onBack && React.createElement("button", { style: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", padding: "12px 0 0", width: "100%" }, onClick: onBack }, "\u2190 Back")));
 }
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories, categoryPrompt, descriptionPrompt, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories, categoryPrompt, descriptionPrompt, owedRows, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
     const editEntry = edit && edit.kind === "entry" ? edit.data : null;
     const editCredit = edit && edit.kind === "credit" ? edit.data : null;
     // A split (both halves) edited as one unit — its own self-contained editor further down.
@@ -2755,6 +2842,19 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
     // Editing an older credit with no kind leaves it unpicked: nothing here knows what it was, and
     // saving without choosing must not stamp the default onto it.
     const [creditKind, setCreditKind] = useState(() => editCredit ? (editCredit.kind || null) : "refund");
+    // Owed items this credit pays back (entry ids). Offered from the outstanding Owed list, plus
+    // whatever this credit already settled, so editing it can untick them.
+    const [repays, setRepays] = useState(() => (editCredit && editCredit.repays) || []);
+    const repayOptions = (owedRows || [])
+        .filter(r => !r.settled || (editCredit && r.entry.settledBy === editCredit.id))
+        .sort((a, b) => ((b.entry.day || "") < (a.entry.day || "") ? -1 : (b.entry.day || "") > (a.entry.day || "") ? 1 : 0));
+    const offersRepay = REPAYMENT_CREDIT_KINDS.includes(creditKind) && repayOptions.length > 0;
+    // What gets stored on the credit: only ids still on offer, and their total at the time of linking.
+    function repayFields() {
+        const ids = offersRepay ? repays.filter(id => repayOptions.some(r => r.entry.id === id)) : [];
+        const total = repayOptions.filter(r => ids.includes(r.entry.id)).reduce((t, r) => t + (r.entry.amount || 0), 0);
+        return { repays: ids, repaysAmount: Math.round(total * 100) / 100 };
+    }
     const [type, setType] = useState(() => editCredit ? "credit" : (editEntry ? editEntry.type : ((prefill && prefill.type) || "personal")));
     const [note, setNote] = useState(() => editData ? (editData.label || "") : (splitRef ? (splitRef.label || "") : ((prefill && prefill.label) || "")));
     const [flash, setFlash] = useState(null);
@@ -2910,7 +3010,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
         // Editing an existing item: write the change back in place, keeping id/date/week/split.
         if (isEdit) {
             if (editCredit) {
-                onUpdateCredit({ ...editCredit, amount, label: note.trim(), method: method || undefined, ...(creditKind ? { kind: creditKind } : {}) });
+                onUpdateCredit({ ...editCredit, amount, label: note.trim(), method: method || undefined, ...(creditKind ? { kind: creditKind } : {}), ...repayFields() });
             }
             else {
                 // Personal entries carry the (possibly changed) category; other kinds keep none.
@@ -2954,7 +3054,8 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
             // `method` matters: a refund lands on a specific card, so without it a credit can't be
             // reconciled against that card's statement. The selector above was already being shown and
             // its choice quietly discarded.
-            onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), method, kind: creditKind || "refund", weekIndex: selectedWeek, day: selectedDay || undefined, from: "", date: new Date().toISOString(), order: Date.now() });
+            onSaveCredit({ id: Math.random().toString(36).slice(2), amount, label: note.trim(), method, kind: creditKind || "refund", weekIndex: selectedWeek, day: selectedDay || undefined, from: "", date: new Date().toISOString(), order: Date.now(), ...repayFields() });
+            setRepays([]);
             setFlash({ amount, credit: true });
             setTimeout(() => setFlash(null), 900);
             resetAfterSave();
@@ -3090,7 +3191,32 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
                 const on = creditKind === k.id;
                 return React.createElement("button", { key: k.id, "aria-pressed": on, onClick: () => setCreditKind(k.id), style: { flex: "1 1 auto", background: on ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${on ? "#22c55e" : "var(--border)"}`, borderRadius: 8, color: on ? "#22c55e" : "var(--text-muted)", padding: "6px 8px", fontSize: 12, fontWeight: on ? 600 : 400, cursor: "pointer" } }, k.label);
             })),
-            (creditKind === "income" || creditKind === "transfer") && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 10 } }, "Recorded for your review, but it won't add to what you can spend this period."))),
+            (creditKind === "income" || creditKind === "transfer") && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 10 } }, "Recorded for your review, but it won't add to what you can spend this period.")),
+            offersRepay && (() => {
+                const picked = repayOptions.filter(r => repays.includes(r.entry.id));
+                const pickedTotal = picked.reduce((t, r) => t + (r.entry.amount || 0), 0);
+                return (React.createElement("div", { style: { marginBottom: 10 } },
+                    React.createElement("div", { style: subheading }, "Is someone paying you back?"),
+                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 6 } }, "Tick what this pays back from your Owed list. Those are marked paid, and that part doesn't add to your budget \u2014 it never came out of it."),
+                    React.createElement("div", { style: { maxHeight: 180, overflowY: "auto", border: "1px solid var(--border)", borderRadius: 8 } }, repayOptions.map(r => {
+                        const on = repays.includes(r.entry.id);
+                        return (React.createElement("label", { key: r.entry.id, style: { display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", fontSize: 12, color: "var(--text-body)", cursor: "pointer", borderBottom: "1px solid var(--border)" } },
+                            React.createElement("input", { type: "checkbox", checked: on, onChange: () => setRepays(on ? repays.filter(id => id !== r.entry.id) : [...repays, r.entry.id]) }),
+                            React.createElement("span", { style: { flex: 1 } },
+                                r.entry.label || "Spend",
+                                " ",
+                                React.createElement("span", { style: { color: "var(--text-muted)" } },
+                                    "\u00B7 ",
+                                    r.kind === "work" ? "work" : "split",
+                                    r.entry.day ? " · " + dayKeyLabel(r.entry.day) : "")),
+                            React.createElement("span", { style: { fontWeight: 600 } }, fmt(r.entry.amount))));
+                    })),
+                    picked.length > 0 && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginTop: 6 } },
+                        fmt(Math.min(pickedTotal, amount)),
+                        " of this is paid back",
+                        amount > pickedTotal ? `; the other ${fmt(amount - pickedTotal)} adds to your budget` : "",
+                        "."))));
+            })()),
         isEdit && !editCredit && !isSplitEdit && type === "personal" && (React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Category"),
             editPickCat ? (React.createElement("div", { style: { marginBottom: 10 } },
@@ -3367,7 +3493,7 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
                 React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.45 } },
                     "Money in, not spending undone \u2014 this adds to what's left in your budget rather than reducing net spend.",
                     otherMoneyIn > 0 && React.createElement(React.Fragment, null,
-                        " Income and transfers in (",
+                        " Income, transfers in and money paid back for splits or work (",
                         fmt(otherMoneyIn),
                         ") are listed there but don't add to it.")))))),
         React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
@@ -3679,7 +3805,7 @@ function CreditsDetailModal({ total, groups, onEditCredit, onClose }) {
                         c.from && React.createElement("span", { style: { color: "var(--text-secondary)" } },
                             " from ",
                             c.from),
-                        !creditCountsToBudget(c) && React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, "not in budget"))),
+                        creditBadge(c) && React.createElement("span", { style: { ...S.badge, background: "var(--surface-2)", color: "var(--text-tertiary)" } }, creditBadge(c)))),
                 React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: "#22c55e" } },
                     "+",
                     fmt(c.amount)),
@@ -3760,11 +3886,18 @@ function paydayRuleLabel(d) {
 //     "unspecified" for a credit logged before kinds existed. Blank on spending rows.
 //   • claimStatus / claimedOn — a work expense's stage: "not claimed", "claimed" (with the date it
 //     was marked claimed on the Owed tab) or "paid" (settledOn). Blank for anything not a work claim.
+//   • postedDate — the day the statement shows it reaching the card (see postedDateOps), blank until
+//     a statement has matched it. `date` stays the day you logged it, which is what decides
+//     `loggingPeriod`; this is what lines a row up with a card statement.
+//   • repaysAmount / repays — on money in: how much of it paid back Owed items (splits, work), and
+//     those items' ids. That part is not in the budget. On a paid-back item, settledBy is the id of
+//     the credit that paid it, blank when it was ticked off by hand.
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
     "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
     "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
     "reimbursable", "settled", "settledOn", "id",
-    "status", "spendGroup", "dateBasis", "cardAccount", "accountType", "creditKind", "claimStatus", "claimedOn"];
+    "status", "spendGroup", "dateBasis", "cardAccount", "accountType", "creditKind", "claimStatus", "claimedOn",
+    "postedDate", "repaysAmount", "repays", "settledBy"];
 function ledgerRowInRange(r, range) {
     if (!range || (!range.from && !range.to))
         return true;
@@ -3834,6 +3967,14 @@ function buildLedgerRows(state, range, opts) {
                 r.claimStatus = "";
                 r.claimedOn = "";
             }
+            if (r.postedDate === undefined)
+                r.postedDate = "";
+            if (r.repaysAmount === undefined) {
+                r.repaysAmount = "";
+                r.repays = "";
+            }
+            if (r.settledBy === undefined)
+                r.settledBy = "";
             rows.push(r);
         };
         const base = {
@@ -3882,15 +4023,18 @@ function buildLedgerRows(state, range, opts) {
             id: e.id || "",
             claimStatus: e.type === "business" && !e.pinned ? (e.settledOn ? "paid" : e.claimedOn ? "claimed" : "not claimed") : "",
             claimedOn: e.type === "business" && e.claimedOn ? e.claimedOn : "",
-            status: e.recon ? "reconciled" : "logged",
+            status: e.recon || e.postedOn ? "reconciled" : "logged",
             spendGroup: spendGroup(e.type, e.category),
+            postedDate: e.postedOn || "",
+            settledBy: owedType(e.type) && e.settledBy ? e.settledBy : "",
         });
         entries.forEach(e => push(spendRow(e, "logged", ""), { logged: e.date }));
         expandScheduledPins(pins, p.weeks).forEach(occ => {
             const pin = pins.find(x => x.id === occ.pinId);
             // A moved occurrence has no `day` (see expandScheduledPins) but keeps its real date in `date`.
             const occDay = occ.day || dayKey(new Date(occ.date));
-            const confirmed = !!pin && ((pin.amounts && pin.amounts[occ.occKey] != null) || !!(pin.recons && pin.recons[occ.occKey]));
+            const confirmed = !!pin && ((pin.amounts && pin.amounts[occ.occKey] != null) || !!(pin.recons && pin.recons[occ.occKey])
+                || !!(pin.posted && pin.posted[occ.occKey]));
             const status = occDay > today ? "upcoming" : confirmed ? "confirmed" : "unconfirmed";
             push({ ...spendRow(occ, "pinned", pin ? pin.freq : ""), status }, { real: occ.date });
         });
@@ -3923,9 +4067,12 @@ function buildLedgerRows(state, range, opts) {
             source: "logged", pinFrequency: "",
             splitGroupId: "", splitRole: "", splitTotal: "",
             reimbursable: "no", settled: "", settledOn: "", id: c.id || "",
-            status: c.recon ? "reconciled" : "logged",
+            status: c.recon || c.postedOn ? "reconciled" : "logged",
             spendGroup: "",
             creditKind: c.kind || "unspecified",
+            postedDate: c.postedOn || "",
+            repaysAmount: c.repaysAmount > 0 ? csvMoney(Math.min(c.amount || 0, c.repaysAmount)) : "",
+            repays: c.repaysAmount > 0 && c.repays ? c.repays.join(" ") : "",
         }, { logged: c.date }));
     });
     return rows;
@@ -3943,6 +4090,44 @@ function ukTaxYearRange(today, offset) {
     const afterStart = today.getMonth() > 3 || (today.getMonth() === 3 && today.getDate() >= 6);
     const startYear = (afterStart ? y : y - 1) + (offset || 0);
     return { from: `${startYear}-04-06`, to: `${startYear + 1}-04-05` };
+}
+// ─── Finances Tracker figures ──────────────────────────────────────────────────
+// One pay period's totals, from buildLedgerRows (so the Report and the spreadsheet agree to the
+// penny). `periodStart` is the period's first day key. Own spend is personal spending only, split
+// by spend group; card spend is everything out on a card as charged (both halves of a split, work
+// included), which is the figure a card statement shows. Money in is by kind, with the part of a
+// credit that paid back Owed items pulled out on its own. Scheduled payments that haven't happened
+// yet are left out, as the export leaves them out by default.
+const CREDIT_KIND_ORDER = ["income", "transfer", "gift", "refund", "interest", "other", "unspecified"];
+const CREDIT_KIND_LABEL = { ...Object.fromEntries(CREDIT_KINDS.map(k => [k.id, k.label])), unspecified: "Unspecified" };
+function financeTrackerFigures(state, periodStart, label) {
+    if (!periodStart && !label)
+        return null;
+    const today = dayKey(londonNow());
+    const all = buildLedgerRows(state, null, { includeUpcoming: true }).filter(r => periodStart ? r.periodStart === periodStart : r.loggingPeriod === label);
+    const rows = all.filter(r => r.status !== "upcoming");
+    const sum = (list) => Math.round(list.reduce((t, r) => t + Number(r.amount || 0), 0) * 100) / 100;
+    const out = rows.filter(r => r.direction === "out");
+    const own = out.filter(r => r.type === "personal");
+    const group = (g) => sum(own.filter(r => r.spendGroup === g));
+    const isCash = (r) => r.accountType === "cash";
+    const moneyIn = {};
+    let paidBack = 0;
+    rows.filter(r => r.direction === "in").forEach(r => {
+        const back = Number(r.repaysAmount || 0);
+        paidBack += back;
+        const k = r.creditKind || "unspecified";
+        moneyIn[k] = Math.round(((moneyIn[k] || 0) + Number(r.amount || 0) - back) * 100) / 100;
+    });
+    return {
+        housing: group("housing"), essentials: group("essentials"), discretionary: group("discretionary"),
+        unclassified: group("unclassified"), ownSpend: sum(own),
+        cardGross: sum(out.filter(r => !isCash(r))), cashSpend: sum(out.filter(isCash)),
+        workSpend: sum(out.filter(r => r.type === "business")),
+        moneyIn, paidBack: Math.round(paidBack * 100) / 100,
+        unposted: out.filter(r => !isCash(r) && r.source === "logged" && !r.postedDate && r.date && r.date <= today).length,
+        upcomingLeftOut: all.length > rows.length,
+    };
 }
 // ─── Report (text) ────────────────────────────────────────────────────────────
 // The readable one. `data` is the period being viewed with scheduled pins ALREADY expanded into
@@ -3965,6 +4150,32 @@ function buildReportText(data, weeks, rebalancedBudgets, account) {
         L.push(`${dateStr(weeks[0].start)} – ${dateStr(weeks[weeks.length - 1].end)} · payday: ${paydayRuleLabel(data)}`);
     L.push(`Budget ${fmt(data.monthlyBudget)} monthly · ${fmt(data.weeklyBudget)} weekly`);
     L.push("");
+    // The figures a month-end review types into its Monthly row, worked out here so they're copied
+    // rather than added up by hand. Built from the spreadsheet export's own rows for this pay period,
+    // so the two can never disagree.
+    const ft = financeTrackerFigures(acct, weeks.length ? dayKey(weeks[0].start) : null, data.monthLabel);
+    if (ft) {
+        L.push(`FOR THE FINANCES TRACKER (pay period ${data.monthLabel}${ft.upcomingLeftOut ? ", to date" : ""})`);
+        L.push(pad("Housing", fmt(ft.housing)));
+        L.push(pad("Essentials", fmt(ft.essentials)));
+        L.push(pad("Discretionary", fmt(ft.discretionary)));
+        if (ft.unclassified > 0)
+            L.push(pad("Unclassified", fmt(ft.unclassified)));
+        L.push(pad("= Own spend", fmt(ft.ownSpend)));
+        L.push(pad("Card spend, gross", fmt(ft.cardGross)));
+        if (ft.cashSpend > 0)
+            L.push(pad("Cash spend", fmt(ft.cashSpend)));
+        if (ft.workSpend > 0)
+            L.push(pad("Work expenses logged", fmt(ft.workSpend)));
+        CREDIT_KIND_ORDER.forEach(k => { if (ft.moneyIn[k] > 0)
+            L.push(pad(`In: ${CREDIT_KIND_LABEL[k]}`, fmt(ft.moneyIn[k]))); });
+        if (ft.paidBack > 0)
+            L.push(pad("In: paid back (splits, work)", fmt(ft.paidBack)));
+        // Card spends no statement has matched yet: the reason a statement gap isn't zero.
+        if (ft.unposted > 0)
+            L.push(pad("Not on a statement yet", `${ft.unposted} card spend${ft.unposted === 1 ? "" : "s"}`));
+        L.push("");
+    }
     // Gross vs net. Same waterfall as the Summary tab, and it has to reconcile the same way:
     // Work + Split = reimbursable, gross − reimbursable = net, credits below the rule, not in it.
     L.push("GROSS VS NET");
@@ -3975,7 +4186,7 @@ function buildReportText(data, weeks, rebalancedBudgets, account) {
     if (t.totalCredits > 0)
         L.push(pad("Credits (money in)", "+" + fmt(t.totalCredits)));
     if (t.otherMoneyIn > 0)
-        L.push(pad("Income/transfers (not in budget)", fmt(t.otherMoneyIn)));
+        L.push(pad("Not in budget (income, transfers, paid back)", fmt(t.otherMoneyIn)));
     const remaining = data.monthlyBudget - t.netTotal + t.totalCredits;
     const rd = remainingDisplay(remaining, data.monthlyBudget);
     L.push(pad(`Of ${fmt(data.monthlyBudget)}`, `${rd.figure} ${rd.label}`));
@@ -4451,7 +4662,7 @@ function ImportDataModal({ onImport, onClose }) {
 // the discrepancies. Nothing is written until the footer's two-step confirm, and everything it
 // does write goes out as a single RECONCILE_APPLY so the vault is re-encrypted once, not once
 // per fix.
-function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, onAddFromRow, onSaveStatement, onForgetStatement, onClose }) {
+function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, onAddFromRow, onSaveStatement, onForgetStatement, onStampPosted, onClose }) {
     const [step, setStep] = useState("upload");
     const [text, setText] = useState("");
     const [fileName, setFileName] = useState("");
@@ -4562,6 +4773,10 @@ function ReconcileModal({ state, periods, openWith, onEditItem, onDeleteItem, on
         const compareCard = allCards && !presetMethod ? null : card;
         activeRef.current = { statement, card: compareCard };
         const { res, idx } = computeResults(statement, compareCard);
+        // Record the posted date on everything the statement surely matched (see postedDateOps).
+        const posted = postedDateOps(res.matched);
+        if (posted.length && onStampPosted)
+            onStampPosted(posted);
         // Open the week log where the statement ends, which is the part being reconciled.
         const landing = res.span ? lib.periodIndexFor(res.span.to, idx) : null;
         setWkPeriod(landing ? landing.archiveIndex : null);

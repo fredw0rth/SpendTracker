@@ -25,6 +25,7 @@ const EXPORTS = [
   "csvEscape", "csvMoney", "exportPeriods", "paydayRuleLabel",
   "buildReportText", "buildLedgerCSV", "buildLedgerRows", "ledgerRowInRange", "ukTaxYearRange", "LEDGER_COLS", "buildDataExport", "parseDataExport", "dataExportSummary",
   "EXPORT_VERSION", "SPEND_GROUPS", "categoryGroupOf", "ACCOUNT_KINDS", "methodKindOf", "CREDIT_KINDS", "creditCountsToBudget", "budgetCreditTotal",
+  "creditBudgetAmount", "repaymentSyncUpdates", "postedDateOps", "financeTrackerFigures", "applyReconPinOp", "periodHasRecordedActivity",
 ];
 
 function loadApp() {
