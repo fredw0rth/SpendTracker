@@ -113,3 +113,57 @@ test("setting a group is a settings change only: no logged entry is touched", ()
   const after = A.reducer(s, { type: "SETTINGS", patch: { categories: cats } });
   assert.equal(JSON.stringify(after.entries), before);
 });
+
+// ─── 3. Undated older rows ───────────────────────────────────────────────────
+// Week 2 of Aug 2026 runs Mon 3 – Sun 9 Aug.
+
+function undated() {
+  const s = account();
+  s.pins = [];
+  s.entries = [
+    { id: "d", amount: 1, label: "Dated", method: "Amex", type: "personal", weekIndex: 2, day: "2026-08-04", order: 1, date: "2026-08-04T12:00:00.000Z" },
+    { id: "l", amount: 2, label: "Logged in its week", method: "Amex", type: "personal", weekIndex: 2, order: 2, date: "2026-08-06T12:00:00.000Z" },
+    { id: "x", amount: 3, label: "Logged later", method: "Amex", type: "personal", weekIndex: 2, order: 3, date: "2026-08-20T12:00:00.000Z" },
+    { id: "n", amount: 4, label: "No timestamp", method: "Amex", type: "personal", weekIndex: 2, order: 4 },
+  ];
+  s.credits = [{ id: "c", amount: 5, label: "Refund", method: "Amex", weekIndex: 2, order: 5, date: "2026-08-07T09:00:00.000Z" }];
+  return s;
+}
+
+test("an undated row gets a best-guess date, and says how it was reached", () => {
+  const r = byId(A.buildLedgerRows(undated(), null, { today: "2026-08-31" }));
+  assert.deepEqual([r.d.date, r.d.dateBasis], ["2026-08-04", "exact"]);
+  assert.deepEqual([r.l.date, r.l.dateBasis], ["2026-08-06", "estimated-logged"]);
+  assert.deepEqual([r.x.date, r.x.dateBasis], ["2026-08-09", "estimated-week"], "logged after its week, so the week's end");
+  assert.deepEqual([r.n.date, r.n.dateBasis], ["2026-08-09", "estimated-week"]);
+  assert.deepEqual([r.c.date, r.c.dateBasis], ["2026-08-07", "estimated-logged"], "credits too");
+});
+
+test("estimating a date never changes what is stored", () => {
+  const s = undated();
+  const before = JSON.stringify(s);
+  A.buildLedgerRows(s, null, { today: "2026-08-31" });
+  assert.equal(JSON.stringify(s), before);
+  assert.equal(s.entries[1].day, undefined);
+});
+
+test("the date range still decides on the week, not on the estimate", () => {
+  // "Logged later" estimates to the 9th, but its week overlaps the 4th, so a 4th-only range keeps it.
+  const ids = A.buildLedgerRows(undated(), { from: "2026-08-04", to: "2026-08-04" }, { today: "2026-08-31" }).map(r => r.id);
+  assert.ok(ids.includes("x"));
+});
+
+test("pinned costs: occurrences are 'scheduled', a moved one keeps its real date, a flat one has none", () => {
+  const s = account();
+  s.entries = [];
+  s.pins = [
+    { id: "m", label: "Moved", amount: 9, method: "Amex", type: "personal", freq: "monthly", day: 5, moves: { "2026-7-5": 3 } },
+    { id: "f", label: "Flat", amount: 9, method: "Amex", type: "personal", freq: "none" },
+  ];
+  const r = A.buildLedgerRows(s, null, { today: "2026-08-31" });
+  const moved = r.find(x => x.description === "Moved");
+  assert.equal(moved.week, 3);
+  assert.deepEqual([moved.date, moved.dateBasis], ["2026-08-05", "scheduled"]);
+  const flat = r.find(x => x.description === "Flat");
+  assert.deepEqual([flat.date, flat.dateBasis], ["", "period"]);
+});

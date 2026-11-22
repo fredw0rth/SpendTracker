@@ -3576,11 +3576,17 @@ function paydayRuleLabel(d) {
 //   • spendGroup — housing / essentials / discretionary, from the row's category (see
 //     categoryGroupOf). Only personal spending has one; a personal row whose category has no group,
 //     or that has no category, says "unclassified" so it shows up rather than disappearing.
+//   • dateBasis — where `date` came from. "exact" is the day you picked; "scheduled" is a pinned
+//     cost's own date. Rows logged before day-specific logging have no day, so `date` is filled with
+//     an ESTIMATE rather than left blank: "estimated-logged" is the day it was logged, used only when
+//     that falls inside the row's own week; otherwise "estimated-week", the last day of that week.
+//     A flat (one-off) pin covers its whole period and has no date — "period", `date` left blank.
+//     Nothing stored is changed; the estimate exists only in the export.
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
     "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
     "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
     "reimbursable", "settled", "settledOn", "id",
-    "status", "spendGroup"];
+    "status", "spendGroup", "dateBasis"];
 function ledgerRowInRange(r, range) {
     if (!range || (!range.from && !range.to))
         return true;
@@ -3612,11 +3618,35 @@ function buildLedgerRows(state, range, opts) {
     const owedType = (t) => t === "business" || t === "excluded";
     exportPeriods(state).forEach(p => {
         const d = p.data;
-        const push = (r) => {
+        // `hint` carries what a missing date can be estimated from: `logged` (when the row was entered)
+        // or `real` (a moved pin occurrence's true date). The range filter runs on the row as stored, so
+        // an estimate never changes which rows a date range picks up.
+        const push = (r, hint) => {
             if (!includeUpcoming && r.status === "upcoming")
                 return;
-            if (ledgerRowInRange(r, range))
-                rows.push(r);
+            if (!ledgerRowInRange(r, range))
+                return;
+            const h = hint || {};
+            if (r.date)
+                r.dateBasis = r.source === "pinned" ? "scheduled" : "exact";
+            else if (h.real) {
+                r.date = dayKey(new Date(h.real));
+                r.dateBasis = "scheduled";
+            }
+            else if (r.weekStart) {
+                const logged = h.logged && !isNaN(Date.parse(h.logged)) ? dayKey(new Date(h.logged)) : "";
+                if (logged && logged >= r.weekStart && logged <= r.weekEnd) {
+                    r.date = logged;
+                    r.dateBasis = "estimated-logged";
+                }
+                else {
+                    r.date = r.weekEnd;
+                    r.dateBasis = "estimated-week";
+                }
+            }
+            else
+                r.dateBasis = "period";
+            rows.push(r);
         };
         const base = {
             loggingPeriod: d.monthLabel || "",
@@ -3665,14 +3695,14 @@ function buildLedgerRows(state, range, opts) {
             status: e.recon ? "reconciled" : "logged",
             spendGroup: spendGroup(e.type, e.category),
         });
-        entries.forEach(e => push(spendRow(e, "logged", "")));
+        entries.forEach(e => push(spendRow(e, "logged", ""), { logged: e.date }));
         expandScheduledPins(pins, p.weeks).forEach(occ => {
             const pin = pins.find(x => x.id === occ.pinId);
             // A moved occurrence has no `day` (see expandScheduledPins) but keeps its real date in `date`.
             const occDay = occ.day || dayKey(new Date(occ.date));
             const confirmed = !!pin && ((pin.amounts && pin.amounts[occ.occKey] != null) || !!(pin.recons && pin.recons[occ.occKey]));
             const status = occDay > today ? "upcoming" : confirmed ? "confirmed" : "unconfirmed";
-            push({ ...spendRow(occ, "pinned", pin ? pin.freq : ""), status });
+            push({ ...spendRow(occ, "pinned", pin ? pin.freq : ""), status }, { real: occ.date });
         });
         pins.filter(x => !isScheduledPin(x)).forEach(pin => push({
             ...base, week: "", weekStart: "", weekEnd: "",
@@ -3705,7 +3735,7 @@ function buildLedgerRows(state, range, opts) {
             reimbursable: "no", settled: "", settledOn: "", id: c.id || "",
             status: c.recon ? "reconciled" : "logged",
             spendGroup: "",
-        }));
+        }, { logged: c.date }));
     });
     return rows;
 }
@@ -4065,7 +4095,7 @@ function ExportModal({ data, account, weeks, rebalancedBudgets, onClose }) {
                 rangeBackwards ? null : `${ledgerCount} row${ledgerCount === 1 ? "" : "s"}`,
                 !from && !to ? " · leave both blank for everything" : "",
                 " ",
-                "\u00B7 undated items are included when their week falls in the range."),
+                "\u00B7 undated items are included when their week falls in the range, with a best-guess date (the dateBasis column says which)."),
             React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 12, color: "var(--text-body)", cursor: "pointer" } },
                 React.createElement("input", { type: "checkbox", checked: includeUpcoming, onChange: e => { setIncludeUpcoming(e.target.checked); setCopied(false); } }),
                 "Include scheduled payments that haven't happened yet"))),
