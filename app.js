@@ -72,6 +72,42 @@ const budgetCreditTotal = (credits) => (credits || []).reduce((s, c) => s + cred
 const creditBadge = (c) => (c && c.repaysAmount > 0) ? "paid back" : (!creditCountsToBudget(c) ? "not in budget" : null);
 // Kinds of money in that can be someone paying you back, so the editor offers the Owed list.
 const REPAYMENT_CREDIT_KINDS = ["refund", "transfer", "other"];
+// Money moved between your own accounts — Lloyds to T212, Lloyds to Amex to clear the bill. Never
+// spending, never income, and never touches the budget. Stored per period in `moves`:
+// { id, amount, from, to (payment type ids), purpose, day, weekIndex, date, order }. `purpose` says
+// what the money is now set aside for; working out what's "spoken for" is left to the Finances
+// Tracker, which already has the pots — SpendTracker only records the move.
+const MOVE_PURPOSES = [
+    { id: "saving", label: "Saving" },
+    { id: "rent", label: "Rent" },
+    { id: "cardbill", label: "Card bill" },
+    { id: "holiday", label: "Holiday" },
+    { id: "bonus", label: "Bonus" },
+    { id: "reserve", label: "Reserve" },
+    { id: "other", label: "Other" },
+];
+const MOVE_PURPOSE_LABEL = Object.fromEntries(MOVE_PURPOSES.map(p => [p.id, p.label]));
+// A period's moves in summary. "Saved" is money that went INTO an account whose kind is Savings (set
+// in Customisation) less money that came back out of one; a move between two non-savings accounts
+// (paying off a card) saves nothing. `byPurpose` totals every move by what it was for.
+function moveTotals(moves, methods) {
+    const kind = (id) => methodKindOf((methods || []).find(m => m.id === id));
+    let intoSavings = 0, outOfSavings = 0;
+    const byPurpose = {};
+    (moves || []).forEach(m => {
+        const amt = m.amount || 0;
+        const toSav = kind(m.to) === "savings", fromSav = kind(m.from) === "savings";
+        if (toSav && !fromSav)
+            intoSavings += amt;
+        if (fromSav && !toSav)
+            outOfSavings += amt;
+        const p = m.purpose || "other";
+        byPurpose[p] = (byPurpose[p] || 0) + amt;
+    });
+    const r = (n) => Math.round(n * 100) / 100;
+    return { intoSavings: r(intoSavings), outOfSavings: r(outOfSavings), netSaved: r(intoSavings - outOfSavings),
+        byPurpose: Object.fromEntries(Object.entries(byPurpose).map(([k, v]) => [k, r(v)])), count: (moves || []).length };
+}
 // Which bucket of a monthly review a category's spending belongs to. Set once per category in
 // Customisation (`category.group`), never per spend, so logging is no slower. A category that has
 // never been given one falls back to these defaults for the built-in ids; "" stored explicitly
@@ -613,6 +649,7 @@ function defaultState() {
         entries: [],
         pins: [],
         credits: [],
+        moves: [],
         monthHistory: [],
         // One saved bank statement per payment method, so a card is uploaded once and re-reconciled
         // from a button rather than re-uploaded every time. See reconcile.js's packStatement.
@@ -650,6 +687,7 @@ function normalizeState(s) {
         entries: src.entries || [],
         pins: src.pins || [],
         credits: src.credits || [],
+        moves: src.moves || [],
         monthHistory: src.monthHistory || [],
         statements: src.statements || [],
     };
@@ -871,6 +909,8 @@ function periodHasRecordedActivity(s) {
         return true;
     if ((s.credits || []).length > 0)
         return true;
+    if ((s.moves || []).length > 0)
+        return true;
     const pins = s.pins || [];
     if (pins.length === 0)
         return false;
@@ -909,6 +949,7 @@ function rawReducer(s, a) {
                 entries: s.entries,
                 pins: s.pins,
                 credits: s.credits || [],
+                moves: s.moves || [],
                 monthlyBudget: s.monthlyBudget,
                 weeklyBudget: s.weeklyBudget,
                 paydayKind: s.paydayKind,
@@ -941,7 +982,7 @@ function rawReducer(s, a) {
             return { ...s,
                 payYear: a.newYear, payMonth: a.newMonth, monthLabel: a.newLabel,
                 monthHistory: newHistory,
-                entries: [], credits: [] };
+                entries: [], credits: [], moves: [] };
         }
         case "EDIT_PAST_ENTRY": {
             // Writes an entry change back into the archived period being viewed, not live state
@@ -957,6 +998,23 @@ function rawReducer(s, a) {
                 return arc;
             });
             return { ...s, monthHistory: newHistory };
+        }
+        case "MOVE": {
+            // A move between your own accounts. archiveIndex null = the live period, a number = that
+            // monthHistory slot. One case for all three ops: moves have no other writers.
+            const apply = (list) => {
+                const l = list || [];
+                if (a.op === "add")
+                    return [a.move, ...l];
+                if (a.op === "del")
+                    return l.filter(m => m.id !== a.id);
+                if (a.op === "upd")
+                    return l.map(m => m.id === a.move.id ? a.move : m);
+                return l;
+            };
+            if (a.archiveIndex == null)
+                return { ...s, moves: apply(s.moves) };
+            return { ...s, monthHistory: (s.monthHistory || []).map((arc, i) => i === a.archiveIndex ? { ...arc, moves: apply(arc.moves) } : arc) };
         }
         case "EDIT_PAST_CREDIT": {
             const newHistory = (s.monthHistory || []).map((arc, i) => {
@@ -1032,6 +1090,7 @@ const HELP_TOPICS = [
     ["Editing and tidying a week", "Tap Edit on a week to select several items at once and delete them, move them to another week, or give them all a category. Outside Edit mode you can drag an item to reorder it, and dragging it across a day heading files it under that day. The card chips at the top filter the week down to one card. Deleted something by mistake? Undo appears straight after, and it puts back both halves of a split or a skipped pinned cost."],
     ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Work expenses have a step in between: tap Claim (or Mark claimed… for a batch) when you submit the claim, so you can tell what is waiting on payroll from what you have not claimed yet. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. If you'd rather log the payment as money in (say, to match a bank statement), choose what it pays back under “Is someone paying you back?” when you log it: those items are ticked off for you, and that part of the money doesn't add to your budget, since it never came out of it. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
     ["Gross vs net", "Gross is what actually hit your cards — it's the figure your bank statement shows, because work expenses and the full amount of a split are charged in full and paid back separately. Net is the part that was genuinely yours, and that's what your budget measures. Work plus the not-yours half of splits makes up the reimbursable difference between them. Credits sit below that sum rather than inside it: money coming in isn't spending undone. The Summary tab shows all of it, and each line opens the transactions behind it."],
+    ["Moving money between accounts", "Choose Move on the ＋ sheet to record money going between your own accounts — Lloyds to Trading 212, or Lloyds to Amex to clear the bill. Pick where it came from, where it went and what it's for (saving, rent, card bill, holiday, bonus, reserve). A move isn't spending and never touches your budget. Moves are listed on the Savings tab, where a move into an account set as Savings in Customisation counts as saved — next to the leftover budget, which is what you could have saved. They go into every export, so a month-end review can see what's set aside for what."],
     ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover, worked out against that period's own budget rather than today's."],
     ["The Summary tab", "The period at a glance: what's left, gross vs net, a per-card breakdown that matches each card's own statement, spending by category, a week-by-week breakdown you can tap to jump to, your largest spends (individually or added up by name), and how much of your spending came from pinned costs rather than logged ones. Almost everything on it opens the transactions behind it."],
     ["Checking against your statement", "The Summary tab has a ⇄ Reconcile button. Export the CSV from your bank or card provider, upload it there, and SpendTracker cross-references it with everything you've logged — across the current period and finished ones, since a card statement rarely lines up with a payday. When a spend matches the statement exactly, the date it reached your card is noted for the export — the day you logged it still decides which week and pay period it counts in. It separates what's on the statement but never logged, amounts that don't match, things you logged that aren't on the statement, and everything that lines up. Matching goes on date and amount, not on the name, because your note to yourself (“Lunch”) never matches what your bank writes. Card payments, transfers and salary are recognised and skipped. Nothing is changed until you save it, the file never leaves your phone, and each card's statement is remembered so you don't re-upload it."],
@@ -1563,6 +1622,10 @@ function App() {
         else
             dispatch({ type: "DEL_ENTRY", id });
     }
+    // Moves write to the period on screen (or the one the reconcile sheet targets), like a spend.
+    const movePeriod = () => reconTarget !== undefined ? reconTarget : (viewingPast ? viewingPastIndex : null);
+    function addMove(move) { dispatch({ type: "MOVE", op: "add", archiveIndex: movePeriod(), move }); }
+    function delMove(id) { dispatch({ type: "MOVE", op: "del", archiveIndex: viewingPast ? viewingPastIndex : null, id }); }
     function addCredit(credit) {
         if (credit.repays && credit.repays.length)
             syncRepayments(credit.id, credit.repays, credit.day);
@@ -1815,7 +1878,7 @@ function App() {
             // first month. A month's leftover is computed exactly like the header's
             // "remaining": its own monthlyBudget − personal spend (entries + pins) + credits.
             const rows = (state.monthHistory || [])
-                .map(m => { const saved = periodLeftover(m); return { label: m.monthLabel, saved, budget: m.monthlyBudget, spent: m.monthlyBudget - saved }; })
+                .map(m => { const saved = periodLeftover(m); return { label: m.monthLabel, saved, budget: m.monthlyBudget, spent: m.monthlyBudget - saved, moved: moveTotals(m.moves, state.methods) }; })
                 .reverse(); // most recent completed month first
             const totalSaved = rows.reduce((s, r) => s + r.saved, 0);
             const signed = (n) => (n < 0 ? "" : "+") + fmt(n);
@@ -1838,6 +1901,36 @@ function App() {
                             state.monthLabel,
                             " ends")),
                     React.createElement("div", { style: { fontSize: 18, fontWeight: 700, color: remaining >= 0 ? "var(--text-tertiary)" : "#f87171" } }, signed(remaining)))),
+                (() => {
+                    const moves = (effectiveData.moves || []).slice().sort((a, b) => ((b.day || "") < (a.day || "") ? -1 : (b.day || "") > (a.day || "") ? 1 : 0));
+                    const mt = moveTotals(moves, state.methods);
+                    const hasSavingsAccount = (state.methods || []).some(m => methodKindOf(m) === "savings");
+                    return (React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px", marginBottom: 12 } },
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6 } },
+                            React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase" } },
+                                "Moves \u00B7 ",
+                                effectiveData.monthLabel),
+                            mt.count > 0 && React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: mt.netSaved >= 0 ? "#22c55e" : "#f87171" } },
+                                signed(mt.netSaved),
+                                " saved")),
+                        React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 8 } },
+                            "Money you actually moved between your own accounts \u2014 log one with Move on the \uFF0B sheet. Moves into an account set as Savings count as saved; the leftover budget above is what you could have saved.",
+                            !hasSavingsAccount && React.createElement(React.Fragment, null, " No payment type is set as Savings yet: set your savings account's type in Settings \u2192 Customisation.")),
+                        moves.length === 0
+                            ? React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13 } }, "No moves logged this period.")
+                            : moves.map(m => (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 8, padding: "8px 0", borderTop: "1px solid var(--border)" } },
+                                React.createElement("div", { style: { flex: 1, minWidth: 0 } },
+                                    React.createElement("div", { style: { fontSize: 13, color: "var(--text-primary)" } },
+                                        METHOD_NAME[m.from] || m.from,
+                                        " \u2192 ",
+                                        METHOD_NAME[m.to] || m.to),
+                                    React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } },
+                                        MOVE_PURPOSE_LABEL[m.purpose] || "Other",
+                                        m.day ? " · " + dayKeyLabel(m.day) : "",
+                                        m.label ? " · " + m.label : "")),
+                                React.createElement("div", { style: { fontSize: 13, fontWeight: 600, color: "var(--text-heading)" } }, fmt(m.amount)),
+                                React.createElement(ConfirmDeleteButton, { onConfirm: () => delMove(m.id), style: S.delBtn }))))));
+                })(),
                 React.createElement("div", { style: { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "14px" } },
                     React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Month by month"),
                     rows.length === 0 ? (React.createElement("div", { style: { color: "var(--text-muted)", fontSize: 13, padding: "4px 0", lineHeight: 1.5 } },
@@ -1849,7 +1942,10 @@ function App() {
                             React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } },
                                 fmt(r.spent),
                                 " spent of ",
-                                fmt(r.budget))),
+                                fmt(r.budget)),
+                            r.moved.count > 0 && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 1 } },
+                                signed(r.moved.netSaved),
+                                " moved into savings")),
                         React.createElement("div", { style: { fontSize: 15, fontWeight: 700, color: r.saved >= 0 ? "#22c55e" : "#f87171" } }, signed(r.saved))))))));
         })(),
         tab === "summary" && (React.createElement(SummaryView, { state: effectiveData, weeks: weeks, rebalancedBudgets: rebalancedBudgets, totalSpent: totalSpent, totalEntries: totalEntries, totalPinned: totalPinned, totalCredits: totalCredits, remaining: remaining, methodTotals: methodTotals, onExport: () => setShowExport(true), onReconcile: (methodId) => { setReconcileWith(methodId || null); setShowReconcile(true); }, statements: state.statements || [], onEditEntry: openEditEntry, onEditCredit: openEditCredit, onGoToWeek: (idx) => { setActiveWeek(idx); setTab("week"); } })),
@@ -1972,7 +2068,7 @@ function App() {
                         ...(state.statements || []).filter(x => x.method !== st.method),
                         { method: st.method, rows: st.rows, from: st.span ? st.span.from : null, to: st.span ? st.span.to : null, savedAt: new Date().toISOString() },
                     ] } }), onForgetStatement: methodId => dispatch({ type: "SETTINGS", patch: { statements: (state.statements || []).filter(x => x.method !== methodId) } }), onStampPosted: ops => dispatch({ type: "RECONCILE_APPLY", ops }), onClose: () => { setShowReconcile(false); setReconcileWith(null); setReconTarget(undefined); } }),
-        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, owedRows: owedRows, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), prefill: entryPrefill, onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onDeleteEntry: delEntry, onClose: () => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); } }),
+        (showEntryFor !== null || editTarget) && React.createElement(EntryModal, { weekIndex: editTarget ? editTarget.weekIndex : showEntryFor, weeks: weeks, edit: editTarget, defaultMethod: state.lastMethod || state.methods[0].id, categories: state.categories, categoryPrompt: state.categoryPrompt, descriptionPrompt: state.descriptionPrompt, owedRows: owedRows, onSaveMove: addMove, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), prefill: entryPrefill, onSave: addEntry, onSaveCredit: addCredit, onUpdate: updEntry, onUpdateCredit: updCredit, onDeleteEntry: delEntry, onClose: () => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); } }),
         (showAddPin || editPin) && React.createElement(PinModal, { pin: editPin, categories: state.categories, onAddCategory: cat => dispatch({ type: "SETTINGS", patch: { categories: [...state.categories, cat] } }), onSave: pin => { if (editPin)
                 dispatch({ type: "UPD_PIN", pin });
             else
@@ -2787,7 +2883,7 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
         onBack && React.createElement("button", { style: { background: "none", border: "none", color: "var(--text-secondary)", fontSize: 13, cursor: "pointer", padding: "12px 0 0", width: "100%" }, onClick: onBack }, "\u2190 Back")));
 }
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories, categoryPrompt, descriptionPrompt, owedRows, onAddCategory, onSave, onSaveCredit, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories, categoryPrompt, descriptionPrompt, owedRows, onAddCategory, onSave, onSaveCredit, onSaveMove, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
     const editEntry = edit && edit.kind === "entry" ? edit.data : null;
     const editCredit = edit && edit.kind === "credit" ? edit.data : null;
     // A split (both halves) edited as one unit — its own self-contained editor further down.
@@ -2845,6 +2941,9 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
     // Owed items this credit pays back (entry ids). Offered from the outstanding Owed list, plus
     // whatever this credit already settled, so editing it can untick them.
     const [repays, setRepays] = useState(() => (editCredit && editCredit.repays) || []);
+    // A move between your own accounts: `method` is where it came from, `moveTo` where it went.
+    const [moveTo, setMoveTo] = useState(null);
+    const [movePurpose, setMovePurpose] = useState("saving");
     const repayOptions = (owedRows || [])
         .filter(r => !r.settled || (editCredit && r.entry.settledBy === editCredit.id))
         .sort((a, b) => ((b.entry.day || "") < (a.entry.day || "") ? -1 : (b.entry.day || "") > (a.entry.day || "") ? 1 : 0));
@@ -3050,6 +3149,16 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
                 return;
             }
         }
+        if (type === "move") {
+            if (!method || !moveTo || method === moveTo)
+                return;
+            onSaveMove({ id: Math.random().toString(36).slice(2), amount, from: method, to: moveTo, purpose: movePurpose,
+                label: note.trim(), weekIndex: selectedWeek, day: selectedDay || undefined, date: new Date().toISOString(), order: Date.now() });
+            setFlash({ amount, credit: true });
+            setTimeout(() => setFlash(null), 900);
+            resetAfterSave();
+            return;
+        }
         if (type === "credit") {
             // `method` matters: a refund lands on a specific card, so without it a credit can't be
             // reconciled against that card's statement. The selector above was already being shown and
@@ -3075,7 +3184,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
     // can flip personal↔work; a split half or a credit keeps its kind (so its bucket stays coherent).
     const classOptions = isEdit
         ? (editCredit || isSplitEdit ? [] : [["personal", "Personal"], ["business", "Work"]])
-        : [["personal", "Personal"], ["business", "Work"], ["credit", "Credit"], ["split", "Split"]];
+        : [["personal", "Personal"], ["business", "Work"], ["credit", "Credit"], ["split", "Split"]].concat(onSaveMove ? [["move", "Move"]] : []);
     // What to show above the number display: the split steps, or a locked hint when editing a split.
     let displayCaption = null;
     if (type === "split" && splitStage === "total")
@@ -3179,12 +3288,22 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
         React.createElement("div", { style: { background: "var(--surface-2)", borderRadius: 12, padding: "14px 20px", marginBottom: 12, textAlign: "center", border: `1px solid ${flash ? mc.border : "var(--border-strong)"}`, opacity: isSplitEdit ? 0.7 : 1 } },
             displayCaption && React.createElement("div", { style: { fontSize: 11, color: "#a855f7", fontWeight: 600, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" } }, displayCaption),
             React.createElement("div", { style: { fontSize: displayStr.length > 7 ? 30 : 42, fontWeight: 800, color: flash ? "#22c55e" : "var(--text-heading)" } }, flash ? (flash.split ? `✓ ${fmt(flash.amount)} split` : `✓ ${fmt(flash.amount)}`) : `£${displayStr}`)),
-        React.createElement("div", { style: subheading }, "Payment type"),
+        React.createElement("div", { style: subheading }, type === "move" ? "From" : "Payment type"),
         React.createElement(MethodSelector, { value: method, onChange: setMethod }),
         type === "credit" && !method && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginTop: -6, marginBottom: 12 } }, "Not linked to a card yet. Pick the card the money went back to so it can be checked against that statement \u2014 leave it and the credit stays as it is.")),
         classOptions.length > 0 && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "Classification"),
             React.createElement("div", { style: { display: "flex", gap: 6, marginBottom: 10 } }, classOptions.map(([v, l]) => React.createElement("button", { key: v, style: { flex: 1, background: type === v ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${type === v ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: type === v ? (v === "business" ? "#f59e0b" : v === "credit" ? "#22c55e" : v === "split" ? "#a855f7" : "var(--text-heading)") : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: type === v ? 600 : 400, cursor: "pointer" }, onClick: () => selectType(v) }, l)))),
+        type === "move" && React.createElement(React.Fragment, null,
+            React.createElement("div", { style: subheading }, "To"),
+            React.createElement(MethodSelector, { value: moveTo, onChange: setMoveTo }),
+            moveTo && moveTo === method && (React.createElement("div", { style: { fontSize: 11, color: "#f87171", lineHeight: 1.5, marginTop: -6, marginBottom: 10 } }, "Pick a different account to move it to.")),
+            React.createElement("div", { style: subheading }, "What is it for?"),
+            React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 } }, MOVE_PURPOSES.map(k => {
+                const on = movePurpose === k.id;
+                return React.createElement("button", { key: k.id, "aria-pressed": on, onClick: () => setMovePurpose(k.id), style: { flex: "1 1 auto", background: on ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${on ? "#0ea5e9" : "var(--border)"}`, borderRadius: 8, color: on ? "#0ea5e9" : "var(--text-muted)", padding: "6px 8px", fontSize: 12, fontWeight: on ? 600 : 400, cursor: "pointer" } }, k.label);
+            })),
+            React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5, marginBottom: 10 } }, "Money moved between your own accounts \u2014 not spending, and it doesn't touch your budget. Moves are listed on the Savings tab.")),
         type === "credit" && React.createElement(React.Fragment, null,
             React.createElement("div", { style: subheading }, "What is it?"),
             React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: (creditKind === "income" || creditKind === "transfer") ? 6 : 10 } }, CREDIT_KINDS.map(k => {
@@ -3823,7 +3942,7 @@ function CreditsDetailModal({ total, groups, onEditCredit, onClose }) {
 // display names and flatten scheduled pins into the occurrences they became — so parseDataExport
 // deliberately refuses them rather than importing a half-account that looks complete.
 const EXPORT_VERSION = 1;
-const EXPORT_TYPE_LABEL = { personal: "Personal", business: "Work", excluded: "Split (not yours)", credit: "Credit" };
+const EXPORT_TYPE_LABEL = { personal: "Personal", business: "Work", excluded: "Split (not yours)", credit: "Credit", move: "Move" };
 const PAYDAY_LABEL = { "last-working": "last working day", "last-friday": "last Friday", "last-calendar": "last calendar day", "fixed": "fixed date" };
 // One CSV field. Quote-wrapped only when it has to be, with any embedded quote doubled — the same
 // rules reconcile.js's parseCSV reads back, so a description containing a comma, a quote or a
@@ -3892,12 +4011,15 @@ function paydayRuleLabel(d) {
 //   • repaysAmount / repays — on money in: how much of it paid back Owed items (splits, work), and
 //     those items' ids. That part is not in the budget. On a paid-back item, settledBy is the id of
 //     the credit that paid it, blank when it was ticked off by hand.
+//   • moveTo / moveToAccountType / movePurpose — on a move between your own accounts (direction
+//     "move", type "move"): where the money went, that account's kind, and what it was for. `card`
+//     is where it came from. A move is neither spending nor income, so it sits in neither total.
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
     "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
     "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
     "reimbursable", "settled", "settledOn", "id",
     "status", "spendGroup", "dateBasis", "cardAccount", "accountType", "creditKind", "claimStatus", "claimedOn",
-    "postedDate", "repaysAmount", "repays", "settledBy"];
+    "postedDate", "repaysAmount", "repays", "settledBy", "moveTo", "moveToAccountType", "movePurpose"];
 function ledgerRowInRange(r, range) {
     if (!range || (!range.from && !range.to))
         return true;
@@ -3975,6 +4097,11 @@ function buildLedgerRows(state, range, opts) {
             }
             if (r.settledBy === undefined)
                 r.settledBy = "";
+            if (r.moveTo === undefined) {
+                r.moveTo = "";
+                r.moveToAccountType = "";
+                r.movePurpose = "";
+            }
             rows.push(r);
         };
         const base = {
@@ -4074,6 +4201,20 @@ function buildLedgerRows(state, range, opts) {
             repaysAmount: c.repaysAmount > 0 ? csvMoney(Math.min(c.amount || 0, c.repaysAmount)) : "",
             repays: c.repaysAmount > 0 && c.repays ? c.repays.join(" ") : "",
         }, { logged: c.date }));
+        (d.moves || []).forEach(m => push({
+            ...base, ...weekCols(m.weekIndex),
+            date: m.day || "", description: m.label || `${methodName[m.from] || m.from || ""} → ${methodName[m.to] || m.to || ""}`, note: "",
+            amount: csvMoney(m.amount), direction: "move",
+            type: "move", typeLabel: EXPORT_TYPE_LABEL.move,
+            category: "", categoryId: "",
+            card: methodName[m.from] || m.from || "", cardId: m.from || "",
+            source: "logged", pinFrequency: "",
+            splitGroupId: "", splitRole: "", splitTotal: "",
+            reimbursable: "no", settled: "", settledOn: "", id: m.id || "",
+            status: "logged", spendGroup: "",
+            moveTo: methodName[m.to] || m.to || "", moveToAccountType: methodKindOf(methodById[m.to]),
+            movePurpose: m.purpose || "other",
+        }, { logged: m.date }));
     });
     return rows;
 }
@@ -4106,6 +4247,9 @@ function financeTrackerFigures(state, periodStart, label) {
     const today = dayKey(londonNow());
     const all = buildLedgerRows(state, null, { includeUpcoming: true }).filter(r => periodStart ? r.periodStart === periodStart : r.loggingPeriod === label);
     const rows = all.filter(r => r.status !== "upcoming");
+    // Moves come straight from the period's own list, since the totals need account ids, not names.
+    const period = exportPeriods(state).find(p => p.weeks.length && (periodStart ? dayKey(p.weeks[0].start) === periodStart : p.label === label));
+    const periodMoves = period ? (period.data.moves || []) : [];
     const sum = (list) => Math.round(list.reduce((t, r) => t + Number(r.amount || 0), 0) * 100) / 100;
     const out = rows.filter(r => r.direction === "out");
     const own = out.filter(r => r.type === "personal");
@@ -4125,6 +4269,7 @@ function financeTrackerFigures(state, periodStart, label) {
         cardGross: sum(out.filter(r => !isCash(r))), cashSpend: sum(out.filter(isCash)),
         workSpend: sum(out.filter(r => r.type === "business")),
         moneyIn, paidBack: Math.round(paidBack * 100) / 100,
+        moves: moveTotals(periodMoves, state.methods),
         unposted: out.filter(r => !isCash(r) && r.source === "logged" && !r.postedDate && r.date && r.date <= today).length,
         upcomingLeftOut: all.length > rows.length,
     };
@@ -4171,6 +4316,11 @@ function buildReportText(data, weeks, rebalancedBudgets, account) {
             L.push(pad(`In: ${CREDIT_KIND_LABEL[k]}`, fmt(ft.moneyIn[k]))); });
         if (ft.paidBack > 0)
             L.push(pad("In: paid back (splits, work)", fmt(ft.paidBack)));
+        if (ft.moves.count > 0) {
+            L.push(pad("Moved into savings (net)", fmt(ft.moves.netSaved)));
+            MOVE_PURPOSES.forEach(p => { if (ft.moves.byPurpose[p.id] > 0)
+                L.push(pad(`Moved: ${p.label}`, fmt(ft.moves.byPurpose[p.id]))); });
+        }
         // Card spends no statement has matched yet: the reason a statement gap isn't zero.
         if (ft.unposted > 0)
             L.push(pad("Not on a statement yet", `${ft.unposted} card spend${ft.unposted === 1 ? "" : "s"}`));
@@ -4287,6 +4437,13 @@ function buildReportText(data, weeks, rebalancedBudgets, account) {
         ranked.forEach(r => L.push(pad(r.desc, fmt(r.amount))));
         L.push("");
     }
+    // Moves between your own accounts this period. Not spending, so they sit apart from everything above.
+    const periodMoves = (data.moves || []).slice().sort((a, b) => ((a.day || "") < (b.day || "") ? -1 : (a.day || "") > (b.day || "") ? 1 : 0));
+    if (periodMoves.length) {
+        L.push("MOVES BETWEEN YOUR ACCOUNTS");
+        periodMoves.forEach(m => L.push(`  ${fmt(m.amount).padStart(10)}  ${mn(m.from)} → ${mn(m.to)}  ·  ${MOVE_PURPOSE_LABEL[m.purpose] || "Other"}${m.day ? " · " + dayKeyLabel(m.day) : ""}${m.label ? " · " + m.label : ""}`));
+        L.push("");
+    }
     // Owed and Savings describe the whole account, not the period on screen.
     const owedRows = owedItems(acct);
     const owed = owedTotals(owedRows);
@@ -4360,7 +4517,7 @@ function parseDataExport(text) {
     const data = obj.kind === "data-export" ? obj.data : obj;
     if (!data || typeof data !== "object" || Array.isArray(data))
         throw new Error("That isn't a SpendTracker export.");
-    ["entries", "pins", "credits", "monthHistory", "methods", "categories"].forEach(k => {
+    ["entries", "pins", "credits", "moves", "monthHistory", "methods", "categories"].forEach(k => {
         if (data[k] !== undefined && !Array.isArray(data[k]))
             throw new Error(`That export is damaged — "${k}" isn't a list.`);
     });

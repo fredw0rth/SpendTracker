@@ -126,7 +126,7 @@ test("the export shows how much of a credit was a repayment, and which credit se
   assert.equal(r.dinT.settledBy, "c1");
   assert.equal(r.dinT.settled, "yes");
   const csv = A.buildLedgerCSV(s, null, { today: "2026-08-31" });
-  assert.ok(csv.split("\n")[0].endsWith("postedDate,repaysAmount,repays,settledBy"), "new columns are appended at the end");
+  assert.ok(csv.split("\n")[0].endsWith("postedDate,repaysAmount,repays,settledBy,moveTo,moveToAccountType,movePurpose"), "new columns are appended at the end");
 });
 
 // ─── Report summary for the Finances Tracker ──────────────────────────────────
@@ -154,4 +154,71 @@ test("the Report opens with the Monthly row's figures for that pay period", () =
   assert.match(text, /FOR THE FINANCES TRACKER \(pay period Aug 2026\)/);
   assert.match(text, /Housing\s+£800\.00/);
   assert.match(text, /In: paid back \(splits, work\)\s+£35\.00/);
+});
+
+// ─── Moves between your own accounts ──────────────────────────────────────────
+
+function withMoves() {
+  const s = account();
+  s.methods = s.methods.concat([{ id: "t212", name: "T212", color: "#0ea5e9", kind: "savings" }]);
+  s.moves = [
+    { id: "m1", amount: 500, from: "Lloyds", to: "t212", purpose: "saving", weekIndex: 1, day: "2026-08-01" },
+    { id: "m2", amount: 800, from: "Lloyds", to: "t212", purpose: "rent", weekIndex: 1, day: "2026-08-01" },
+    { id: "m3", amount: 300, from: "Lloyds", to: "Amex", purpose: "cardbill", weekIndex: 2, day: "2026-08-10" },
+    { id: "m4", amount: 100, from: "t212", to: "Lloyds", purpose: "other", weekIndex: 2, day: "2026-08-12" },
+  ];
+  return s;
+}
+
+test("moves into a Savings account count as saved; card payments and moves back out don't", () => {
+  const s = withMoves();
+  const t = A.moveTotals(s.moves, s.methods);
+  assert.equal(t.intoSavings, 1300);
+  assert.equal(t.outOfSavings, 100);
+  assert.equal(t.netSaved, 1200);
+  assert.deepEqual(t.byPurpose, { saving: 500, rent: 800, cardbill: 300, other: 100 });
+});
+
+test("a move never touches the budget or the spending totals", () => {
+  const plain = account();
+  const moved = withMoves();
+  const before = A.financeTrackerFigures(plain, "2026-07-31");
+  const after = A.financeTrackerFigures(moved, "2026-07-31");
+  for (const k of ["housing", "essentials", "discretionary", "ownSpend", "cardGross", "cashSpend"]) assert.equal(after[k], before[k], k);
+  assert.deepEqual(after.moneyIn, before.moneyIn);
+  assert.equal(A.periodLeftover({ ...moved, monthlyBudget: 2000 }), A.periodLeftover({ ...plain, monthlyBudget: 2000 }));
+  assert.equal(after.moves.netSaved, 1200);
+});
+
+test("moves are exported as their own rows and listed in the Report", () => {
+  const s = withMoves();
+  const r = byId(A.buildLedgerRows(s, null, { today: "2026-08-31" }));
+  assert.equal(r.m1.direction, "move");
+  assert.equal(r.m1.card, "Lloyds");
+  assert.equal(r.m1.moveTo, "T212");
+  assert.equal(r.m1.moveToAccountType, "savings");
+  assert.equal(r.m3.movePurpose, "cardbill");
+  assert.equal(r.coffee.moveTo, "", "blank on everything that isn't a move");
+  const text = A.buildReportText(A.normalizeState(s), A.reconcilePeriods(s)[0].weeks, {}, s);
+  assert.match(text, /Moved into savings \(net\)\s+£1,200\.00/);
+  assert.match(text, /MOVES BETWEEN YOUR ACCOUNTS/);
+  assert.match(text, /£300\.00  Lloyds → Amex  ·  Card bill/);
+});
+
+test("moves are archived with their period, and the new period starts with none", () => {
+  const s = withMoves();
+  const next = A.reducer(s, { type: "MONTH_ROLLOVER", newYear: 2026, newMonth: 8, newLabel: "Sep 2026" });
+  assert.deepEqual(next.moves, []);
+  assert.equal(next.monthHistory[next.monthHistory.length - 1].moves.length, 4);
+  const edited = A.reducer(next, { type: "MOVE", op: "del", archiveIndex: next.monthHistory.length - 1, id: "m4" });
+  assert.equal(edited.monthHistory[edited.monthHistory.length - 1].moves.length, 3);
+  const added = A.reducer(edited, { type: "MOVE", op: "add", archiveIndex: null, move: { id: "n1", amount: 5, from: "Lloyds", to: "t212" } });
+  assert.equal(added.moves.length, 1);
+});
+
+test("a period with only a move in it is still kept", () => {
+  const s = account();
+  s.entries = []; s.credits = []; s.pins = [];
+  s.moves = [{ id: "m1", amount: 50, from: "Lloyds", to: "Amex", purpose: "cardbill", weekIndex: 1 }];
+  assert.equal(A.periodHasRecordedActivity(s), true);
 });
