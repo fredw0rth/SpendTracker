@@ -417,6 +417,20 @@ function makePinEntry(pin, weekIndex, date) {
         occKey, // identity for this occurrence's skip/move/order/amount overrides
     };
 }
+// A pin's optional lifetime, as inclusive day keys: `startDay` is its FIRST occurrence and
+// `endDay` its last possible one. Pins created before these existed have neither and are unbounded,
+// exactly as they always were. Nothing is ever generated before startDay, so a pin added mid-period
+// is never backfilled into the days already behind you.
+const pinDayInWindow = (p, key) => (!p.startDay || key >= p.startDay) && (!p.endDay || key <= p.endDay);
+// A flat (one-off) pin has no date of its own; it counts in any period its window overlaps.
+function pinActiveInWeeks(p, weeks) {
+    if (!weeks || !weeks.length || (!p.startDay && !p.endDay))
+        return true;
+    const first = dayKey(weeks[0].start), last = dayKey(weeks[weeks.length - 1].end);
+    return (!p.startDay || p.startDay <= last) && (!p.endDay || p.endDay >= first);
+}
+// The flat pins that apply to a period. Every whole-period pin total goes through this.
+const flatPinsForWeeks = (pins, weeks) => (pins || []).filter(p => !isScheduledPin(p) && pinActiveInWeeks(p, weeks));
 function expandScheduledPins(pins, weeks) {
     const out = [];
     // Emit one occurrence, applying the pin's per-occurrence overrides: skip drops it entirely; a
@@ -424,6 +438,8 @@ function expandScheduledPins(pins, weeks) {
     // of these touch the recurring schedule itself — they live keyed by occKey on the pin.
     const pushOcc = (p, naturalWeek, date) => {
         const k = occKeyOf(date);
+        if (!pinDayInWindow(p, dayKey(date)))
+            return;
         if ((p.skips || []).includes(k))
             return;
         const moved = !!(p.moves && p.moves[k] != null);
@@ -962,7 +978,7 @@ const HELP_TOPICS = [
     ["Logging: cards & types", "Tap ＋ (or “Log spend”) to record spending. Pick the card, then a type — Personal counts against your budget, Work is reimbursable and kept separate, Credit is money coming in, and Split is for shared payments. A credit also asks what it was, starting on Refund / paid back. Refunds, gifts and interest add to your budget as before; income and transfers in are recorded for your review but don't. Amounts type in pence: the display fills from the right, so tapping 1-2-5-0 gives £12.50. You can log to any day of the period, not just today — the day picker sits above the keypad, and ‹ › step between weeks. Add a description if you want one, and you'll be asked for a category after saving. Tap any logged item to edit it. The ＋ button at the bottom-left logs to today from any tab."],
     ["Splitting a payment", "Choose Split, enter the full amount you paid, then enter just the part that isn't yours — a friend's share, or a work expense. Your share counts against your budget; the rest is set aside and doesn't. Both halves stay linked, so tapping either opens the whole split in one editor, and reconciliation treats it as the single card transaction it really was."],
     ["Spending categories", "Categories say what a spend was for — Groceries, Transport, and so on. Pick one when you log, or from the prompt straight after saving. Only personal spending carries a category, since that's what's being budgeted. In Edit mode on the week log you can categorise a run of spends at once. The Summary tab totals your spending by category, and you can tap into any of them. Make your own in Settings → Customisation: name, colour and icon, up to 24, drag to reorder. Each category also says whether it counts as Housing, Essentials or Discretionary — set once there, never asked when logging — and the spreadsheet export carries that on every row."],
-    ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Daily, Weekly or Monthly frequency and it's dropped straight into the right day of the log, counting against that week; leave it as One-off and it's a flat cost for the whole period instead. Any single occurrence can be skipped, moved to another week, reordered, or given a different amount without disturbing the others — useful when one month's bill comes in higher. Mark a pin Work or Split to keep it out of your personal total."],
+    ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Daily, Weekly or Monthly frequency and it's dropped straight into the right day of the log, counting against that week; leave it as One-off and it's a flat cost for the whole period instead. Any single occurrence can be skipped, moved to another week, reordered, or given a different amount without disturbing the others — useful when one month's bill comes in higher. Mark a pin Work or Split to keep it out of your personal total. A new pin starts on a date you choose — that's its first payment, and it repeats on the same day after that — so it's never added to days already behind you. You can also give it an end date, after which it stops."],
     ["Editing and tidying a week", "Tap Edit on a week to select several items at once and delete them, move them to another week, or give them all a category. Outside Edit mode you can drag an item to reorder it, and dragging it across a day heading files it under that day. The card chips at the top filter the week down to one card. Deleted something by mistake? Undo appears straight after, and it puts back both halves of a split or a skipped pinned cost."],
     ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Work expenses have a step in between: tap Claim (or Mark claimed… for a batch) when you submit the claim, so you can tell what is waiting on payroll from what you have not claimed yet. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. For the same reason, do NOT also log a credit: that would hand you back budget you never spent. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
     ["Gross vs net", "Gross is what actually hit your cards — it's the figure your bank statement shows, because work expenses and the full amount of a split are charged in full and paid back separately. Net is the part that was genuinely yours, and that's what your budget measures. Work plus the not-yours half of splits makes up the reimbursable difference between them. Credits sit below that sum rather than inside it: money coming in isn't spending undone. The Summary tab shows all of it, and each line opens the transactions behind it."],
@@ -1054,7 +1070,7 @@ function periodLeftover(m) {
     const mPins = m.pins || [];
     const pinEntries = expandScheduledPins(mPins, mWeeks);
     const spentEntries = [...mEntries, ...pinEntries].filter(e => e.type === "personal").reduce((s, e) => s + e.amount, 0);
-    const spentPins = mPins.filter(p => !isScheduledPin(p) && p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
+    const spentPins = flatPinsForWeeks(mPins, mWeeks).filter(p => p.type !== "business" && p.type !== "excluded").reduce((s, p) => s + (p.amount || 0), 0);
     const credits = budgetCreditTotal(m.credits);
     return m.monthlyBudget - (spentEntries + spentPins) + credits;
 }
@@ -1347,7 +1363,7 @@ function App() {
     const effectiveData = {
         ...periodData,
         entries: [...periodEntries, ...pinEntries],
-        pins: periodPins.filter(p => !isScheduledPin(p)),
+        pins: flatPinsForWeeks(periodPins, weeks),
         credits: periodData.credits || [],
     };
     useEffect(() => {
@@ -2388,6 +2404,16 @@ function PinCard({ pin, onEdit, onDelete }) {
             "\uD83D\uDCCC ",
             pin.freq === "weekly" ? `Every ${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][pin.day]}` : pin.freq === "daily" ? "Every day" : `Monthly · day ${pin.day}`,
             " \u00B7 in week log"),
+        (pin.startDay || pin.endDay) && (() => {
+            const today = dayKey(londonNow());
+            const ended = pin.endDay && pin.endDay < today;
+            const parts = [];
+            if (pin.startDay)
+                parts.push((pin.startDay > today ? "Starts " : "From ") + dayKeyLabel(pin.startDay));
+            if (pin.endDay)
+                parts.push((ended ? "Ended " : "Until ") + dayKeyLabel(pin.endDay));
+            return React.createElement("div", { style: { fontSize: 11, color: ended ? "var(--text-muted)" : "var(--text-secondary)", marginTop: 2 } }, parts.join(" · "));
+        })(),
         pin.note && React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 4 } }, pin.note)));
 }
 // ─── Method Selector ──────────────────────────────────────────────────────────
@@ -3102,6 +3128,18 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
     const [freq, setFreq] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) || "none");
     const [dom, setDom] = useState(String((pin === null || pin === void 0 ? void 0 : pin.freq) === "monthly" ? ((_b = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _b !== void 0 ? _b : 1) : 1));
     const [dow, setDow] = useState((pin === null || pin === void 0 ? void 0 : pin.freq) === "weekly" ? ((_c = pin === null || pin === void 0 ? void 0 : pin.day) !== null && _c !== void 0 ? _c : 1) : 1);
+    // Lifetime. A NEW pin always has a start date, which is its first occurrence and also sets the
+    // day it repeats on, so the separate day pickers are only shown for older pins that have none.
+    // Defaults to today so a pin added mid-period never lands on days already gone.
+    const usesStart = !pin || !!pin.startDay;
+    const [startDay, setStartDay] = useState((pin === null || pin === void 0 ? void 0 : pin.startDay) || dayKey(londonNow()));
+    const [hasEnd, setHasEnd] = useState(!!(pin === null || pin === void 0 ? void 0 : pin.endDay));
+    const [endDay, setEndDay] = useState((pin === null || pin === void 0 ? void 0 : pin.endDay) || "");
+    const startDate = startDay ? dayKeyToDate(startDay) : null;
+    const ordinal = (n) => n + (n % 10 === 1 && n !== 11 ? "st" : n % 10 === 2 && n !== 12 ? "nd" : n % 10 === 3 && n !== 13 ? "rd" : "th");
+    const dateProblem = usesStart && !startDay ? "Choose a start date."
+        : hasEnd && !endDay ? "Choose an end date, or untick it."
+            : hasEnd && usesStart && endDay < startDay ? "The end date is before the start date." : "";
     const segBtn = (on) => ({ flex: 1, background: on ? "var(--surface-2)" : "var(--surface)", border: `1px solid ${on ? "var(--border-strong)" : "var(--border)"}`, borderRadius: 8, color: on ? "var(--text-heading)" : "var(--text-muted)", padding: "8px 4px", fontSize: 12, fontWeight: 600, cursor: "pointer" });
     const dayBtn = (on) => ({ flex: 1, background: on ? chipColors("#38bdf8").bg : "var(--surface)", border: `1px solid ${on ? "#0369a1" : "var(--border)"}`, borderRadius: 8, color: on ? "#38bdf8" : "var(--text-muted)", padding: "7px 2px", fontSize: 11, fontWeight: 600, cursor: "pointer" });
     const hint = { fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 };
@@ -3123,19 +3161,54 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
                 React.createElement("span", { style: { marginLeft: "auto", color: "var(--text-tertiary)" } }, "Change \u25B8"))))),
         React.createElement("div", { style: hint }, "Populate into the week log"),
         React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 10 } }, [["none", "One-off"], ["monthly", "Monthly"], ["weekly", "Weekly"], ["daily", "Daily"]].map(([v, l]) => React.createElement("button", { key: v, style: segBtn(freq === v), onClick: () => setFreq(v) }, l))),
-        freq === "monthly" && (React.createElement("div", { style: { marginBottom: 10 } },
+        usesStart && (React.createElement("div", { style: { marginBottom: 10 } },
+            React.createElement("label", { style: { ...hint, display: "block" } },
+                "Starts on",
+                freq === "none" ? "" : " (the first payment)",
+                React.createElement("input", { type: "date", "aria-label": "Start date", style: { ...S.input, marginTop: 4, marginBottom: 0 }, value: startDay, onChange: e => setStartDay(e.target.value) })),
+            startDate && (React.createElement("div", { style: { fontSize: 11, color: "var(--text-secondary)", marginTop: 4, lineHeight: 1.45 } },
+                freq === "monthly" ? `Then on the ${ordinal(startDate.getDate())} of each month.`
+                    : freq === "weekly" ? `Then every ${["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][startDate.getDay()]}.`
+                        : freq === "daily" ? "Then every day."
+                            : "Counts as a flat cost in each pay period from the one this date falls in.",
+                " ",
+                "Nothing is added before this date.")))),
+        !usesStart && freq === "monthly" && (React.createElement("div", { style: { marginBottom: 10 } },
             React.createElement("div", { style: hint }, "On day of the month it falls"),
             React.createElement("input", { style: { ...S.input, marginBottom: 0 }, type: "number", inputMode: "numeric", min: "1", max: "31", value: dom, onChange: e => setDom(e.target.value), onBlur: () => { const v = parseInt(dom, 10); setDom(String(!isNaN(v) ? Math.min(31, Math.max(1, v)) : 1)); } }))),
-        freq === "weekly" && (React.createElement("div", { style: { marginBottom: 10 } },
+        !usesStart && freq === "weekly" && (React.createElement("div", { style: { marginBottom: 10 } },
             React.createElement("div", { style: hint }, "On this day, every week"),
             React.createElement("div", { style: { display: "flex", gap: 4 } }, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d, i) => React.createElement("button", { key: i, style: dayBtn(dow === i), onClick: () => setDow(i) }, d))))),
+        React.createElement("label", { style: { display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--text-body)", marginBottom: hasEnd ? 6 : 10, cursor: "pointer" } },
+            React.createElement("input", { type: "checkbox", checked: hasEnd, onChange: e => setHasEnd(e.target.checked) }),
+            "Add an end date"),
+        hasEnd && (React.createElement("label", { style: { ...hint, display: "block", marginBottom: 10 } },
+            "Last payment on or before",
+            React.createElement("input", { type: "date", "aria-label": "End date", style: { ...S.input, marginTop: 4, marginBottom: 0 }, value: endDay, min: usesStart ? startDay : undefined, onChange: e => setEndDay(e.target.value) }))),
         React.createElement("textarea", { style: { ...S.input, height: 60, resize: "none" }, placeholder: "Note", value: note, onChange: e => setNote(e.target.value) }),
-        React.createElement("button", { style: { ...S.btn, background: "#0369a1", marginTop: 12 }, onClick: () => {
-                const base = { id: (pin === null || pin === void 0 ? void 0 : pin.id) || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, category: type === "personal" ? (category || undefined) : undefined, note: note.trim(), freq };
-                if (freq === "monthly")
+        dateProblem && React.createElement("div", { style: { fontSize: 12, color: "#f87171", marginTop: 8 } }, dateProblem),
+        React.createElement("button", { style: { ...S.btn, background: "#0369a1", marginTop: 12, ...(dateProblem ? { opacity: 0.5 } : {}) }, disabled: !!dateProblem, onClick: () => {
+                // Start from the existing pin so its per-occurrence history — skipped months, changed
+                // amounts, moves, reorders, reconciliation stamps — survives an edit. Building the pin
+                // from scratch here used to wipe all of it whenever a pin was edited.
+                const base = { ...(pin || {}), id: (pin === null || pin === void 0 ? void 0 : pin.id) || Math.random().toString(36).slice(2), label: label.trim(), amount: parseFloat(amount) || 0, method, type, category: type === "personal" ? (category || undefined) : undefined, note: note.trim(), freq };
+                if (usesStart) {
+                    base.startDay = startDay;
+                    if (freq === "monthly")
+                        base.day = startDate.getDate();
+                    else if (freq === "weekly")
+                        base.day = startDate.getDay();
+                    else
+                        delete base.day;
+                }
+                else if (freq === "monthly")
                     base.day = Math.min(31, Math.max(1, parseInt(dom, 10) || 1));
                 else if (freq === "weekly")
                     base.day = dow;
+                if (hasEnd && endDay)
+                    base.endDay = endDay;
+                else
+                    delete base.endDay;
                 onSave(base);
             } }, "Save")));
 }
@@ -3821,7 +3894,7 @@ function buildLedgerRows(state, range, opts) {
             const status = occDay > today ? "upcoming" : confirmed ? "confirmed" : "unconfirmed";
             push({ ...spendRow(occ, "pinned", pin ? pin.freq : ""), status }, { real: occ.date });
         });
-        pins.filter(x => !isScheduledPin(x)).forEach(pin => push({
+        flatPinsForWeeks(pins, p.weeks).forEach(pin => push({
             ...base, week: "", weekStart: "", weekEnd: "",
             date: "", description: pin.label || "", note: pin.note || "",
             amount: csvMoney(pin.amount), direction: "out",
