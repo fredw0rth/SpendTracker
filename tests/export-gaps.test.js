@@ -167,3 +167,24 @@ test("pinned costs: occurrences are 'scheduled', a moved one keeps its real date
   const flat = r.find(x => x.description === "Flat");
   assert.deepEqual([flat.date, flat.dateBasis], ["", "period"]);
 });
+
+// ─── 4. Which account a card is ──────────────────────────────────────────────
+
+test("built-in Amex and Cash have an obvious account type; the banks wait to be told", () => {
+  assert.equal(A.methodKindOf({ id: "Amex" }), "credit-card");
+  assert.equal(A.methodKindOf({ id: "Cash" }), "cash");
+  assert.equal(A.methodKindOf({ id: "Lloyds" }), "");
+  assert.equal(A.methodKindOf({ id: "Amex", kind: "" }), "", "clearing it sticks");
+});
+
+test("each row carries its card's account name and type", () => {
+  const s = account();
+  s.methods = s.methods.map(m => m.id === "Lloyds" ? { ...m, account: "Club current ·· 4821", kind: "current" } : m);
+  s.entries.push({ id: "e9", amount: 3, label: "Paper", method: "Lloyds", type: "personal", weekIndex: 1, day: "2026-08-01", order: 9 });
+  s.credits = [{ id: "c9", amount: 2, label: "Refund", method: "Lloyds", weekIndex: 1, day: "2026-08-01", order: 10 }];
+  const r = byId(A.buildLedgerRows(s, null, { today: "2026-08-31" }));
+  assert.deepEqual([r.e9.cardAccount, r.e9.accountType], ["Club current ·· 4821", "current"]);
+  assert.deepEqual([r.c9.cardAccount, r.c9.accountType], ["Club current ·· 4821", "current"]);
+  assert.deepEqual([r.e1.cardAccount, r.e1.accountType], ["", "credit-card"], "Amex, nothing typed yet");
+  assert.equal(A.buildLedgerRows(s, null, { today: "2026-08-31" }).find(x => x.description === "Rent").accountType, "current", "pins too");
+});

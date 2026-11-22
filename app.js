@@ -11,6 +11,20 @@ const DEFAULT_METHODS = [
     { id: "Cash", name: "Cash", color: "#fbbf24" },
 ];
 const MAX_METHODS = 12;
+// Which real account a payment type is, for anything that reads the export outside the app (a
+// net-worth review needs to know a credit card is a debt and a current account isn't). Both are
+// OPTIONAL fields on the method, set once in Customisation: `account` is free text ("Club Lloyds
+// current ·· 4821"), `kind` one of the ids below. The two built-ins whose kind is unambiguous get a
+// default; anything else stays blank until chosen. Read through methodKindOf.
+const ACCOUNT_KINDS = [
+    { id: "credit-card", label: "Credit card" },
+    { id: "current", label: "Current account" },
+    { id: "savings", label: "Savings" },
+    { id: "cash", label: "Cash" },
+    { id: "other", label: "Other" },
+];
+const DEFAULT_METHOD_KIND = { Amex: "credit-card", Cash: "cash" };
+const methodKindOf = (m) => !m ? "" : (m.kind !== undefined ? (m.kind || "") : (DEFAULT_METHOD_KIND[m.id] || ""));
 const genId = () => Math.random().toString(36).slice(2);
 // Spending categories: what a spend was *for* (Groceries, Transport, …). Like methods, these are
 // a user-editable list of {id, name, emoji, color} living in state.categories. Entries store the
@@ -2400,16 +2414,24 @@ function PaymentMethodsSettingsCard({ state, dispatch }) {
     const anyInUse = state.methods.some(m => used.has(m.id));
     return (React.createElement("div", { style: S.settingsCard },
         React.createElement("div", { style: { fontSize: 11, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 10, textTransform: "uppercase" } }, "Payment methods"),
+        React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: -4, marginBottom: 10, lineHeight: 1.4 } }, "Under each, say which account it is \u2014 it goes into the spreadsheet export. Use the last four digits at most: the export isn't encrypted."),
         state.methods.map(m => {
             const canDelete = !used.has(m.id) && state.methods.length > 1;
-            return (React.createElement("div", { key: m.id, style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 8 } },
-                React.createElement("input", { type: "color", value: m.color, onChange: e => update(m.id, { color: e.target.value }), "aria-label": `${m.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
-                React.createElement("input", { key: `mname-${m.id}-${m.name}`, defaultValue: m.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== m.name)
-                        update(m.id, { name: v });
-                    else if (!v)
-                        e.target.value = m.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
-                React.createElement("button", { onClick: () => { if (canDelete)
-                        remove(m.id); }, disabled: !canDelete, title: used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")));
+            return (React.createElement("div", { key: m.id, style: { marginBottom: 10 } },
+                React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } },
+                    React.createElement("input", { type: "color", value: m.color, onChange: e => update(m.id, { color: e.target.value }), "aria-label": `${m.name} colour`, style: { width: 34, height: 34, padding: 2, border: "1px solid var(--border)", borderRadius: 8, background: "var(--surface)", cursor: "pointer", flexShrink: 0 } }),
+                    React.createElement("input", { key: `mname-${m.id}-${m.name}`, defaultValue: m.name, placeholder: "Name", onBlur: e => { const v = e.target.value.trim(); if (v && v !== m.name)
+                            update(m.id, { name: v });
+                        else if (!v)
+                            e.target.value = m.name; }, style: { ...S.input, marginBottom: 0, flex: 1 } }),
+                    React.createElement("button", { onClick: () => { if (canDelete)
+                            remove(m.id); }, disabled: !canDelete, title: used.has(m.id) ? "In use — can't remove" : (state.methods.length <= 1 ? "Keep at least one" : "Remove"), style: { ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize: 16, flexShrink: 0 } }, "\u2715")),
+                React.createElement("div", { style: { display: "flex", gap: 6, marginTop: 4, marginLeft: 42 } },
+                    React.createElement("input", { key: `macct-${m.id}-${m.account || ""}`, defaultValue: m.account || "", placeholder: "Which account, e.g. Club current \u00B7\u00B7 4821", "aria-label": `${m.name} account`, onBlur: e => { const v = e.target.value.trim(); if (v !== (m.account || ""))
+                            update(m.id, { account: v }); }, style: { ...S.input, marginBottom: 0, flex: 1, minWidth: 0, fontSize: 12, padding: "6px 8px" } }),
+                    React.createElement("select", { value: methodKindOf(m), "aria-label": `${m.name} account type`, onChange: e => update(m.id, { kind: e.target.value }), style: { ...S.input, marginBottom: 0, width: "auto", flexShrink: 0, fontSize: 12, padding: "6px 4px" } },
+                        React.createElement("option", { value: "" }, "Type\u2026"),
+                        ACCOUNT_KINDS.map(k => React.createElement("option", { key: k.id, value: k.id }, k.label))))));
         }),
         anyInUse && React.createElement("div", { style: { fontSize: 11, color: "var(--text-muted)", marginTop: 2, marginBottom: 8 } }, "Types with logged transactions can't be removed."),
         React.createElement("button", { onClick: add, disabled: state.methods.length >= MAX_METHODS, style: { ...S.btn, background: "var(--surface-2)", border: "1px solid var(--border-strong)", color: "var(--text-heading)", width: "100%", marginTop: 4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" } }, state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type")));
@@ -3582,11 +3604,13 @@ function paydayRuleLabel(d) {
 //     that falls inside the row's own week; otherwise "estimated-week", the last day of that week.
 //     A flat (one-off) pin covers its whole period and has no date — "period", `date` left blank.
 //     Nothing stored is changed; the estimate exists only in the export.
+//   • cardAccount / accountType — which real account the card is, from Customisation (see
+//     methodKindOf). Blank until set, except the built-in Amex (credit-card) and Cash (cash).
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
     "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
     "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
     "reimbursable", "settled", "settledOn", "id",
-    "status", "spendGroup", "dateBasis"];
+    "status", "spendGroup", "dateBasis", "cardAccount", "accountType"];
 function ledgerRowInRange(r, range) {
     if (!range || (!range.from && !range.to))
         return true;
@@ -3609,6 +3633,7 @@ function buildLedgerRows(state, range, opts) {
     const methods = (state.methods && state.methods.length) ? state.methods : DEFAULT_METHODS;
     const categories = (state.categories && state.categories.length) ? state.categories : DEFAULT_CATEGORIES;
     const methodName = Object.fromEntries(methods.map(m => [m.id, m.name]));
+    const methodById = Object.fromEntries(methods.map(m => [m.id, m]));
     const catName = Object.fromEntries(categories.map(c => [c.id, c.name]));
     const catById = Object.fromEntries(categories.map(c => [c.id, c]));
     const spendGroup = (type, catId) => (type || "personal") !== "personal" ? ""
@@ -3646,6 +3671,9 @@ function buildLedgerRows(state, range, opts) {
             }
             else
                 r.dateBasis = "period";
+            const m = methodById[r.cardId];
+            r.cardAccount = (m && m.account) || "";
+            r.accountType = methodKindOf(m);
             rows.push(r);
         };
         const base = {
