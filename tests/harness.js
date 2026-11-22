@@ -15,7 +15,7 @@ const EXPORTS = [
   "genId", "fmt", "fmtAbs", "pad2", "dayKey", "dayKeyToDate", "dayKeyLabel", "addDays",
   "lastWorkingDay", "paydayFor", "periodLabelFor", "periodBounds", "buildWeeks",
   "weekIndexForDay", "todayWeekIndex", "groupByWeek", "effOrder",
-  "isScheduledPin", "occKeyOf", "makePinEntry", "expandScheduledPins",
+  "isScheduledPin", "occKeyOf", "pinDayInWindow", "pinActiveInWeeks", "flatPinsForWeeks", "makePinEntry", "expandScheduledPins",
   "defaultState", "normalizeState", "reducer", "rawReducer",
   "reconcilePeriods", "reconcileCandidates", "statementFor", "statementLabel",
   "getRebalancedBudgets", "computeBudgetSummary", "remainingDisplay",

@@ -148,6 +148,11 @@ current pay period. Change either box and the partner recalculates.
 - **Tap any logged item to edit it** — fix the amount, card, label, or personal/work
   type instead of deleting and re-adding. (Editing one half of a *split* keeps its
   amount locked, since the two halves must still sum to the original total.)
+- **Pinned costs have a start date and an optional end date.** A new pin's start date is its first
+  payment and sets the day it repeats on (the 20th of each month, every Thursday…). Nothing is
+  generated before it, so a pin added mid-period is never backfilled into days already gone, and
+  nothing after the end date. A one-off (flat) pin counts in each period its dates overlap. Pins
+  created before this have no dates and behave exactly as they always did.
 - **A floating ＋ button (bottom-left)** logs to today's week from any tab, so you
   don't have to find the right week first.
 
