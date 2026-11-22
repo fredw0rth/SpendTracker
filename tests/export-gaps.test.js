@@ -220,3 +220,38 @@ test("logging a credit remembers its kind for next time, in the live period or a
 test("the kinds are the six the logging sheet offers", () => {
   assert.deepEqual(A.CREDIT_KINDS.map(k => k.id), ["refund", "income", "transfer", "interest", "gift", "other"]);
 });
+
+// ─── 6. Work claims: not claimed → claimed → paid ────────────────────────────
+
+test("a work expense exports its claim stage and claim date", () => {
+  const s = account();
+  s.entries = [
+    { id: "w1", amount: 10, label: "Train", method: "Amex", type: "business", weekIndex: 1, day: "2026-08-01", order: 1 },
+    { id: "w2", amount: 20, label: "Hotel", method: "Amex", type: "business", weekIndex: 1, day: "2026-08-01", order: 2, claimedOn: "2026-08-10" },
+    { id: "w3", amount: 30, label: "Dinner", method: "Amex", type: "business", weekIndex: 1, day: "2026-08-01", order: 3, claimedOn: "2026-08-10", settledOn: "2026-08-28" },
+    { id: "s1", amount: 15, label: "Their half", method: "Amex", type: "excluded", weekIndex: 1, day: "2026-08-01", order: 4, settledOn: "2026-08-02" },
+  ];
+  s.pins = [];
+  const r = byId(A.buildLedgerRows(s, null, { today: "2026-08-31" }));
+  assert.deepEqual([r.w1.claimStatus, r.w1.claimedOn], ["not claimed", ""]);
+  assert.deepEqual([r.w2.claimStatus, r.w2.claimedOn], ["claimed", "2026-08-10"]);
+  assert.deepEqual([r.w3.claimStatus, r.w3.claimedOn, r.w3.settledOn], ["paid", "2026-08-10", "2026-08-28"]);
+  assert.deepEqual([r.s1.claimStatus, r.s1.settled], ["", "yes"], "a split's other half isn't a claim");
+});
+
+test("the Owed list knows which work expenses are claimed, and totals them", () => {
+  const s = account();
+  s.entries = [
+    { id: "w1", amount: 10, type: "business", weekIndex: 1, day: "2026-08-01" },
+    { id: "w2", amount: 20, type: "business", weekIndex: 1, day: "2026-08-01", claimedOn: "2026-08-10" },
+    { id: "s1", amount: 15, type: "excluded", weekIndex: 1, day: "2026-08-01", claimedOn: "2026-08-10" },
+  ];
+  const rows = A.owedItems(s);
+  const by = Object.fromEntries(rows.map(r => [r.entry.id, r]));
+  assert.equal(by.w1.claimed, false);
+  assert.equal(by.w2.claimed, true);
+  assert.equal(by.s1.claimed, false, "splits have no claim stage");
+  const t = A.owedTotals(rows);
+  assert.equal(t.claimed, 20);
+  assert.equal(t.total, 45, "claiming moves nothing: it is still owed until paid");
+});

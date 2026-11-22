@@ -897,7 +897,7 @@ const HELP_TOPICS = [
   ["Spending categories", "Categories say what a spend was for — Groceries, Transport, and so on. Pick one when you log, or from the prompt straight after saving. Only personal spending carries a category, since that's what's being budgeted. In Edit mode on the week log you can categorise a run of spends at once. The Summary tab totals your spending by category, and you can tap into any of them. Make your own in Settings → Customisation: name, colour and icon, up to 24, drag to reorder. Each category also says whether it counts as Housing, Essentials or Discretionary — set once there, never asked when logging — and the spreadsheet export carries that on every row."],
   ["Pinned costs", "Pins are fixed, recurring costs — rent, subscriptions, a gym. They count against the period's budget automatically without logging them each time, and carry across periods. Give a pin a Daily, Weekly or Monthly frequency and it's dropped straight into the right day of the log, counting against that week; leave it as One-off and it's a flat cost for the whole period instead. Any single occurrence can be skipped, moved to another week, reordered, or given a different amount without disturbing the others — useful when one month's bill comes in higher. Mark a pin Work or Split to keep it out of your personal total."],
   ["Editing and tidying a week", "Tap Edit on a week to select several items at once and delete them, move them to another week, or give them all a category. Outside Edit mode you can drag an item to reorder it, and dragging it across a day heading files it under that day. The card chips at the top filter the week down to one card. Deleted something by mistake? Undo appears straight after, and it puts back both halves of a split or a skipped pinned cost."],
-  ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. For the same reason, do NOT also log a credit: that would hand you back budget you never spent. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
+  ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Work expenses have a step in between: tap Claim (or Mark claimed… for a batch) when you submit the claim, so you can tell what is waiting on payroll from what you have not claimed yet. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. For the same reason, do NOT also log a credit: that would hand you back budget you never spent. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
   ["Gross vs net", "Gross is what actually hit your cards — it's the figure your bank statement shows, because work expenses and the full amount of a split are charged in full and paid back separately. Net is the part that was genuinely yours, and that's what your budget measures. Work plus the not-yours half of splits makes up the reimbursable difference between them. Credits sit below that sum rather than inside it: money coming in isn't spending undone. The Summary tab shows all of it, and each line opens the transactions behind it."],
   ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover, worked out against that period's own budget rather than today's."],
   ["The Summary tab", "The period at a glance: what's left, gross vs net, a per-card breakdown that matches each card's own statement, spending by category, a week-by-week breakdown you can tap to jump to, your largest spends (individually or added up by name), and how much of your spending came from pinned costs rather than logged ones. Almost everything on it opens the transactions behind it."],
@@ -1036,6 +1036,9 @@ function owedItems(state) {
         periodLabel: p.label,
         kind: e.type === "business" ? "work" : "split",
         settled: !!e.settledOn,
+        // A work claim's middle stage: submitted to your employer, not yet paid. `claimedOn` is a
+        // dayKey on the entry, inert like settledOn. Splits have no claim stage — a friend just pays.
+        claimed: e.type === "business" && !!e.claimedOn,
         // How many periods back this was logged, for surfacing a claim going stale. Archives are
         // capped at 12 (see MONTH_ROLLOVER), so anything approaching that is close to being
         // trimmed away along with its period.
@@ -1062,6 +1065,7 @@ function owedTotals(rows) {
   const out = rows.filter(r => !r.settled);
   const sum = (k) => out.filter(r => r.kind === k).reduce((s, r) => s + (r.entry.amount || 0), 0);
   return { outstanding: out.length, split: sum("split"), work: sum("work"),
+           claimed: out.filter(r => r.claimed).reduce((s, r) => s + (r.entry.amount || 0), 0),
            total: out.reduce((s, r) => s + (r.entry.amount || 0), 0),
            stale: out.filter(r => r.periodsAgo >= OWED_STALE_PERIODS).length };
 }
@@ -1189,7 +1193,8 @@ function App() {
   CATEGORY_BY_ID = Object.fromEntries(CATEGORIES.map(c => [c.id, c]));
 
   const [tab, setTab] = useState("week");
-  const [owedCutoff, setOwedCutoff] = useState(null);   // dayKey while the "mark paid up to" picker is open
+  const [owedCutoff, setOwedCutoff] = useState(null);   // dayKey while the "mark … up to" picker is open
+  const [owedCutoffMode, setOwedCutoffMode] = useState("paid"); // which batch the picker applies: "paid" | "claimed"
   const [showSettledOwed, setShowSettledOwed] = useState(false);
   const [activeWeek, setActiveWeek] = useState(1);
   const [showEntryFor, setShowEntryFor] = useState(null);
@@ -1371,6 +1376,19 @@ function App() {
   function settleOwedUpTo(cutoff) {
     owedRows.filter(r => !r.settled && r.entry.day && r.entry.day <= cutoff)
             .forEach(r => setOwedSettled(r, true));
+  }
+  // Same routing as setOwedSettled, for the claim stage. Work expenses only.
+  function setOwedClaimed(row, on) {
+    if (row.kind !== "work") return;
+    const next = { ...row.entry };
+    if (on) next.claimedOn = dayKey(londonNow()); else delete next.claimedOn;
+    if (row.archiveIndex === null) dispatch({ type: "UPD_ENTRY", entry: next });
+    else dispatch({ type: "EDIT_PAST_ENTRY", op: "upd", archiveIndex: row.archiveIndex, entry: next });
+  }
+  // A real expense claim covers everything up to a date, so this is the usual path.
+  function claimOwedUpTo(cutoff) {
+    owedRows.filter(r => r.kind === "work" && !r.settled && !r.claimed && r.entry.day && r.entry.day <= cutoff)
+            .forEach(r => setOwedClaimed(r, true));
   }
 
   // Install a parsed data export over this device's data (see ImportDataModal). Deliberately NOT
@@ -1606,8 +1624,11 @@ function App() {
         const label = (r) => r.entry.label || (r.kind === "work" ? "Work expense" : "Split");
         const tint = (r) => r.kind === "work" ? "#f59e0b" : "#a855f7";
 
+        // The claim chip sits beside the row rather than inside it (a button can't hold a button),
+        // and only on outstanding work expenses: tapping the row itself still means "paid".
         const Row = ({ r, onTap }) => (
-          <button onClick={onTap} style={{ width:"100%", display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, padding:"10px 0", background:"none", border:"none", borderBottom:"1px solid var(--border)", cursor:"pointer", textAlign:"left" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, borderBottom:"1px solid var(--border)" }}>
+          <button onClick={onTap} style={{ flex:1, minWidth:0, display:"flex", alignItems:"center", justifyContent:"space-between", gap:10, padding:"10px 0", background:"none", border:"none", cursor:"pointer", textAlign:"left" }}>
             <span style={{ minWidth:0 }}>
               <span style={{ display:"block", fontSize:14, color:"var(--text-primary)", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
                 {label(r)}
@@ -1615,6 +1636,7 @@ function App() {
               </span>
               <span style={{ display:"block", fontSize:11, color:"var(--text-secondary)", marginTop:2 }}>
                 {r.entry.day ? dayKeyLabel(r.entry.day) : "Undated"} · {r.periodLabel}
+                {r.claimed && r.entry.claimedOn ? ` · claimed ${dayKeyLabel(r.entry.claimedOn)}` : ""}
                 {r.settled && r.entry.settledOn ? ` · paid ${dayKeyLabel(r.entry.settledOn)}` : ""}
                 {!r.settled && r.periodsAgo >= OWED_STALE_PERIODS
                   ? <span style={{ color:"#f97316" }}> · {r.periodsAgo} periods ago</span> : null}
@@ -1625,6 +1647,14 @@ function App() {
               <span style={{ fontSize:15, color: r.settled ? "#22c55e" : "var(--text-tertiary)" }}>{r.settled ? "✓" : "○"}</span>
             </span>
           </button>
+          {r.kind === "work" && !r.settled && (
+            <button aria-pressed={r.claimed} aria-label={r.claimed ? `Undo claimed for ${label(r)}` : `Mark ${label(r)} as claimed`}
+              onClick={() => setOwedClaimed(r, !r.claimed)}
+              style={{ flexShrink:0, background: r.claimed ? chipColors("#f59e0b").bg : "transparent", border:`1px solid ${r.claimed ? "#f59e0b" : "var(--border)"}`, borderRadius:6, color: r.claimed ? readableAccentText("#f59e0b") : "var(--text-muted)", padding:"4px 7px", fontSize:11, fontWeight: r.claimed ? 600 : 400, cursor:"pointer" }}>
+              {r.claimed ? "Claimed" : "Claim"}
+            </button>
+          )}
+          </div>
         );
 
         return (
@@ -1637,6 +1667,7 @@ function App() {
               {owed.split > 0 && owed.work > 0 && <span style={{ color:"var(--text-muted)" }}> · </span>}
               {owed.work > 0 && <span>{fmt(owed.work)} from work</span>}
               {owed.total === 0 && <span style={{ color:"var(--text-muted)" }}>Nothing outstanding.</span>}
+              {owed.claimed > 0 && <div style={{ marginTop:4, color:"var(--text-secondary)" }}>{fmt(owed.claimed)} of the work total is claimed and awaiting payment.</div>}
             </div>
             <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:10, lineHeight:1.45 }}>
               None of this was ever taken off your budget, so ticking an item off just records that
@@ -1654,17 +1685,22 @@ function App() {
           <div style={S.settingsCard}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
               <div style={S.sectionTitle}>Outstanding</div>
-              {outstanding.length > 1 && (
-                <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => setOwedCutoff(dayKey(londonNow()))}>Mark paid…</button>
-              )}
+              <span style={{ display:"inline-flex", gap:6 }}>
+                {outstanding.some(r => r.kind === "work" && !r.claimed) && (
+                  <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => { setOwedCutoffMode("claimed"); setOwedCutoff(dayKey(londonNow())); }}>Mark claimed…</button>
+                )}
+                {outstanding.length > 1 && (
+                  <button style={{ ...S.editToggle, padding:"5px 10px", fontSize:12 }} onClick={() => { setOwedCutoffMode("paid"); setOwedCutoff(dayKey(londonNow())); }}>Mark paid…</button>
+                )}
+              </span>
             </div>
             {owedCutoff !== null && (
               <div style={{ background:"var(--surface-2)", borderRadius:8, padding:"10px 12px", marginBottom:10 }}>
-                <div style={{ fontSize:12, color:"var(--text-secondary)", marginBottom:6 }}>Tick off everything spent on or before:</div>
+                <div style={{ fontSize:12, color:"var(--text-secondary)", marginBottom:6 }}>{owedCutoffMode === "claimed" ? "Mark every unclaimed work expense spent on or before this as claimed:" : "Tick off everything spent on or before:"}</div>
                 <input style={{ ...S.input, marginBottom:8 }} type="date" value={owedCutoff} onChange={e => setOwedCutoff(e.target.value)} />
                 <div style={{ display:"flex", gap:8 }}>
                   <button style={{ ...S.editToggle, flex:1 }} onClick={() => setOwedCutoff(null)}>Cancel</button>
-                  <button style={{ ...S.btn, background:"#0369a1", flex:1 }} onClick={() => { settleOwedUpTo(owedCutoff); setOwedCutoff(null); }}>Mark paid</button>
+                  <button style={{ ...S.btn, background:"#0369a1", flex:1 }} onClick={() => { if (owedCutoffMode === "claimed") claimOwedUpTo(owedCutoff); else settleOwedUpTo(owedCutoff); setOwedCutoff(null); }}>{owedCutoffMode === "claimed" ? "Mark claimed" : "Mark paid"}</button>
                 </div>
               </div>
             )}
@@ -4115,11 +4151,13 @@ function paydayRuleLabel(d) {
 //     methodKindOf). Blank until set, except the built-in Amex (credit-card) and Cash (cash).
 //   • creditKind — for incoming money: refund / income / transfer / interest / gift / other, or
 //     "unspecified" for a credit logged before kinds existed. Blank on spending rows.
+//   • claimStatus / claimedOn — a work expense's stage: "not claimed", "claimed" (with the date it
+//     was marked claimed on the Owed tab) or "paid" (settledOn). Blank for anything not a work claim.
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
   "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
   "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
   "reimbursable", "settled", "settledOn", "id",
-  "status", "spendGroup", "dateBasis", "cardAccount", "accountType", "creditKind"];
+  "status", "spendGroup", "dateBasis", "cardAccount", "accountType", "creditKind", "claimStatus", "claimedOn"];
 
 function ledgerRowInRange(r, range) {
   if (!range || (!range.from && !range.to)) return true;
@@ -4173,6 +4211,7 @@ function buildLedgerRows(state, range, opts) {
       r.cardAccount = (m && m.account) || "";
       r.accountType = methodKindOf(m);
       if (r.creditKind === undefined) r.creditKind = "";
+      if (r.claimStatus === undefined) { r.claimStatus = ""; r.claimedOn = ""; }
       rows.push(r);
     };
     const base = {
@@ -4220,6 +4259,8 @@ function buildLedgerRows(state, range, opts) {
       settled: owedType(e.type) ? (e.settledOn ? "yes" : "no") : "",
       settledOn: e.settledOn || "",
       id: e.id || "",
+      claimStatus: e.type === "business" && !e.pinned ? (e.settledOn ? "paid" : e.claimedOn ? "claimed" : "not claimed") : "",
+      claimedOn: e.type === "business" && e.claimedOn ? e.claimedOn : "",
       status: e.recon ? "reconciled" : "logged",
       spendGroup: spendGroup(e.type, e.category),
     });
