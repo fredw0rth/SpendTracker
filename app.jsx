@@ -75,9 +75,29 @@ const creditBadge = (c) => (c && c.repaysAmount > 0) ? "paid back" : (!creditCou
 const REPAYMENT_CREDIT_KINDS = ["refund", "transfer", "other"];
 // Money moved between your own accounts — Lloyds to T212, Lloyds to Amex to clear the bill. Never
 // spending, never income, and never touches the budget. Stored per period in `moves`:
-// { id, amount, from, to (payment type ids), purpose, day, weekIndex, date, order }. `purpose` says
-// what the money is now set aside for; working out what's "spoken for" is left to the Finances
-// Tracker, which already has the pots — SpendTracker only records the move.
+// { id, amount, from, to, purpose, comesOut?, label, day, weekIndex, date, order }. `from` and `to`
+// are account ids: a payment type (state.methods) or an account for moves (state.moveAccounts).
+// `purpose` says what the money is now set aside for. `comesOut` is the tick on the logging sheet:
+// on a move INTO an account for moves it means "this is coming back out later"; on a move OUT of one
+// it means "this is set-aside money coming out" (see waitingToComeOut).
+//
+// Accounts for moves are where money sits rather than gets spent — Trading 212, a savings pot. They
+// are kept apart from payment types on purpose, so they never appear when logging a spend, a credit
+// or a split, never on a statement or the By card list, and only ever under Move. Each is
+// { id, name, color, kind, startAside, startNote }: `kind` as a payment type's (see ACCOUNT_KINDS),
+// `startAside` the money already there, to come out later, from before its moves were logged, and
+// `startNote` a few words on what that money is for.
+// New and existing accounts start with Trading 212; once the list exists it is left as the user
+// keeps it, so deleting Trading 212 doesn't bring it back.
+const DEFAULT_MOVE_ACCOUNTS = [
+  { id: "trading212", name: "Trading 212", color: "#0ea5e9", kind: "savings", startAside: 0 },
+];
+const MAX_MOVE_ACCOUNTS = 8;
+// Every account a move can name: payment types and accounts for moves, for turning a move's ids
+// into names and kinds. Payment types come last so that, were an id ever shared, the payment type
+// wins — spending only ever names payment types.
+const moveAccountList = (state) => [...((state && state.moveAccounts) || []),
+  ...((state && state.methods && state.methods.length) ? state.methods : DEFAULT_METHODS)];
 const MOVE_PURPOSES = [
   { id: "saving",   label: "Saving" },
   { id: "rent",     label: "Rent" },
@@ -90,22 +110,60 @@ const MOVE_PURPOSES = [
 const MOVE_PURPOSE_LABEL = Object.fromEntries(MOVE_PURPOSES.map(p => [p.id, p.label]));
 // A period's moves in summary. "Saved" is money that went INTO an account whose kind is Savings (set
 // in Customisation) less money that came back out of one; a move between two non-savings accounts
-// (paying off a card) saves nothing. `byPurpose` totals every move by what it was for.
-function moveTotals(moves, methods) {
-  const kind = (id) => methodKindOf((methods || []).find(m => m.id === id));
+// (paying off a card) saves nothing. A move ticked as coming back out (`comesOut`) isn't saving
+// either way: parking next month's rent in Trading 212 and taking it out again saves nothing.
+// `byPurpose` totals every move by what it was for. `accounts` is every account a move can name
+// (see moveAccountList); a plain list of payment types works too.
+function moveTotals(moves, accounts) {
+  const kind = (id) => methodKindOf((accounts || []).find(m => m.id === id));
   let intoSavings = 0, outOfSavings = 0;
   const byPurpose = {};
   (moves || []).forEach(m => {
     const amt = m.amount || 0;
     const toSav = kind(m.to) === "savings", fromSav = kind(m.from) === "savings";
-    if (toSav && !fromSav) intoSavings += amt;
-    if (fromSav && !toSav) outOfSavings += amt;
+    if (!m.comesOut && toSav && !fromSav) intoSavings += amt;
+    if (!m.comesOut && fromSav && !toSav) outOfSavings += amt;
     const p = m.purpose || "other";
     byPurpose[p] = (byPurpose[p] || 0) + amt;
   });
   const r = (n) => Math.round(n * 100) / 100;
   return { intoSavings: r(intoSavings), outOfSavings: r(outOfSavings), netSaved: r(intoSavings - outOfSavings),
            byPurpose: Object.fromEntries(Object.entries(byPurpose).map(([k, v]) => [k, r(v)])), count: (moves || []).length };
+}
+
+// Money sitting in each account for moves that is due to come back out, across every period (live
+// and archived) — not just the one on screen, since rent parked in October still has to come out
+// in November. For each account: what was already there (`startAside`, set in Customisation), plus
+// ticked moves in, less ticked moves out. Unticked moves don't count: that money is staying put.
+// Only what's been logged is known, so this is never the account's balance — interest, price moves
+// and anything moved without logging it all sit outside it.
+function waitingToComeOut(state) {
+  const accounts = (state && state.moveAccounts) || [];
+  const allMoves = [...((state && state.moves) || []),
+    ...(((state && state.monthHistory) || []).flatMap(p => p.moves || []))].filter(m => m && m.comesOut);
+  const r = (n) => Math.round(n * 100) / 100;
+  const rows = accounts.map(acc => {
+    const into = allMoves.filter(m => m.to === acc.id && m.from !== acc.id);
+    const out = allMoves.filter(m => m.from === acc.id && m.to !== acc.id);
+    const sum = (list) => list.reduce((t, m) => t + (m.amount || 0), 0);
+    const byPurpose = {};
+    into.forEach(m => { const p = m.purpose || "other"; byPurpose[p] = (byPurpose[p] || 0) + (m.amount || 0); });
+    const start = Number(acc.startAside) || 0;
+    const movedIn = sum(into), takenOut = sum(out);
+    return {
+      account: acc, start: r(start), movedIn: r(movedIn), takenOut: r(takenOut),
+      byPurpose: Object.fromEntries(Object.entries(byPurpose).map(([k, v]) => [k, r(v)])),
+      waiting: r(start + movedIn - takenOut),
+      count: into.length + out.length,
+    };
+  });
+  return { rows, total: r(rows.reduce((t, x) => t + x.waiting, 0)) };
+}
+// The few words a ticked move gets wherever it's listed: going in, it's coming back out later; coming
+// out, it's set-aside money leaving. Blank for an unticked move.
+function comesOutNote(m, moveAccounts) {
+  if (!m || !m.comesOut) return "";
+  return (moveAccounts || []).some(a => a.id === m.to) ? " · coming back out later" : " · set-aside money out";
 }
 // Which bucket of a monthly review a category's spending belongs to. Set once per category in
 // Customisation (`category.group`), never per spend, so logging is no slower. A category that has
@@ -131,6 +189,11 @@ const ICON_KEYS = Object.keys(ICONS);
 let METHODS = DEFAULT_METHODS;                                    // [{id,name,color}]
 let METHOD_COLOR = Object.fromEntries(DEFAULT_METHODS.map(m => [m.id, m.color])); // id -> colour
 let METHOD_NAME = Object.fromEntries(DEFAULT_METHODS.map(m => [m.id, m.name]));   // id -> display name
+// Accounts for moves (state.moveAccounts), refreshed the same way. Kept OUT of METHODS / METHOD_NAME
+// so nothing that picks or checks a payment type can ever land on one. ACCOUNT_NAME covers both
+// lists and is what a move's from/to is named by.
+let MOVE_ACCOUNTS = DEFAULT_MOVE_ACCOUNTS;
+let ACCOUNT_NAME = Object.fromEntries([...DEFAULT_MOVE_ACCOUNTS, ...DEFAULT_METHODS].map(m => [m.id, m.name]));
 // Category views, refreshed from state.categories in App() the same way (see App()).
 let CATEGORIES = DEFAULT_CATEGORIES;                               // [{id,name,emoji,color}]
 let CATEGORY_BY_ID = Object.fromEntries(DEFAULT_CATEGORIES.map(c => [c.id, c])); // id -> {name,emoji,color}
@@ -608,6 +671,7 @@ function defaultState() {
     pins: [],
     credits: [],
     moves: [], // money moved between your own accounts (see MOVE_PURPOSES)
+    moveAccounts: DEFAULT_MOVE_ACCOUNTS, // where money sits rather than gets spent; Move only
     monthHistory: [],
     // One saved bank statement per payment method, so a card is uploaded once and re-reconciled
     // from a button rather than re-uploaded every time. See reconcile.js's packStatement.
@@ -647,6 +711,9 @@ function normalizeState(s) {
     pins: src.pins || [],
     credits: src.credits || [],
     moves: src.moves || [],
+    // A missing list means an account from before accounts for moves existed: it gets Trading 212.
+    // An empty list is a choice (every one deleted) and is kept.
+    moveAccounts: Array.isArray(src.moveAccounts) ? src.moveAccounts : DEFAULT_MOVE_ACCOUNTS,
     monthHistory: src.monthHistory || [],
     statements: src.statements || [],
   };
@@ -1016,6 +1083,7 @@ const HELP_TOPICS = [
   ["Owed", "Two kinds of spend leave your card without ever coming off your budget: the other half of a split, and work expenses. The Owed tab lists them so you can see what you are still owed, and tick each one off when you are paid back. Work expenses have a step in between: tap Claim (or Mark claimed… for a batch) when you submit the claim, so you can tell what is waiting on payroll from what you have not claimed yet. Ticking only records that it happened — your remaining figure will not move, because the money never came off it. If you'd rather log the payment as money in (say, to match a bank statement), choose what it pays back under “Is someone paying you back?” when you log it: those items are ticked off for you, and that part of the money doesn't add to your budget, since it never came out of it. Only the last 12 periods are kept, so anything outstanding for six or more is flagged."],
   ["Gross vs net", "Gross is what actually hit your cards — it's the figure your bank statement shows, because work expenses and the full amount of a split are charged in full and paid back separately. Net is the part that was genuinely yours, and that's what your budget measures. Work plus the not-yours half of splits makes up the reimbursable difference between them. Credits sit below that sum rather than inside it: money coming in isn't spending undone. The Summary tab shows all of it, and each line opens the transactions behind it."],
   ["Moving money between accounts", "Choose Move on the ＋ sheet to record money going between your own accounts — Lloyds to Trading 212, or Lloyds to Amex to clear the bill. Pick where it came from, where it went and what it's for (saving, rent, card bill, holiday, bonus, reserve). A move isn't spending and never touches your budget. Moves are listed on the Savings tab, where a move into an account set as Savings in Customisation counts as saved — next to the leftover budget, which is what you could have saved. They go into every export, so a month-end review can see what's set aside for what."],
+  ["Trading 212 and other accounts for moves", "Some accounts hold money rather than pay for things — Trading 212, a savings pot. They live under Accounts for moves in Settings → Customisation, not with your payment types, so they only appear when you choose Move. When you move money into one, tick Coming back out later if it's only parked there (next month's rent, a holiday you've booked). When you move set-aside money back out, tick it again. The Summary tab's Waiting to come out card adds up what's still there to come out, across every period, with anything that was already there before you started logging moves (set that once in Customisation). It only knows what you've logged, so it isn't the account's balance: interest and price moves aren't in it."],
   ["Savings", "When a period ends, whatever budget you had left is banked on the Savings tab. The current period isn't counted until it finishes — so a brand-new month shows £0 saved until it rolls over — and the list shows each completed period's leftover, worked out against that period's own budget rather than today's."],
   ["The Summary tab", "The period at a glance: what's left, gross vs net, a per-card breakdown that matches each card's own statement, spending by category, a week-by-week breakdown you can tap to jump to, your largest spends (individually or added up by name), and how much of your spending came from pinned costs rather than logged ones. Almost everything on it opens the transactions behind it."],
   ["Checking against your statement", "The Summary tab has a ⇄ Reconcile button. Export the CSV from your bank or card provider, upload it there, and SpendTracker cross-references it with everything you've logged — across the current period and finished ones, since a card statement rarely lines up with a payday. When a spend matches the statement exactly, the date it reached your card is noted for the export — the day you logged it still decides which week and pay period it counts in. It separates what's on the statement but never logged, amounts that don't match, things you logged that aren't on the statement, and everything that lines up. Matching goes on date and amount, not on the name, because your note to yourself (“Lunch”) never matches what your bank writes. Card payments, transfers and salary are recognised and skipped. Nothing is changed until you save it, the file never leaves your phone, and each card's statement is remembered so you don't re-upload it."],
@@ -1329,6 +1397,8 @@ function App() {
   CATEGORIES = (state.categories && state.categories.length) ? state.categories : DEFAULT_CATEGORIES;
   METHOD_COLOR = Object.fromEntries(METHODS.map(m => [m.id, m.color]));
   METHOD_NAME = Object.fromEntries(METHODS.map(m => [m.id, m.name]));
+  MOVE_ACCOUNTS = state.moveAccounts || [];
+  ACCOUNT_NAME = Object.fromEntries(moveAccountList(state).map(m => [m.id, m.name]));
   CATEGORY_BY_ID = Object.fromEntries(CATEGORIES.map(c => [c.id, c]));
 
   const [tab, setTab] = useState("week");
@@ -1476,6 +1546,10 @@ function App() {
     return res;
   };
   const methodTotals = byMethod(personalEntries, effectiveData.pins.filter(p => p.type !== "business" && p.type !== "excluded"));
+  // Account-wide, from live state rather than the period on screen: money parked in October is still
+  // waiting to come out when October is viewed later, and after it has gone.
+  const waiting = waitingToComeOut(state);
+  const waitingByAccount = Object.fromEntries(waiting.rows.map(w => [w.account.id, w.waiting]));
 
   const rebalancedBudgets = getRebalancedBudgets(weeks, effectiveData.entries, spendableWeekly, effectiveData.credits);
 
@@ -1890,7 +1964,7 @@ function App() {
         // first month. A month's leftover is computed exactly like the header's
         // "remaining": its own monthlyBudget − personal spend (entries + pins) + credits.
         const rows = (state.monthHistory || [])
-          .map(m => { const saved = periodLeftover(m); return { label: m.monthLabel, saved, budget: m.monthlyBudget, spent: m.monthlyBudget - saved, moved: moveTotals(m.moves, state.methods) }; })
+          .map(m => { const saved = periodLeftover(m); return { label: m.monthLabel, saved, budget: m.monthlyBudget, spent: m.monthlyBudget - saved, moved: moveTotals(m.moves, moveAccountList(state)) }; })
           .reverse(); // most recent completed month first
         const totalSaved = rows.reduce((s,r)=>s+r.saved, 0);
         const signed = (n) => (n < 0 ? "" : "+") + fmt(n);
@@ -1916,8 +1990,8 @@ function App() {
           {/* Moves between your own accounts, for the period on screen */}
           {(() => {
             const moves = (effectiveData.moves || []).slice().sort((a, b) => ((b.day || "") < (a.day || "") ? -1 : (b.day || "") > (a.day || "") ? 1 : 0));
-            const mt = moveTotals(moves, state.methods);
-            const hasSavingsAccount = (state.methods || []).some(m => methodKindOf(m) === "savings");
+            const mt = moveTotals(moves, moveAccountList(state));
+            const hasSavingsAccount = moveAccountList(state).some(m => methodKindOf(m) === "savings");
             return (
               <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:6 }}>
@@ -1925,16 +1999,16 @@ function App() {
                   {mt.count > 0 && <div style={{ fontSize:13, fontWeight:700, color: mt.netSaved >= 0 ? "#22c55e" : "#f87171" }}>{signed(mt.netSaved)} saved</div>}
                 </div>
                 <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.5, marginBottom:8 }}>
-                  Money you actually moved between your own accounts — log one with Move on the ＋ sheet. Moves into an account set as Savings count as saved; the leftover budget above is what you could have saved.
-                  {!hasSavingsAccount && <> No payment type is set as Savings yet: set your savings account's type in Settings → Customisation.</>}
+                  Money you actually moved between your own accounts — log one with Move on the ＋ sheet. Moves into an account set as Savings count as saved, unless you ticked them as coming back out; the leftover budget above is what you could have saved.
+                  {!hasSavingsAccount && <> No account is set as Savings yet: set your savings account's type in Settings → Customisation.</>}
                 </div>
                 {moves.length === 0
                   ? <div style={{ color:"var(--text-muted)", fontSize:13 }}>No moves logged this period.</div>
                   : moves.map(m => (
                     <div key={m.id} style={{ display:"flex", alignItems:"center", gap:8, padding:"8px 0", borderTop:"1px solid var(--border)" }}>
                       <div style={{ flex:1, minWidth:0 }}>
-                        <div style={{ fontSize:13, color:"var(--text-primary)" }}>{METHOD_NAME[m.from] || m.from} → {METHOD_NAME[m.to] || m.to}</div>
-                        <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{MOVE_PURPOSE_LABEL[m.purpose] || "Other"}{m.day ? " · " + dayKeyLabel(m.day) : ""}{m.label ? " · " + m.label : ""}</div>
+                        <div style={{ fontSize:13, color:"var(--text-primary)" }}>{ACCOUNT_NAME[m.from] || m.from} → {ACCOUNT_NAME[m.to] || m.to}</div>
+                        <div style={{ fontSize:11, color:"var(--text-secondary)", marginTop:1 }}>{MOVE_PURPOSE_LABEL[m.purpose] || "Other"}{comesOutNote(m, MOVE_ACCOUNTS)}{m.day ? " · " + dayKeyLabel(m.day) : ""}{m.label ? " · " + m.label : ""}</div>
                       </div>
                       <div style={{ fontSize:13, fontWeight:600, color:"var(--text-heading)" }}>{fmt(m.amount)}</div>
                       <ConfirmDeleteButton onConfirm={() => delMove(m.id)} style={S.delBtn} />
@@ -1976,6 +2050,7 @@ function App() {
           totalCredits={totalCredits}
           remaining={remaining}
           methodTotals={methodTotals}
+          waiting={waiting}
           onExport={() => setShowExport(true)}
           onReconcile={(methodId) => { setReconcileWith(methodId || null); setShowReconcile(true); }}
           statements={state.statements || []}
@@ -2147,7 +2222,7 @@ function App() {
         onStampPosted={ops => dispatch({ type:"RECONCILE_APPLY", ops })}
         onClose={() => { setShowReconcile(false); setReconcileWith(null); setReconTarget(undefined); }} />}
 
-      {(showEntryFor !== null || editTarget) && <EntryModal weekIndex={editTarget ? editTarget.weekIndex : showEntryFor} weeks={weeks} edit={editTarget} defaultMethod={state.lastMethod || state.methods[0].id} categories={state.categories} categoryPrompt={state.categoryPrompt} descriptionPrompt={state.descriptionPrompt} owedRows={owedRows} onSaveMove={addMove} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} prefill={entryPrefill} onSave={addEntry} onSaveCredit={addCredit} onUpdate={updEntry} onUpdateCredit={updCredit} onDeleteEntry={delEntry} onClose={() => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); }} />}
+      {(showEntryFor !== null || editTarget) && <EntryModal weekIndex={editTarget ? editTarget.weekIndex : showEntryFor} weeks={weeks} edit={editTarget} defaultMethod={state.lastMethod || state.methods[0].id} categories={state.categories} categoryPrompt={state.categoryPrompt} descriptionPrompt={state.descriptionPrompt} owedRows={owedRows} onSaveMove={addMove} waitingByAccount={waitingByAccount} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} prefill={entryPrefill} onSave={addEntry} onSaveCredit={addCredit} onUpdate={updEntry} onUpdateCredit={updCredit} onDeleteEntry={delEntry} onClose={() => { setShowEntryFor(null); setEditTarget(null); setEntryPrefill(null); setReconTarget(undefined); }} />}
       {(showAddPin || editPin) && <PinModal pin={editPin} categories={state.categories} onAddCategory={cat => dispatch({ type:"SETTINGS", patch:{ categories: [...state.categories, cat] } })} onSave={pin => { if (editPin) dispatch({ type: "UPD_PIN", pin }); else dispatch({ type: "ADD_PIN", pin }); setShowAddPin(false); setEditPin(null); }} onClose={() => { setShowAddPin(false); setEditPin(null); }} />}
       {showExport && <ExportModal data={effectiveData} account={state} weeks={weeks} rebalancedBudgets={rebalancedBudgets} onClose={() => setShowExport(false)} />}
       {showBackup && <BackupModal onClose={() => { setShowBackup(false); try { setLastBackup(localStorage.getItem(LAST_BACKUP_KEY)); } catch (e) { /* ignore */ } }} />}
@@ -2716,8 +2791,10 @@ function PinCard({ pin, onEdit, onDelete }) {
 // The payment-type chooser used by both the log and pin modals. Renders the user's payment
 // types (state.methods, via the module METHODS view) as a wrapping 4-col grid that scrolls when
 // there are many, with a ▾ hint shown while more sit below the fold. Selected chip colours are
-// derived from each type's single colour.
-function MethodSelector({ value, onChange, dimmed }) {
+// derived from each type's single colour. `options` swaps in another list: Move passes payment
+// types together with accounts for moves, which nothing else ever offers.
+function MethodSelector({ value, onChange, dimmed, options }) {
+  const list = options || METHODS;
   const ref = useRef(null);
   const [moreRight, setMoreRight] = useState(false);
   const check = () => { const el = ref.current; if (el) setMoreRight(el.scrollWidth - el.scrollLeft - el.clientWidth > 4); };
@@ -2726,7 +2803,7 @@ function MethodSelector({ value, onChange, dimmed }) {
     <div style={{ position:"relative", marginBottom:12, opacity: dimmed ? 0.4 : 1 }}>
       {/* Single row: 4 chips fit the width; extra types scroll horizontally. */}
       <div ref={ref} onScroll={check} style={{ display:"flex", gap:6, overflowX:"auto", scrollbarWidth:"none" }}>
-        {METHODS.map(m => {
+        {list.map(m => {
           const on = value === m.id;
           const c = chipColors(m.color);
           return <button key={m.id} onClick={() => onChange(m.id)} title={m.name}
@@ -2809,13 +2886,22 @@ function CategoryEditorRow({ cat, canDelete, lockReason, open, onToggle, onUpdat
 
 // ─── Payment Methods Settings Card ────────────────────────────────────────────
 // The Settings card that lists, edits, adds, and removes payment types (state.methods).
-function PaymentMethodsSettingsCard({ state, dispatch }) {
-  // Every method id referenced by a live or archived transaction/pin — such types can't be removed.
+// Every account id something logged names, live or archived: spends, pins, credits and both ends of a
+// move. Such an account can't be removed, or what names it would be left pointing at nothing.
+function usedAccountIds(state) {
   const used = new Set();
   [state, ...(state.monthHistory || [])].forEach(src => {
     (src.entries || []).forEach(e => used.add(e.method));
     (src.pins || []).forEach(p => used.add(p.method));
+    (src.credits || []).forEach(c => { if (c.method) used.add(c.method); });
+    (src.moves || []).forEach(m => { used.add(m.from); used.add(m.to); });
   });
+  return used;
+}
+
+function PaymentMethodsSettingsCard({ state, dispatch }) {
+  // Types with anything logged against them — spends, pins, credits or moves — can't be removed.
+  const used = usedAccountIds(state);
   const setMethods = (ms) => dispatch({ type: "SETTINGS", patch: { methods: ms } });
   const update = (id, patch) => setMethods(state.methods.map(m => m.id === id ? { ...m, ...patch } : m));
   const remove = (id) => setMethods(state.methods.filter(m => m.id !== id));
@@ -2857,6 +2943,76 @@ function PaymentMethodsSettingsCard({ state, dispatch }) {
       <button onClick={add} disabled={state.methods.length >= MAX_METHODS}
         style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", width:"100%", marginTop:4, opacity: state.methods.length >= MAX_METHODS ? 0.5 : 1, cursor: state.methods.length >= MAX_METHODS ? "default" : "pointer" }}>
         {state.methods.length >= MAX_METHODS ? `Maximum ${MAX_METHODS} types` : "+ Add payment type"}
+      </button>
+    </div>
+  );
+}
+
+// ─── Accounts for Moves Settings Card ─────────────────────────────────────────
+// Where money sits rather than gets spent (state.moveAccounts): Trading 212, a savings pot. Laid out
+// like the payment types card, plus the money already there to come out (`startAside`) and a few
+// words on what it's for (`startNote`), both read by the Summary tab's Waiting to come out card.
+function MoveAccountsSettingsCard({ state, dispatch }) {
+  const accounts = state.moveAccounts || [];
+  const used = usedAccountIds(state);
+  const setAccounts = (as) => dispatch({ type: "SETTINGS", patch: { moveAccounts: as } });
+  const update = (id, patch) => setAccounts(accounts.map(a => a.id === id ? { ...a, ...patch } : a));
+  const remove = (id) => setAccounts(accounts.filter(a => a.id !== id));
+  const add = () => setAccounts([...accounts, { id: genId(), name: "New account", color: "#0ea5e9", kind: "savings", startAside: 0 }]);
+  // "£1,234.50", "1234.5" or "" → a number of pounds, or null when it isn't one.
+  const parsePounds = (v) => {
+    const t = String(v).replace(/[£,\s]/g, "");
+    if (t === "") return 0;
+    const n = Number(t);
+    return isFinite(n) ? Math.round(n * 100) / 100 : null;
+  };
+  const small = { ...S.input, marginBottom:0, fontSize:12, padding:"6px 8px" };
+  return (
+    <div style={S.settingsCard}>
+      <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", marginBottom:10, textTransform:"uppercase" }}>Accounts for moves</div>
+      <div style={{ fontSize:11, color:"var(--text-muted)", marginTop:-4, marginBottom:10, lineHeight:1.4 }}>
+        Where money sits rather than gets spent. These only appear when you choose Move, never as a payment type.
+        Already there is money in the account before you started logging moves that still has to come out; it starts the Summary tab's Waiting to come out.
+      </div>
+      {accounts.map(a => {
+        const canDelete = !used.has(a.id);
+        return (
+          <div key={a.id} style={{ marginBottom:12 }}>
+            <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+              <input type="color" value={a.color} onChange={e => update(a.id, { color: e.target.value })} aria-label={`${a.name} colour`}
+                style={{ width:34, height:34, padding:2, border:"1px solid var(--border)", borderRadius:8, background:"var(--surface)", cursor:"pointer", flexShrink:0 }} />
+              <input key={`aname-${a.id}-${a.name}`} defaultValue={a.name} placeholder="Name"
+                onBlur={e => { const v = e.target.value.trim(); if (v && v !== a.name) update(a.id, { name: v }); else if (!v) e.target.value = a.name; }}
+                style={{ ...S.input, marginBottom:0, flex:1 }} />
+              <button onClick={() => { if (canDelete) remove(a.id); }} disabled={!canDelete}
+                title={canDelete ? "Remove" : "Moves name this account — can't remove"}
+                style={{ ...S.iconBtn, color: canDelete ? "#ef4444" : "var(--border-strong)", cursor: canDelete ? "pointer" : "default", fontSize:16, flexShrink:0 }}>✕</button>
+            </div>
+            <div style={{ display:"flex", gap:6, marginTop:4, marginLeft:42, alignItems:"center" }}>
+              <span style={{ fontSize:11, color:"var(--text-secondary)", flexShrink:0 }}>Already there £</span>
+              <input key={`astart-${a.id}-${a.startAside || 0}`} defaultValue={a.startAside ? Number(a.startAside).toFixed(2) : ""}
+                inputMode="decimal" placeholder="0.00" aria-label={`${a.name}: money already there to come out`}
+                onBlur={e => { const n = parsePounds(e.target.value); if (n === null) { e.target.value = a.startAside ? Number(a.startAside).toFixed(2) : ""; return; } if (n !== (Number(a.startAside) || 0)) update(a.id, { startAside: n }); }}
+                style={{ ...small, width:80, flexShrink:0 }} />
+              <select value={methodKindOf(a)} aria-label={`${a.name} account type`} onChange={e => update(a.id, { kind: e.target.value })}
+                style={{ ...small, width:"auto", minWidth:0, flex:"0 1 auto", padding:"6px 4px", marginLeft:"auto" }}>
+                <option value="">Type…</option>
+                {ACCOUNT_KINDS.map(k => <option key={k.id} value={k.id}>{k.label}</option>)}
+              </select>
+            </div>
+            <div style={{ marginTop:4, marginLeft:42 }}>
+              <input key={`anote-${a.id}-${a.startNote || ""}`} defaultValue={a.startNote || ""} placeholder="What it's for, e.g. Lloyds card, Lakes trip"
+                aria-label={`${a.name}: what the money already there is for`}
+                onBlur={e => { const v = e.target.value.trim(); if (v !== (a.startNote || "")) update(a.id, { startNote: v }); }}
+                style={{ ...small, width:"100%", minWidth:0, boxSizing:"border-box" }} />
+            </div>
+          </div>
+        );
+      })}
+      {accounts.length === 0 && <div style={{ fontSize:12, color:"var(--text-muted)", marginBottom:8 }}>None yet. Add Trading 212 or a savings pot to move money into it.</div>}
+      <button onClick={add} disabled={accounts.length >= MAX_MOVE_ACCOUNTS}
+        style={{ ...S.btn, background:"var(--surface-2)", border:"1px solid var(--border-strong)", color:"var(--text-heading)", width:"100%", marginTop:4, opacity: accounts.length >= MAX_MOVE_ACCOUNTS ? 0.5 : 1, cursor: accounts.length >= MAX_MOVE_ACCOUNTS ? "default" : "pointer" }}>
+        {accounts.length >= MAX_MOVE_ACCOUNTS ? `Maximum ${MAX_MOVE_ACCOUNTS} accounts` : "+ Add account"}
       </button>
     </div>
   );
@@ -3004,6 +3160,7 @@ function CustomiseModal({ state, dispatch, onClose }) {
           </div>
         </div>
         <PaymentMethodsSettingsCard state={state} dispatch={dispatch} />
+        <MoveAccountsSettingsCard state={state} dispatch={dispatch} />
         <CategoriesSettingsCard state={state} dispatch={dispatch} />
       </div>
     </Modal>
@@ -3075,7 +3232,7 @@ function CategoryPicker({ categories, value, onPick, onCreate, onBack }) {
 }
 
 // ─── Entry Modal ──────────────────────────────────────────────────────────────
-function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories, categoryPrompt, descriptionPrompt, owedRows, onAddCategory, onSave, onSaveCredit, onSaveMove, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
+function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories, categoryPrompt, descriptionPrompt, owedRows, onAddCategory, onSave, onSaveCredit, onSaveMove, waitingByAccount, onUpdate, onUpdateCredit, onDeleteEntry, onClose }) {
   const editEntry = edit && edit.kind === "entry" ? edit.data : null;
   const editCredit = edit && edit.kind === "credit" ? edit.data : null;
   // A split (both halves) edited as one unit — its own self-contained editor further down.
@@ -3133,6 +3290,11 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
   // A move between your own accounts: `method` is where it came from, `moveTo` where it went.
   const [moveTo, setMoveTo] = useState(null);
   const [movePurpose, setMovePurpose] = useState("saving");
+  // The "coming back out later" tick. Only offered, and only saved, when one side of the move is an
+  // account for moves (see waitingToComeOut); a move from Lloyds to Amex has nothing to come out of.
+  const [moveComesOut, setMoveComesOut] = useState(false);
+  const isMoveAccount = (id) => MOVE_ACCOUNTS.some(a => a.id === id);
+  const moveTouchesAccount = isMoveAccount(method) || isMoveAccount(moveTo);
   const repayOptions = (owedRows || [])
     .filter(r => !r.settled || (editCredit && r.entry.settledBy === editCredit.id))
     .sort((a, b) => ((b.entry.day || "") < (a.entry.day || "") ? -1 : (b.entry.day || "") > (a.entry.day || "") ? 1 : 0));
@@ -3261,6 +3423,9 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
 
   function selectType(v) {
     setType(v);
+    // An account for moves can only be the From of a move. Leaving Move with one picked would let a
+    // spend or credit be saved against Trading 212 without its chip even showing as selected.
+    if (v !== "move" && isMoveAccount(method)) setMethod(METHOD_NAME[defaultMethod] ? defaultMethod : METHODS[0].id);
     // Changing type away from split mid-flow cancels the split
     if (v !== "split") { setSplitStage(null); setSplitTotal(0); }
     else { setSplitStage("total"); setCents(0); }
@@ -3284,6 +3449,8 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
 
   function pressEnter() {
     if (amount <= 0) return;
+    // Belt and braces for selectType's reset: nothing but a move may name an account for moves.
+    if (type !== "move" && isMoveAccount(method)) return;
 
     // Editing an existing item: write the change back in place, keeping id/date/week/split.
     if (isEdit) {
@@ -3329,7 +3496,9 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
     if (type === "move") {
       if (!method || !moveTo || method === moveTo) return;
       onSaveMove({ id: Math.random().toString(36).slice(2), amount, from: method, to: moveTo, purpose: movePurpose,
+        ...(moveComesOut && moveTouchesAccount ? { comesOut: true } : {}),
         label: note.trim(), weekIndex: selectedWeek, day: selectedDay || undefined, date: new Date().toISOString(), order: Date.now() });
+      setMoveComesOut(false);
       setFlash({ amount, credit: true });
       setTimeout(() => setFlash(null), 900);
       resetAfterSave();
@@ -3510,8 +3679,10 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
 
       <div style={subheading}>{type === "move" ? "From" : "Payment type"}</div>
       {/* Shown for credits too, and no longer dimmed for them: a refund lands on a card like any
-          other transaction, and that's what lets it be reconciled against that card's statement. */}
-      <MethodSelector value={method} onChange={setMethod} />
+          other transaction, and that's what lets it be reconciled against that card's statement.
+          Under Move it also offers accounts for moves (Trading 212), after the payment types, since
+          money mostly leaves a bank account; "To" lists them first, since that's where it mostly goes. */}
+      <MethodSelector value={method} onChange={setMethod} options={type === "move" ? [...METHODS, ...MOVE_ACCOUNTS] : undefined} />
       {type === "credit" && !method && (
         <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.5, marginTop:-6, marginBottom:12 }}>
           Not linked to a card yet. Pick the card the money went back to so it can be checked
@@ -3528,7 +3699,7 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
 
       {type === "move" && <>
         <div style={subheading}>To</div>
-        <MethodSelector value={moveTo} onChange={setMoveTo} />
+        <MethodSelector value={moveTo} onChange={setMoveTo} options={[...MOVE_ACCOUNTS, ...METHODS]} />
         {moveTo && moveTo === method && (
           <div style={{ fontSize:11, color:"#f87171", lineHeight:1.5, marginTop:-6, marginBottom:10 }}>Pick a different account to move it to.</div>
         )}
@@ -3540,6 +3711,26 @@ function EntryModal({ weekIndex, weeks, edit, prefill, defaultMethod, categories
               style={{ flex:"1 1 auto", background: on ? "var(--surface-2)" : "var(--surface)", border:`1px solid ${on ? "#0ea5e9" : "var(--border)"}`, borderRadius:8, color: on ? "#0ea5e9" : "var(--text-muted)", padding:"6px 8px", fontSize:12, fontWeight: on ? 600 : 400, cursor:"pointer" }}>{k.label}</button>;
           })}
         </div>
+        {moveTouchesAccount && moveTo !== method && (() => {
+          const into = isMoveAccount(moveTo), outOf = isMoveAccount(method);
+          const name = (id) => ACCOUNT_NAME[id] || id;
+          const waitingFrom = outOf ? ((waitingByAccount || {})[method] || 0) : 0;
+          const heading = into && !outOf ? "Coming back out later" : "Set-aside money coming out";
+          const detail = into && outOf
+            ? `Moves it from what's waiting to come out of ${name(method)} to ${name(moveTo)}.`
+            : into
+              ? `Tick if it's only parked in ${name(moveTo)}. It's added to Waiting to come out on the Summary tab.`
+              : `Tick if this is money you'd set aside. It comes off what's waiting to come out of ${name(method)}${waitingFrom > 0 ? ` (${fmt(waitingFrom)} now)` : ""}.`;
+          return (
+            <div style={{ display:"flex", alignItems:"center", gap:10, background:"var(--surface)", border:"1px solid var(--border)", borderRadius:8, padding:"8px 10px", marginTop:4, marginBottom:6 }}>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:13, color:"var(--text-heading)", fontWeight:500 }}>{heading}</div>
+                <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.45, marginTop:2 }}>{detail}</div>
+              </div>
+              <ToggleSwitch on={moveComesOut} onToggle={() => setMoveComesOut(v => !v)} ariaLabel={heading} thumbOn="✓" thumbOff="" />
+            </div>
+          );
+        })()}
         <div style={{ fontSize:11, color:"var(--text-secondary)", lineHeight:1.5, marginBottom:10 }}>
           Money moved between your own accounts — not spending, and it doesn't touch your budget. Moves are listed on the Savings tab.
         </div>
@@ -3768,7 +3959,7 @@ function PinModal({ pin, categories, onAddCategory, onSave, onClose }) {
 }
 
 // ─── Summary View ─────────────────────────────────────────────────────────────
-function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, onExport, onReconcile, statements, onEditEntry, onEditCredit, onGoToWeek }) {
+function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries, totalPinned, totalCredits, remaining, methodTotals, waiting, onExport, onReconcile, statements, onEditEntry, onEditCredit, onGoToWeek }) {
   const [methodDetail, setMethodDetail] = useState(null); // method name or null
   const [categoryDetail, setCategoryDetail] = useState(null); // category id, "uncat", or null
   const [spendView, setSpendView] = useState("txn"); // "txn" = largest individual, "label" = grouped by name
@@ -3906,6 +4097,49 @@ function SummaryView({ state, weeks, rebalancedBudgets, totalSpent, totalEntries
         <div style={{ fontSize:11, color:"var(--text-secondary)", textTransform:"uppercase", marginTop:4, marginBottom:12 }}>{heroRemaining.label}</div>
         <div style={{ fontSize:12, color:"var(--text-body)" }}>{fmt(totalSpent)} spent of {fmt(state.monthlyBudget)}</div>
       </div>
+
+      {/* Waiting to come out — money parked in an account for moves (Trading 212) that will be moved
+          back out later. Account-wide, not this period's: see waitingToComeOut. Hidden only when
+          there are no accounts for moves at all. */}
+      {waiting && waiting.rows.length > 0 && (
+        <div style={{ background:"var(--surface)", border:"1px solid var(--border)", borderRadius:14, padding:"14px", marginBottom:12 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"baseline", marginBottom:4 }}>
+            <div style={{ fontSize:11, fontWeight:600, color:"var(--text-secondary)", textTransform:"uppercase" }}>Waiting to come out</div>
+            <div style={{ fontSize:15, fontWeight:800, color:"var(--text-heading)" }}>{fmt(waiting.total)}</div>
+          </div>
+          <div style={{ fontSize:11, color:"var(--text-muted)", marginBottom:8, lineHeight:1.45 }}>
+            Money parked to be moved back out later, across every period. Only what you've logged counts, so it isn't the account's balance.
+          </div>
+          {waiting.rows.map((w, i) => {
+            const line = (label, value, opts) => (
+              <div style={{ display:"flex", justifyContent:"space-between", gap:8, padding:"3px 0", fontSize: (opts && opts.small) ? 11 : 12 }}>
+                <span style={{ color: (opts && opts.small) ? "var(--text-secondary)" : "var(--text-tertiary)", paddingLeft: (opts && opts.small) ? 10 : 0 }}>{label}</span>
+                <span style={{ color:"var(--text-tertiary)", fontWeight:600, whiteSpace:"nowrap" }}>{value}</span>
+              </div>
+            );
+            const purposes = MOVE_PURPOSES.filter(p => w.byPurpose[p.id] > 0);
+            const nothingYet = w.start === 0 && w.count === 0;
+            return (
+              <div key={w.account.id} style={{ borderTop:"1px solid var(--border)", paddingTop:8, marginTop: i ? 8 : 0 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                  <span style={{ ...S.dot, background: w.account.color }} />
+                  <span style={{ flex:1, fontSize:13, fontWeight:600, color:"var(--text-body)" }}>{w.account.name}</span>
+                  <span style={{ fontSize:13, fontWeight:700, color: w.waiting < 0 ? "#f87171" : "var(--text-heading)" }}>{fmt(w.waiting)}</span>
+                </div>
+                {nothingYet
+                  ? <div style={{ fontSize:11, color:"var(--text-muted)", lineHeight:1.45 }}>Nothing set aside yet. Tick Coming back out later when you log a Move into {w.account.name}, and set anything already there in Settings → Customisation.</div>
+                  : <>
+                    {w.start !== 0 && line(w.account.startNote ? `Already there · ${w.account.startNote}` : "Already there", fmt(w.start))}
+                    {w.movedIn > 0 && line("Moved in to come out", "+ " + fmt(w.movedIn))}
+                    {purposes.length > 1 && purposes.map(p => <React.Fragment key={p.id}>{line(p.label, fmt(w.byPurpose[p.id]), { small: true })}</React.Fragment>)}
+                    {w.takenOut > 0 && line("Taken out", "− " + fmt(w.takenOut))}
+                    {w.waiting < 0 && <div style={{ fontSize:11, color:"#f87171", lineHeight:1.45, marginTop:2 }}>More has come out than was set aside. Check the amount already there in Customisation, or untick a move that wasn't set-aside money.</div>}
+                  </>}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Gross vs net — waterfall from what hit your cards down to what's actually yours. Shown
           when there's reimbursable (business or split) spend, or credits, to make the distinction. */}
@@ -4485,13 +4719,16 @@ function paydayRuleLabel(d) {
 //     the credit that paid it, blank when it was ticked off by hand.
 //   • moveTo / moveToAccountType / movePurpose — on a move between your own accounts (direction
 //     "move", type "move"): where the money went, that account's kind, and what it was for. `card`
-//     is where it came from. A move is neither spending nor income, so it sits in neither total.
+//     is where it came from — a payment type or an account for moves (Trading 212). A move is
+//     neither spending nor income, so it sits in neither total.
+//   • moveComesOut — on a move, "yes" when it was ticked as set-aside money (parked to come back
+//     out later, or coming back out), else "no"; blank on everything else. See waitingToComeOut.
 const LEDGER_COLS = ["loggingPeriod", "periodStart", "periodEnd", "week", "weekStart", "weekEnd", "date",
   "description", "note", "amount", "direction", "type", "typeLabel", "category", "categoryId",
   "card", "cardId", "source", "pinFrequency", "splitGroupId", "splitRole", "splitTotal",
   "reimbursable", "settled", "settledOn", "id",
   "status", "spendGroup", "dateBasis", "cardAccount", "accountType", "creditKind", "claimStatus", "claimedOn",
-  "postedDate", "repaysAmount", "repays", "settledBy", "moveTo", "moveToAccountType", "movePurpose"];
+  "postedDate", "repaysAmount", "repays", "settledBy", "moveTo", "moveToAccountType", "movePurpose", "moveComesOut"];
 
 function ledgerRowInRange(r, range) {
   if (!range || (!range.from && !range.to)) return true;
@@ -4513,8 +4750,11 @@ function buildLedgerRows(state, range, opts) {
   const includeUpcoming = !!o.includeUpcoming;
   const methods = (state.methods && state.methods.length) ? state.methods : DEFAULT_METHODS;
   const categories = (state.categories && state.categories.length) ? state.categories : DEFAULT_CATEGORIES;
-  const methodName = Object.fromEntries(methods.map(m => [m.id, m.name]));
-  const methodById = Object.fromEntries(methods.map(m => [m.id, m]));
+  // A move can name an account for moves as well as a payment type; spending only ever names the
+  // latter, so the wider lookup changes nothing for any other row (see moveAccountList).
+  const accounts = [...(state.moveAccounts || []), ...methods];
+  const methodName = Object.fromEntries(accounts.map(m => [m.id, m.name]));
+  const methodById = Object.fromEntries(accounts.map(m => [m.id, m]));
   const catName = Object.fromEntries(categories.map(c => [c.id, c.name]));
   const catById = Object.fromEntries(categories.map(c => [c.id, c]));
   const spendGroup = (type, catId) => (type || "personal") !== "personal" ? ""
@@ -4549,7 +4789,7 @@ function buildLedgerRows(state, range, opts) {
       if (r.postedDate === undefined) r.postedDate = "";
       if (r.repaysAmount === undefined) { r.repaysAmount = ""; r.repays = ""; }
       if (r.settledBy === undefined) r.settledBy = "";
-      if (r.moveTo === undefined) { r.moveTo = ""; r.moveToAccountType = ""; r.movePurpose = ""; }
+      if (r.moveTo === undefined) { r.moveTo = ""; r.moveToAccountType = ""; r.movePurpose = ""; r.moveComesOut = ""; }
       rows.push(r);
     };
     const base = {
@@ -4664,6 +4904,7 @@ function buildLedgerRows(state, range, opts) {
       status: "logged", spendGroup: "",
       moveTo: methodName[m.to] || m.to || "", moveToAccountType: methodKindOf(methodById[m.to]),
       movePurpose: m.purpose || "other",
+      moveComesOut: m.comesOut ? "yes" : "no",
     }, { logged: m.date }));
   });
 
@@ -4722,7 +4963,7 @@ function financeTrackerFigures(state, periodStart, label) {
     cardGross: sum(out.filter(r => !isCash(r))), cashSpend: sum(out.filter(isCash)),
     workSpend: sum(out.filter(r => r.type === "business")),
     moneyIn, paidBack: Math.round(paidBack * 100) / 100,
-    moves: moveTotals(periodMoves, state.methods),
+    moves: moveTotals(periodMoves, moveAccountList(state)),
     unposted: out.filter(r => !isCash(r) && r.source === "logged" && !r.postedDate && r.date && r.date <= today).length,
     upcomingLeftOut: all.length > rows.length,
   };
@@ -4738,7 +4979,8 @@ function buildReportText(data, weeks, rebalancedBudgets, account) {
   const acct = account || data;
   const methods = (acct.methods && acct.methods.length) ? acct.methods : DEFAULT_METHODS;
   const categories = (acct.categories && acct.categories.length) ? acct.categories : DEFAULT_CATEGORIES;
-  const mn = (id) => (methods.find(m => m.id === id) || {}).name || id || "—";
+  // Payment types first, then accounts for moves, which only a move's from/to can name.
+  const mn = (id) => (methods.find(m => m.id === id) || (acct.moveAccounts || []).find(m => m.id === id) || {}).name || id || "—";
   const cn = (id) => { const c = categories.find(x => x.id === id); return c ? c.name : null; };
   const t = computeSummaryTotals(data, methods, categories);
   const L = [];
@@ -4879,7 +5121,7 @@ function buildReportText(data, weeks, rebalancedBudgets, account) {
   const periodMoves = (data.moves || []).slice().sort((a, b) => ((a.day || "") < (b.day || "") ? -1 : (a.day || "") > (b.day || "") ? 1 : 0));
   if (periodMoves.length) {
     L.push("MOVES BETWEEN YOUR ACCOUNTS");
-    periodMoves.forEach(m => L.push(`  ${fmt(m.amount).padStart(10)}  ${mn(m.from)} → ${mn(m.to)}  ·  ${MOVE_PURPOSE_LABEL[m.purpose] || "Other"}${m.day ? " · " + dayKeyLabel(m.day) : ""}${m.label ? " · " + m.label : ""}`));
+    periodMoves.forEach(m => L.push(`  ${fmt(m.amount).padStart(10)}  ${mn(m.from)} → ${mn(m.to)}  ·  ${MOVE_PURPOSE_LABEL[m.purpose] || "Other"}${comesOutNote(m, acct.moveAccounts)}${m.day ? " · " + dayKeyLabel(m.day) : ""}${m.label ? " · " + m.label : ""}`));
     L.push("");
   }
 
@@ -4952,7 +5194,7 @@ function parseDataExport(text) {
   // A bare state object is accepted too, so a file someone has unwrapped by hand still imports.
   const data = obj.kind === "data-export" ? obj.data : obj;
   if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("That isn't a SpendTracker export.");
-  ["entries", "pins", "credits", "moves", "monthHistory", "methods", "categories"].forEach(k => {
+  ["entries", "pins", "credits", "moves", "moveAccounts", "monthHistory", "methods", "categories"].forEach(k => {
     if (data[k] !== undefined && !Array.isArray(data[k])) throw new Error(`That export is damaged — "${k}" isn't a list.`);
   });
   if (data.monthlyBudget !== undefined && typeof data.monthlyBudget !== "number") {

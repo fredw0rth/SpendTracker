@@ -126,7 +126,7 @@ test("the export shows how much of a credit was a repayment, and which credit se
   assert.equal(r.dinT.settledBy, "c1");
   assert.equal(r.dinT.settled, "yes");
   const csv = A.buildLedgerCSV(s, null, { today: "2026-08-31" });
-  assert.ok(csv.split("\n")[0].endsWith("postedDate,repaysAmount,repays,settledBy,moveTo,moveToAccountType,movePurpose"), "new columns are appended at the end");
+  assert.ok(csv.split("\n")[0].endsWith("postedDate,repaysAmount,repays,settledBy,moveTo,moveToAccountType,movePurpose,moveComesOut"), "new columns are appended at the end");
 });
 
 // ─── Report summary for the Finances Tracker ──────────────────────────────────

@@ -26,6 +26,7 @@ const EXPORTS = [
   "buildReportText", "buildLedgerCSV", "buildLedgerRows", "ledgerRowInRange", "ukTaxYearRange", "LEDGER_COLS", "buildDataExport", "parseDataExport", "dataExportSummary",
   "EXPORT_VERSION", "SPEND_GROUPS", "categoryGroupOf", "ACCOUNT_KINDS", "methodKindOf", "CREDIT_KINDS", "creditCountsToBudget", "budgetCreditTotal",
   "creditBudgetAmount", "repaymentSyncUpdates", "postedDateOps", "financeTrackerFigures", "applyReconPinOp", "periodHasRecordedActivity", "moveTotals", "MOVE_PURPOSES",
+  "DEFAULT_MOVE_ACCOUNTS", "moveAccountList", "waitingToComeOut", "comesOutNote", "usedAccountIds",
 ];
 
 function loadApp() {
